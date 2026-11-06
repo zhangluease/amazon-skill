@@ -5,7 +5,7 @@ description: 对准备在日本亚马逊 Amazon.co.jp 销售的单个商品做�
 
 # 日本亚马逊知识产权初筛
 
-只判断日本销售情景，默认中文回答、日语检索。以免费公开来源完成一轮有证据的初筛；不依赖上游鉴权、API Key、专有脚本或多代理审阅。操作细节按需读取[日本检索指南](references/japan-search.md)，交付时读取[报告模板](references/report-template.md)。
+只判断日本销售情景，默认中文回答、日语检索。操作细节按需读取[日本检索指南](references/japan-search.md)，交付时读取[报告模板](references/report-template.md)。
 
 ## 1. 确认要销售的商品
 
