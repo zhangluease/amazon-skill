@@ -9,7 +9,7 @@ python3 scripts/jplatpat.py patent-claims '特許4130124' --out /tmp/jp-example-
 python3 scripts/jplatpat.py design-pdf 1838756 --out /tmp/jp-example-gazette
 ```
 
-实际交付时，把各次 `--out` 指向报告的 `evidence/` 下不同子目录。先读每次运行保存的 `result.json`，按产品相关性筛选并按日本申请号或登记号去重。详情命令只针对入选候选：特许传 `gazette_keys` 中的准确文献号，优先授权公报；意匠传 `document_id`。留存原始 JSON；权利要求读 `claims.txt`，意匠附图读 `gazette.pdf`。
+实际交付时，把各次 `--out` 指向报告的 `evidence/` 下不同子目录。先读每次运行保存的 `result.json`，按产品相关性筛选并按日本申请号或登记号去重。详情命令只针对入选候选。特许传 `gazette_keys` 中的准确文献号，优先授权公报。意匠传 `document_id`。报告用案号关联原始 JSON、`claims.txt` 或 `gazette.pdf`，并标明查询方式。
 
 ## 查询覆盖
 
