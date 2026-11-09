@@ -33,7 +33,12 @@ CASE_INFO = "/app/docgw/wsh0101"
 CASE_PROCEDURE = "/app/docgw/wsh0102"
 CASE_REGISTRATION = "/app/docgw/wsh0105"
 CASE_TRIALS = "/app/docgw/wsh0106"
-CASE_TYPES = {"patent": ("特願", "1", "PU", "10"), "design": ("意匠出願", "3", "DE", "30")}
+CASE_TYPES = {
+    "patent": ("特願", "1", "PU", "10"),
+    "utility-model": ("実願", "2", "PU", "20"),
+    "design": ("意匠出願", "3", "DE", "30"),
+}
+SEARCH_RIGHT_TYPES = {"P": "patent", "U": "utility-model"}
 PATENT_STAGES = {
     "10": "審査請求前",
     "21": "審査中",
@@ -51,8 +56,13 @@ PATENT_TRIAL_TYPES = {
     **dict.fromkeys(("65", "651", "652"), "登録異議申立"),
     "80": "査定不服審判",
 }
-PATENT_KEY = re.compile(r"(?:特許[0-9]{1,8}|特[開公](?:[0-9]{4}|[明大昭平令][0-9]{1,2})-[0-9]{1,6})")
+GAZETTE_YEAR = r"(?:[0-9]{4}|[明大昭平令][0-9]{1,2})"
+GAZETTE_KEYS = {
+    "patent": re.compile(rf"特許[0-9]{{1,8}}|特[開公]{GAZETTE_YEAR}-[0-9]{{1,6}}"),
+    "utility-model": re.compile(rf"実登[0-9]{{1,7}}|実[開表公全]{GAZETTE_YEAR}-[0-9]{{1,6}}"),
+}
 RESULT_LIMIT = 500
+UPSTREAM_SEARCH_LIMIT = 3000
 JSON_LIMIT = 8 * 1024 * 1024
 PDF_LIMIT = 20 * 1024 * 1024
 
@@ -169,19 +179,19 @@ class Client:
         return cookies
 
 
-def search_payload(kind, query, limit):
+def search_payload(kind, query, auto_narrow=False):
     payload = {
         "DISP_ID": "S0000",
         "SEARCH_TYPE": "1",
         "SIMPLE_SEARCH_DISP": {
-            "AUTO_NARROW_FLG": 0,
+            "AUTO_NARROW_FLG": int(auto_narrow),
             "SEARCH_COND": [{"NUM_TYPE": [], "KEYWD": word} for word in query.split()],
             "SEARCH_OPTN": {
                 "FILTER_INFO": {**SEARCH_FILTERS[kind], "ITEM": None, "COND": None, "COMPAR_COND_SIGN": None}
             },
         },
-        "SEARCH_RSLT_MAX_CNT": limit,
-        "NUM_LST_MAX_CNT": 0 if kind == "patent" else limit,
+        "SEARCH_RSLT_MAX_CNT": UPSTREAM_SEARCH_LIMIT,
+        "NUM_LST_MAX_CNT": 0 if kind == "patent" else UPSTREAM_SEARCH_LIMIT,
         "INPUT_NUM_LST": [],
         "SORT_INFO": {"ITEM": None, "SORT_ORDER": 0},
     }
@@ -196,7 +206,17 @@ def application_digits(kind, value):
     prefix = CASE_TYPES[kind][0]
     value = unicodedata.normalize("NFKC", value.strip())
     match = re.fullmatch(rf"(?:{prefix})?([0-9]{{4}})-?([0-9]{{6}})", value)
-    return "".join(match.groups()) if match else None
+    if match:
+        return "".join(match.groups())
+    if kind == "utility-model":
+        era = re.fullmatch(r"(?:実願)?([明大昭平令])([0-9]{1,2})-([0-9]{1,6})", value)
+        if era:
+            offset, last_year = {"明": (1867, 45), "大": (1911, 15), "昭": (1925, 64),
+                                 "平": (1988, 31), "令": (2018, 99)}[era[1]]
+            year = int(era[2])
+            if 1 <= year <= last_year:
+                return f"{offset + year}{era[3].zfill(6)}"
+    return None
 
 
 def case_reference(kind, digits):
@@ -204,14 +224,19 @@ def case_reference(kind, digits):
         return {}
     prefix, _, category, url_type = CASE_TYPES[kind]
     number = f"{digits[:4]}-{digits[4:]}"
+    link_number = number
+    year = int(digits[:4])
+    if kind == "utility-model" and 1990 <= year <= 1999:
+        link_number = f"H{year - 1988:02d}-{digits[4:]}"
     return {
         "application_number": prefix + number,
-        "case_url": f"{BASE_URL}/c1801/{category}/JP-{number}/{url_type}/ja",
+        "case_url": f"{BASE_URL}/c1801/{category}/JP-{link_number}/{url_type}/ja",
     }
 
 
 def candidate(kind, row):
     common = {
+        "right_type": kind,
         "application_number": row.get("APP_NUM_DISP") or row.get("APP_NUM"),
         "registration_number": row.get("REG_NUM_DISP") or row.get("REG_NUM"),
         "applicants_or_holders": row.get("APPN_RIGHT_HOLDER"),
@@ -220,7 +245,7 @@ def candidate(kind, row):
     reference = case_reference(kind, application_digits(kind, common["application_number"]))
     if reference:
         common["case_url"] = reference["case_url"]
-    if kind == "patent":
+    if kind in GAZETTE_KEYS:
         return {
             **common,
             "title": row.get("INVEN_NAME"),
@@ -228,7 +253,7 @@ def candidate(kind, row):
             "gazette_keys": [
                 row[field + "_DISP"] for field in ("REG_NUM", "PUBLI_NUM", "EXAM_PUB_NUM")
                 if row.get(field + "_DOCU_EXISTS_FLG") == 1
-                and PATENT_KEY.fullmatch(row.get(field + "_DISP") or "")
+                and GAZETTE_KEYS[kind].fullmatch(row.get(field + "_DISP") or "")
             ],
             "fi": row.get("FI"),
             "status_code": row.get("STATUS"),
@@ -245,7 +270,7 @@ def candidate(kind, row):
     }
 
 
-def summarize_search(kind, data):
+def summarize_search(kind, data, limit=RESULT_LIMIT):
     info, code = result_info(data)
     hit_count = info.get("SEARCH_HIT_CNT")
     rows = data.get("SEARCH_RSLT_LIST")
@@ -259,18 +284,22 @@ def summarize_search(kind, data):
     if any(not isinstance(row, dict) for row in rows):
         raise QueryError("Invalid search result row")
     candidates = []
-    ignored = unknown = 0
-    for index, row in enumerate(rows):
-        if kind == "patent" and row.get("LAW_DIVISION") != "P":
-            if row.get("LAW_DIVISION") == "U":
-                ignored += 1
-            else:
+    counts = {"patent": 0, "utility-model": 0}
+    unknown = 0
+    selected = rows[:limit]
+    for index, row in enumerate(selected):
+        right_type = kind
+        if kind == "patent":
+            law = row.get("LAW_DIVISION")
+            right_type = SEARCH_RIGHT_TYPES.get(law) if isinstance(law, str) else None
+            if right_type is None:
                 unknown += 1
-            continue
-        candidates.append({"source_row_index": index, **candidate(kind, row)})
+                continue
+            counts[right_type] += 1
+        candidates.append({"source_row_index": index, **candidate(right_type, row)})
     narrowing = info.get("AUTO_NARROW_EXEC")
     narrowed = isinstance(narrowing, dict) and bool(narrowing.get("AUTO_NARROW_PREV_COUNT_CNT"))
-    complete = code == 0 and len(rows) == hit_count and not narrowed and unknown == 0
+    complete = code == 0 and len(selected) == hit_count and len(selected) == len(rows) and not narrowed and unknown == 0
     message_id = info.get("MSG_ID")
     if code == 8:
         status = "verification_required"
@@ -288,12 +317,46 @@ def summarize_search(kind, data):
         "message_id": message_id,
         "server_hits": hit_count,
         "rows_returned": len(rows),
+        "rows_selected": len(selected),
+        "locally_truncated_rows": len(rows) - len(selected),
         "candidates_in_scope": len(candidates),
-        "excluded_utility_models": ignored,
+        "patent_candidates": counts["patent"],
+        "utility_model_candidates": counts["utility-model"],
         "unclassified_patent_rows": unknown,
         "server_auto_narrowing": narrowing,
         "complete_within_query": complete,
         "candidates": candidates,
+    }
+
+
+def request_search(client, kind, query, name, auto_narrow=False):
+    endpoint = SEARCH_ENDPOINTS[kind]
+    cookies = client.anonymous_session(endpoint, "S0000") if kind == "patent" else None
+    return client.post(endpoint, search_payload(kind, query, auto_narrow), name, cookies)
+
+
+def search_candidates(client, kind, query, limit):
+    result = summarize_search(kind, request_search(client, kind, query, "search"), limit)
+    exceeds_site_limit = (
+        result["status"] == "needs_refinement" and result["message_id"] == "C90003-E"
+        and (result["server_hits"] or 0) > UPSTREAM_SEARCH_LIMIT
+    )
+    if not exceeds_site_limit:
+        return result
+
+    # Use the site's documented date narrowing only when the original list is unavailable.
+    try:
+        data = request_search(client, kind, query, "search-narrowed", auto_narrow=True)
+        narrowed = summarize_search(kind, data, limit)
+    except QueryError as exc:
+        return {**result, "narrowing_failure": {"status": exc.status, "error": str(exc)}}
+    return {
+        **narrowed,
+        "status": "partial" if narrowed["status"] in {"ok", "no_result"} else narrowed["status"],
+        "server_hits": result["server_hits"],
+        "hits_after_auto_narrowing": narrowed["server_hits"],
+        "initial_message_id": result["message_id"],
+        "complete_within_query": False,
     }
 
 
@@ -335,7 +398,7 @@ def summarize_case_status(kind, digits, data):
     stage = legal.get("stage") if isinstance(legal, dict) else None
     event = legal.get("detailed_event") if isinstance(legal, dict) else None
     label = PATENT_STAGES.get(stage) if kind == "patent" and isinstance(stage, str) else None
-    return {
+    result = {
         "status": "ok" if label else "partial",
         **case_reference(kind, digits),
         "registration_number": single_record(registration, "reg_art").get("reg_num"),
@@ -345,6 +408,11 @@ def summarize_case_status(kind, digits, data):
         "detailed_event_label": "年金納付" if label and event == "U110" else None,
         "current_legal_status_verified": label is not None,
     }
+    if kind == "utility-model":
+        details = single_record(registration, "reg_detail_items_art")
+        result.update(extinction_date=case_date(details.get("right_disppr_date")),
+                      cancellation_code=details.get("right_ersr_id"))
+    return result
 
 
 def request_case(client, kind, digits, endpoint, name):
@@ -374,10 +442,10 @@ def case_date(value):
         return None
 
 
-def case_registration(row, digits, registration_number):
+def case_registration(row, kind, digits, registration_number):
     record = single_record(row, "reg_info")
     application = single_record(single_record(record, "app_art"), "app")
-    require_case_identity(application, "patent", digits)
+    require_case_identity(application, kind, digits)
     registration = single_record(single_record(record, "reg_art"), "reg")
     if registration.get("reg_num") != registration_number:
         raise QueryError("Registration number does not match the case status response")
@@ -401,9 +469,9 @@ def case_registration(row, digits, registration_number):
     }
 
 
-def case_procedure(row, digits, registration_number):
+def case_procedure(row, kind, digits, registration_number):
     application = single_record(single_record(row, "app_info"), "app_art")
-    require_case_identity(single_record(application, "app"), "patent", digits)
+    require_case_identity(single_record(application, "app"), kind, digits)
     registration = single_record(single_record(single_record(row, "reg_info"), "reg_art"), "reg")
     if registration.get("reg_num") != registration_number:
         raise QueryError("Procedure registration does not match the case status response")
@@ -415,12 +483,12 @@ def case_procedure(row, digits, registration_number):
     }
 
 
-def case_trials(row, digits, registration_number):
+def case_trials(row, kind, digits, registration_number):
     trials = []
     if "appl_info" not in row:
         raise QueryError("Missing J-PlatPat trial records field")
     for record in case_records(row, "appl_info"):
-        require_case_identity(single_record(single_record(record, "app_art"), "app"), "patent", digits)
+        require_case_identity(single_record(single_record(record, "app_art"), "app"), kind, digits)
         registration = single_record(single_record(record, "reg_art"), "reg")
         if registration_number and registration.get("reg_num") != registration_number:
             raise QueryError("Trial registration does not match the case status response")
@@ -463,7 +531,7 @@ def case_status(client, kind, digits, history=False):
             continue
         try:
             row = case_response_row(request_case(client, kind, digits, endpoint, name))
-            result["history"][name] = {"status": "ok", **summarize(row, digits, registration_number)}
+            result["history"][name] = {"status": "ok", **summarize(row, kind, digits, registration_number)}
         except QueryError as exc:
             result["history"][name] = {"status": exc.status, "error": str(exc)}
             result["status"] = "partial"
@@ -521,13 +589,16 @@ def patent_claims(client, key):
         raise QueryError("Claims response has no readable text", "material_unavailable")
     (client.output_dir / "claims.txt").write_text(extracted + "\n", encoding="utf-8")
     complete = data.get("NEXT_POS_FLG") == 0
-    digits = application_digits("patent", doc.get("PATENT_APP_NUM"))
+    kind = "utility-model" if key.startswith("実") else "patent"
+    digits = application_digits(kind, doc.get("PATENT_APP_NUM"))
+    document_kind = "grant_gazette" if key.startswith(("特許", "実登")) else "publication_gazette"
     return {
         "status": "ok" if complete else "partial",
-        **case_reference("patent", digits),
+        **case_reference(kind, digits),
+        "right_type": kind,
         "document": key,
         "claims_file": "claims.txt",
-        "document_kind": "grant_gazette" if key.startswith("特許") else "publication_gazette",
+        "document_kind": document_kind,
         "continuation_flag": data.get("NEXT_POS_FLG"),
         "correction_link_flag": flags.get("AMEND_REV_BUL_LINK_DISP_FLG"),
         "current_legal_status_verified": False,
@@ -577,15 +648,15 @@ def design_pdf(client, document_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="operation", required=True)
-    search = commands.add_parser("search", help="search Japanese patent or design candidates")
+    search = commands.add_parser("search", help="search Japanese patents and utility models, or designs")
     search.add_argument("kind", choices=SEARCH_ENDPOINTS)
     search.add_argument("query")
-    search.add_argument("--limit", type=int, default=100, help=f"result cap (1–{RESULT_LIMIT})")
+    search.add_argument("--limit", type=int, default=RESULT_LIMIT, help=f"local result cap (1–{RESULT_LIMIT})")
     case = commands.add_parser("case-status", help="read case information for an exact Japanese application")
     case.add_argument("kind", choices=CASE_TYPES)
     case.add_argument("application_number")
-    case.add_argument("--history", action="store_true", help="also read patent registration, procedure, and trial records")
-    commands.add_parser("patent-claims", help="read claims for one exact invention gazette").add_argument("key")
+    case.add_argument("--history", action="store_true", help="also read patent or utility model history")
+    commands.add_parser("patent-claims", help="read claims for one exact patent or utility model gazette").add_argument("key")
     commands.add_parser("design-pdf", help="read one domestic registered design gazette").add_argument("document_id")
     for command in commands.choices.values():
         command.add_argument("--out", required=True, type=Path, help="new directory for request evidence")
@@ -596,14 +667,14 @@ def main():
             parser.error(f"use a specific query (1–120 characters, up to 5 terms) and a limit of 1–{RESULT_LIMIT}")
     elif args.operation == "patent-claims":
         args.key = unicodedata.normalize("NFKC", args.key.strip())
-        if not PATENT_KEY.fullmatch(args.key):
-            parser.error("use an exact Japanese invention gazette number (特許, 特開, or 特公)")
+        if not any(pattern.fullmatch(args.key) for pattern in GAZETTE_KEYS.values()):
+            parser.error("use an exact Japanese patent or utility model gazette number (e.g. 特許 or 実登)")
     elif args.operation == "case-status":
         args.application_number = application_digits(args.kind, args.application_number)
         if not args.application_number:
-            parser.error("use a Japanese application number with a four-digit year and six-digit sequence")
-        if args.history and args.kind != "patent":
-            parser.error("--history currently supports Japanese patents")
+            parser.error("use a Japanese application number, e.g. 特願2012-184735 or 実願平10-004399")
+        if args.history and args.kind == "design":
+            parser.error("--history currently supports Japanese patents and utility models")
     elif not re.fullmatch(r"[0-9]{7}", args.document_id) or args.document_id == "0000000":
         parser.error("use the seven-digit domestic design document_id from a search result")
     try:
@@ -623,10 +694,7 @@ def main():
         context.update(document_id=args.document_id)
     try:
         if args.operation == "search":
-            endpoint = SEARCH_ENDPOINTS[args.kind]
-            payload = search_payload(args.kind, args.query, args.limit)
-            cookies = client.anonymous_session(endpoint, "S0000") if args.kind == "patent" else None
-            result = summarize_search(args.kind, client.post(endpoint, payload, "search", cookies))
+            result = search_candidates(client, args.kind, args.query, args.limit)
         elif args.operation == "patent-claims":
             result = patent_claims(client, args.key)
         elif args.operation == "case-status":

@@ -1,4 +1,4 @@
 interface:
   display_name: "日本亚马逊知识产权初筛"
-  short_description: "面向日本亚马逊，检索特许和意匠，核查素材版权及不正竞争线索"
+  short_description: "面向日本亚马逊，检索特许、实用新案和意匠，核查素材版权及不正竞争线索"
   default_prompt: "请使用 $amazon-jp-ipr-screening 对我提供的商品做日本亚马逊知识产权初筛，并列出证据、待定项和上架前行动。"
