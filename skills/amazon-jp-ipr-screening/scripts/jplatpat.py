@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read selected J-PlatPat search results and public gazettes without a browser."""
+"""Read J-PlatPat search results, public gazettes, and case status without a browser."""
 
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -29,6 +29,17 @@ SEARCH_FILTERS = {
 DOC_INFO = "/app/comdocu/wsp1101"
 CLAIMS = "/app/comdocu/wsp1203"
 DESIGN_INFO = "/app/dtaapi/wsd0601"
+CASE_INFO = "/app/docgw/wsh0101"
+CASE_TYPES = {"patent": ("特願", "1", "PU", "10"), "design": ("意匠出願", "3", "DE", "30")}
+PATENT_STAGES = {
+    "10": "審査請求前",
+    "21": "審査中",
+    "22": "査定不服",
+    "40": "特許 有効",
+    "50": "異議申立中・無効審判中",
+    "61": "（出願の）却下・拒絶",
+    "62": "特許 消滅",
+}
 PATENT_KEY = re.compile(r"(?:特許[0-9]{1,8}|特[開公](?:[0-9]{4}|[明大昭平令][0-9]{1,2})-[0-9]{1,6})")
 RESULT_LIMIT = 500
 JSON_LIMIT = 8 * 1024 * 1024
@@ -168,6 +179,26 @@ def search_payload(kind, query, limit):
     return payload
 
 
+def application_digits(kind, value):
+    if not isinstance(value, str):
+        return None
+    prefix = CASE_TYPES[kind][0]
+    value = unicodedata.normalize("NFKC", value.strip())
+    match = re.fullmatch(rf"(?:{prefix})?([0-9]{{4}})-?([0-9]{{6}})", value)
+    return "".join(match.groups()) if match else None
+
+
+def case_reference(kind, digits):
+    if not digits or (kind == "design" and digits[4] == "5"):
+        return {}
+    prefix, _, category, url_type = CASE_TYPES[kind]
+    number = f"{digits[:4]}-{digits[4:]}"
+    return {
+        "application_number": prefix + number,
+        "case_url": f"{BASE_URL}/c1801/{category}/JP-{number}/{url_type}/ja",
+    }
+
+
 def candidate(kind, row):
     common = {
         "application_number": row.get("APP_NUM_DISP") or row.get("APP_NUM"),
@@ -175,6 +206,9 @@ def candidate(kind, row):
         "applicants_or_holders": row.get("APPN_RIGHT_HOLDER"),
         "filing_date": row.get("APP_DATE"),
     }
+    reference = case_reference(kind, application_digits(kind, common["application_number"]))
+    if reference:
+        common["case_url"] = reference["case_url"]
     if kind == "patent":
         return {
             **common,
@@ -252,6 +286,56 @@ def summarize_search(kind, data):
     }
 
 
+def single_record(data, field):
+    records = data.get(field)
+    if isinstance(records, list) and len(records) == 1 and isinstance(records[0], dict):
+        return records[0]
+    return {}
+
+
+def summarize_case_status(kind, digits, data):
+    info = data.get("status")
+    if not isinstance(info, dict) or type(info.get("resultCode")) is not int:
+        raise QueryError("Missing J-PlatPat case business result")
+    code = info["resultCode"]
+    if code != 0:
+        raise QueryError(
+            f"J-PlatPat case resultCode={code}, message={info.get('messageId')}",
+            "verification_required" if code == 8 else "failed",
+        )
+    row = single_record(data, "responseData")
+    application = single_record(single_record(row, "app_info"), "app_art")
+    if application.get("law_cd") != CASE_TYPES[kind][1] or application.get("app_num") != digits:
+        raise QueryError("Case identity is missing, ambiguous, or does not match the requested application")
+
+    registration = single_record(row, "reg_info")
+    legal = row.get("status")
+    stage = legal.get("stage") if isinstance(legal, dict) else None
+    event = legal.get("detailed_event") if isinstance(legal, dict) else None
+    label = PATENT_STAGES.get(stage) if kind == "patent" and isinstance(stage, str) else None
+    return {
+        "status": "ok" if label else "partial",
+        **case_reference(kind, digits),
+        "registration_number": single_record(registration, "reg_art").get("reg_num"),
+        "stage_code": stage,
+        "stage_label": label,
+        "detailed_event_code": event,
+        "detailed_event_label": "年金納付" if label and event == "U110" else None,
+        "current_legal_status_verified": label is not None,
+    }
+
+
+def case_status(client, kind, digits):
+    if not case_reference(kind, digits):
+        raise QueryError("This design application uses a different case route", "material_unavailable")
+    law = CASE_TYPES[kind][1]
+    payload = {
+        "displayId": "H0000", "searchCondition": {"lawCd": law, "applicationNumber": digits}, "OTID": None,
+    }
+    cookies = client.anonymous_session(CASE_INFO, "H0000", f"{law}-{digits}")
+    return summarize_case_status(kind, digits, client.post(CASE_INFO, payload, "case", cookies))
+
+
 class ClaimsText(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -301,8 +385,10 @@ def patent_claims(client, key):
         raise QueryError("Claims response has no readable text", "material_unavailable")
     (client.output_dir / "claims.txt").write_text(extracted + "\n", encoding="utf-8")
     complete = data.get("NEXT_POS_FLG") == 0
+    digits = application_digits("patent", doc.get("PATENT_APP_NUM"))
     return {
         "status": "ok" if complete else "partial",
+        **case_reference("patent", digits),
         "document": key,
         "claims_file": "claims.txt",
         "document_kind": "grant_gazette" if key.startswith("特許") else "publication_gazette",
@@ -339,12 +425,14 @@ def design_pdf(client, document_id):
     matching = [row for row in records if isinstance(row, dict) and row.get("DOCU_ID_NUM") == document_id]
     if len(matching) != 1:
         raise QueryError("Design gazette identity is missing or ambiguous", "material_unavailable")
-    path = design_pdf_path(matching[0], document_id)
+    record = matching[0]
+    path = design_pdf_path(record, document_id)
     raw = client.request(path, limit=PDF_LIMIT)
     if not raw.startswith(b"%PDF-") or b"%%EOF" not in raw[-2048:]:
         raise QueryError("Design gazette response was not a PDF", "material_unavailable")
     (client.output_dir / "gazette.pdf").write_bytes(raw)
     return {
+        **case_reference("design", application_digits("design", record.get("APP_NUM"))),
         "status": "ok", "document_id": document_id, "pdf_file": "gazette.pdf",
         "pdf_url": BASE_URL + path, "current_legal_status_verified": False,
     }
@@ -357,6 +445,9 @@ def main():
     search.add_argument("kind", choices=SEARCH_ENDPOINTS)
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=100, help=f"result cap (1–{RESULT_LIMIT})")
+    case = commands.add_parser("case-status", help="read case information for an exact Japanese application")
+    case.add_argument("kind", choices=CASE_TYPES)
+    case.add_argument("application_number")
     commands.add_parser("patent-claims", help="read claims for one exact invention gazette").add_argument("key")
     commands.add_parser("design-pdf", help="read one domestic registered design gazette").add_argument("document_id")
     for command in commands.choices.values():
@@ -370,6 +461,10 @@ def main():
         args.key = unicodedata.normalize("NFKC", args.key.strip())
         if not PATENT_KEY.fullmatch(args.key):
             parser.error("use an exact Japanese invention gazette number (特許, 特開, or 特公)")
+    elif args.operation == "case-status":
+        args.application_number = application_digits(args.kind, args.application_number)
+        if not args.application_number:
+            parser.error("use a Japanese application number with a four-digit year and six-digit sequence")
     elif not re.fullmatch(r"[0-9]{7}", args.document_id) or args.document_id == "0000000":
         parser.error("use the seven-digit domestic design document_id from a search result")
     try:
@@ -383,6 +478,8 @@ def main():
         context.update(kind=args.kind, query=args.query, result_limit=args.limit)
     elif args.operation == "patent-claims":
         context.update(document=args.key)
+    elif args.operation == "case-status":
+        context.update(kind=args.kind, application_number=args.application_number, current_legal_status_verified=False)
     else:
         context.update(document_id=args.document_id)
     try:
@@ -393,6 +490,8 @@ def main():
             result = summarize_search(args.kind, client.post(endpoint, payload, "search", cookies))
         elif args.operation == "patent-claims":
             result = patent_claims(client, args.key)
+        elif args.operation == "case-status":
+            result = case_status(client, args.kind, args.application_number)
         else:
             result = design_pdf(client, args.document_id)
     except QueryError as exc:
