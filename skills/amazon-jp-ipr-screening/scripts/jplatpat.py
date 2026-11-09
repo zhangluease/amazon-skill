@@ -30,6 +30,9 @@ DOC_INFO = "/app/comdocu/wsp1101"
 CLAIMS = "/app/comdocu/wsp1203"
 DESIGN_INFO = "/app/dtaapi/wsd0601"
 CASE_INFO = "/app/docgw/wsh0101"
+CASE_PROCEDURE = "/app/docgw/wsh0102"
+CASE_REGISTRATION = "/app/docgw/wsh0105"
+CASE_TRIALS = "/app/docgw/wsh0106"
 CASE_TYPES = {"patent": ("特願", "1", "PU", "10"), "design": ("意匠出願", "3", "DE", "30")}
 PATENT_STAGES = {
     "10": "審査請求前",
@@ -39,6 +42,14 @@ PATENT_STAGES = {
     "50": "異議申立中・無効審判中",
     "61": "（出願の）却下・拒絶",
     "62": "特許 消滅",
+}
+PATENT_TRIAL_TYPES = {
+    **dict.fromkeys(("10", "11", "112", "113", "12", "122", "123", "15", "16"), "無効審判"),
+    "40": "訂正・訂正無効審判",
+    "41": "訂正審判",
+    "43": "訂正無効",
+    **dict.fromkeys(("65", "651", "652"), "登録異議申立"),
+    "80": "査定不服審判",
 }
 PATENT_KEY = re.compile(r"(?:特許[0-9]{1,8}|特[開公](?:[0-9]{4}|[明大昭平令][0-9]{1,2})-[0-9]{1,6})")
 RESULT_LIMIT = 500
@@ -293,7 +304,7 @@ def single_record(data, field):
     return {}
 
 
-def summarize_case_status(kind, digits, data):
+def case_response_row(data):
     info = data.get("status")
     if not isinstance(info, dict) or type(info.get("resultCode")) is not int:
         raise QueryError("Missing J-PlatPat case business result")
@@ -304,9 +315,20 @@ def summarize_case_status(kind, digits, data):
             "verification_required" if code == 8 else "failed",
         )
     row = single_record(data, "responseData")
-    application = single_record(single_record(row, "app_info"), "app_art")
+    if not row:
+        raise QueryError("J-PlatPat did not return one case response")
+    return row
+
+
+def require_case_identity(application, kind, digits):
     if application.get("law_cd") != CASE_TYPES[kind][1] or application.get("app_num") != digits:
         raise QueryError("Case identity is missing, ambiguous, or does not match the requested application")
+
+
+def summarize_case_status(kind, digits, data):
+    row = case_response_row(data)
+    application = single_record(single_record(row, "app_info"), "app_art")
+    require_case_identity(application, kind, digits)
 
     registration = single_record(row, "reg_info")
     legal = row.get("status")
@@ -325,15 +347,129 @@ def summarize_case_status(kind, digits, data):
     }
 
 
-def case_status(client, kind, digits):
-    if not case_reference(kind, digits):
-        raise QueryError("This design application uses a different case route", "material_unavailable")
+def request_case(client, kind, digits, endpoint, name):
     law = CASE_TYPES[kind][1]
     payload = {
         "displayId": "H0000", "searchCondition": {"lawCd": law, "applicationNumber": digits}, "OTID": None,
     }
-    cookies = client.anonymous_session(CASE_INFO, "H0000", f"{law}-{digits}")
-    return summarize_case_status(kind, digits, client.post(CASE_INFO, payload, "case", cookies))
+    cookies = client.anonymous_session(endpoint, "H0000", f"{law}-{digits}")
+    return client.post(endpoint, payload, name, cookies)
+
+
+def case_records(data, field):
+    records = data.get(field)
+    if records is None:
+        return []
+    if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
+        raise QueryError(f"Invalid J-PlatPat case records: {field}")
+    return records
+
+
+def case_date(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{8}", value):
+        return None
+    try:
+        return datetime.strptime(value, "%Y%m%d").date().isoformat()
+    except ValueError:
+        return None
+
+
+def case_registration(row, digits, registration_number):
+    record = single_record(row, "reg_info")
+    application = single_record(single_record(record, "app_art"), "app")
+    require_case_identity(application, "patent", digits)
+    registration = single_record(single_record(record, "reg_art"), "reg")
+    if registration.get("reg_num") != registration_number:
+        raise QueryError("Registration number does not match the case status response")
+    holders = [
+        entry["right_holder_name"]
+        for group in case_records(record, "right_holder_art")
+        for entry in case_records(group, "right_holder")
+        if entry.get("right_holder_name")
+    ]
+    details = single_record(single_record(record, "reg_detail_items_art"), "reg_detail_items")
+    paid_year = record.get("last_pymnt_yearly_art")
+    paid_year = int(paid_year) if isinstance(paid_year, str) and re.fullmatch(r"[0-9]{1,2}", paid_year) else 0
+    return {
+        "registered_holders": holders,
+        "registration_date": case_date(registration.get("reg_date")),
+        "record_updated_date": case_date(record.get("update_date")),
+        "last_paid_year_number": paid_year or None,
+        "maximum_term_end_date": case_date(details.get("conti_prd_expire_date")),
+        "extinction_date": case_date(details.get("right_disppr_date")),
+        "cancellation_code": details.get("right_ersr_id"),
+    }
+
+
+def case_procedure(row, digits, registration_number):
+    application = single_record(single_record(row, "app_info"), "app_art")
+    require_case_identity(single_record(application, "app"), "patent", digits)
+    registration = single_record(single_record(single_record(row, "reg_info"), "reg_art"), "reg")
+    if registration.get("reg_num") != registration_number:
+        raise QueryError("Procedure registration does not match the case status response")
+    trial_group = single_record(single_record(row, "appl_info"), "appl_art")
+    return {
+        "examination_records_returned": len(case_records(application, "exam_rec_pu")),
+        "registration_records_returned": len(case_records(registration, "reg_rec")),
+        "trial_references_returned": len(case_records(trial_group, "appl_art")),
+    }
+
+
+def case_trials(row, digits, registration_number):
+    trials = []
+    if "appl_info" not in row:
+        raise QueryError("Missing J-PlatPat trial records field")
+    for record in case_records(row, "appl_info"):
+        require_case_identity(single_record(single_record(record, "app_art"), "app"), "patent", digits)
+        registration = single_record(single_record(record, "reg_art"), "reg")
+        if registration_number and registration.get("reg_num") != registration_number:
+            raise QueryError("Trial registration does not match the case status response")
+        trial = single_record(single_record(record, "appl_art"), "appl")
+        number = trial.get("appl_num")
+        if not isinstance(number, str) or not re.fullmatch(r"[0-9]{10}", number):
+            raise QueryError("Missing J-PlatPat trial number")
+        trial_type = trial.get("appl_typ")
+        decision_info = single_record(record, "jdgmnt_pub_info_art")
+        dates = [case_date(entry.get("jdgmnt_date")) for entry in case_records(decision_info, "jdgmnt_pub_info")]
+        trials.append({
+            "trial_number": f"{number[:4]}-{number[4:]}",
+            "type_code": trial_type,
+            "type_label": PATENT_TRIAL_TYPES.get(trial_type) if isinstance(trial_type, str) else None,
+            "filing_date": case_date(trial.get("appl_clim_date")),
+            "decision_dates": [date for date in dates if date],
+            "final_disposition_code": trial.get("appl_final_dspst_typ"),
+            "final_disposition_date": case_date(trial.get("appl_final_dspst_define_date")),
+        })
+    return {"trials": trials}
+
+
+def case_status(client, kind, digits, history=False):
+    if not case_reference(kind, digits):
+        raise QueryError("This design application uses a different case route", "material_unavailable")
+    result = summarize_case_status(kind, digits, request_case(client, kind, digits, CASE_INFO, "case"))
+    if not history:
+        return result
+
+    sections = (
+        ("registration", CASE_REGISTRATION, case_registration),
+        ("procedure", CASE_PROCEDURE, case_procedure),
+        ("trials", CASE_TRIALS, case_trials),
+    )
+    result["history"] = {}
+    registration_number = result["registration_number"]
+    for name, endpoint, summarize in sections:
+        if name == "registration" and not registration_number:
+            result["history"][name] = {"status": "not_requested", "reason": "No registration number in case status"}
+            continue
+        try:
+            row = case_response_row(request_case(client, kind, digits, endpoint, name))
+            result["history"][name] = {"status": "ok", **summarize(row, digits, registration_number)}
+        except QueryError as exc:
+            result["history"][name] = {"status": exc.status, "error": str(exc)}
+            result["status"] = "partial"
+            if exc.status in {"access_limited", "verification_required"}:
+                break
+    return result
 
 
 class ClaimsText(HTMLParser):
@@ -448,6 +584,7 @@ def main():
     case = commands.add_parser("case-status", help="read case information for an exact Japanese application")
     case.add_argument("kind", choices=CASE_TYPES)
     case.add_argument("application_number")
+    case.add_argument("--history", action="store_true", help="also read patent registration, procedure, and trial records")
     commands.add_parser("patent-claims", help="read claims for one exact invention gazette").add_argument("key")
     commands.add_parser("design-pdf", help="read one domestic registered design gazette").add_argument("document_id")
     for command in commands.choices.values():
@@ -465,6 +602,8 @@ def main():
         args.application_number = application_digits(args.kind, args.application_number)
         if not args.application_number:
             parser.error("use a Japanese application number with a four-digit year and six-digit sequence")
+        if args.history and args.kind != "patent":
+            parser.error("--history currently supports Japanese patents")
     elif not re.fullmatch(r"[0-9]{7}", args.document_id) or args.document_id == "0000000":
         parser.error("use the seven-digit domestic design document_id from a search result")
     try:
@@ -491,7 +630,7 @@ def main():
         elif args.operation == "patent-claims":
             result = patent_claims(client, args.key)
         elif args.operation == "case-status":
-            result = case_status(client, args.kind, args.application_number)
+            result = case_status(client, args.kind, args.application_number, args.history)
         else:
             result = design_pdf(client, args.document_id)
     except QueryError as exc:
