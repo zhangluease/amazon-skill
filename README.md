@@ -4,7 +4,7 @@
 
 ## 日本站知识产权初筛
 
-[amazon-jp-ipr-screening](skills/amazon-jp-ipr-screening/SKILL.md) 用于选品或上架前，检查单个商品在日本的特许、实用新案、意匠、著作权，以及有线索时的不正竞争风险。默认中文交付，保留日语检索词和原始权利名称。
+[amazon-jp-ipr-screening](skills/amazon-jp-ipr-screening/SKILL.md) 用于选品或上架前，检查单个商品在日本的特许、实用新案和意匠风险。默认中文交付，保留日语检索词和原始权利名称。
 
 流程：商品资料 → J-PlatPat 接口检索 → 候选核对 → 风险与证据报告。
 
@@ -13,10 +13,9 @@
 把整个 `skills/amazon-jp-ipr-screening/` 文件夹放入所用代理的技能目录。
 
 ```text
-请使用 $amazon-jp-ipr-screening，检查这个商品在日本亚马逊的知识产权风险：
+请使用 $amazon-jp-ipr-screening，检查这个商品在日本亚马逊的特许、实用新案和意匠风险：
 
 商品：提供 amazon.co.jp 链接，或商品图片、名称、用途及结构说明
-计划使用的图片/文案：说明哪些为自制、供应商提供或已获授权
 销售方式：自有品牌 / 通用品牌 / 经销 / 兼容配件
 已知线索：竞品、权利号、投诉记录或授权文件（有则提供）
 ```
