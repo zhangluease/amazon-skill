@@ -4,16 +4,22 @@
 
 ## 日本站关键词查找
 
-[amazon-jp-listing-asin](skills/amazon-jp-listing-asin/SKILL.md) 支持两种输入。竞品 ASIN 或 `amazon.co.jp` 商品链接通过老陈的易逊后端反查流量词。日文种子词通过 Python 脚本请求 Amazon 日本站搜索框联想。提供本品资料时，可按相关性和搜索意图筛词。
+[amazon-jp-listing-asin](skills/amazon-jp-listing-asin/SKILL.md) 支持两种找词方式。
+
+- **根据 ASIN 找词**。用竞品 ASIN 或 `amazon.co.jp` 商品链接，通过老陈的易逊后端反查流量词。
+- **以词找词**。用日文种子词或配件型号查 Amazon 日本站搜索框联想和厂家官网，两个渠道都执行，再合并去重、按相关性筛词。查配件时核对在售、停售和停产机型。
+
+提供本品资料时，可按相关性和搜索意图筛词。
 
 将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。ASIN 反查使用本机配置的易逊 token。
 
 ```text
 请使用 $amazon-jp-listing-asin 反查我提供的日本亚马逊竞品 ASIN，整理前 20 个日文流量词和月搜索量。
-请使用 $amazon-jp-listing-asin 查询「水筒」和「ステンレスボトル」在 Amazon 日本站的搜索框联想词。
+请使用 $amazon-jp-listing-asin 以「水筒」和「ステンレスボトル」找词，合并 Amazon 日本站搜索框联想和厂家官网结果，整理推荐词。
+请使用 $amazon-jp-listing-asin 以 H060518 加湿器滤芯找词。查询 Amazon 日本站联想和大日官网，核对在售、停售及停产机型，用型号和官方部件名扩词，去重后附官方证据。
 ```
 
-完整结果默认交付 Excel。也可直接运行种子词联想脚本，输出日文原词和联想顺序。
+完整结果默认交付 Excel。以词找词的汇总推荐名单为 `seed-keywords.xlsx`。单独运行以下联想脚本可查看日文原词和联想顺序。
 
 ```sh
 python3 skills/amazon-jp-listing-asin/scripts/amazon_jp_autocomplete.py \
