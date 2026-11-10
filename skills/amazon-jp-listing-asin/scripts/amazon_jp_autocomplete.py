@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch Japanese Amazon search-box suggestions and save them as UTF-8 TSV."""
+"""Fetch Japanese Amazon search-box suggestions and export them to Excel."""
 
 import argparse
 import csv
@@ -11,9 +11,12 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from export_xlsx import write_xlsx
+
 
 ENDPOINT = "https://completion.amazon.co.jp/api/2017/suggestions"
 SOURCE = "amazon_jp_autocomplete"
+HEADERS = ("source", "seed", "position", "keyword")
 
 
 def fetch_suggestions(seed):
@@ -52,7 +55,7 @@ def write_tsv(output, rows):
         temporary = Path(directory) / "suggestions.tsv"
         with temporary.open("w", encoding="utf-8", newline="") as stream:
             writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
-            writer.writerow(("source", "seed", "position", "keyword"))
+            writer.writerow(HEADERS)
             writer.writerows(rows)
         temporary.replace(output)
 
@@ -60,10 +63,13 @@ def write_tsv(output, rows):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("seeds", nargs="+", help="Japanese search prefixes")
-    parser.add_argument("--output", required=True, type=Path, help="Path to the UTF-8 TSV")
+    parser.add_argument("--output", required=True, type=Path, help="Path to the .xlsx workbook or explicit .tsv export")
     args = parser.parse_args(argv)
     if any(not seed.strip() for seed in args.seeds):
         parser.error("Each seed must contain at least one non-whitespace character.")
+    extension = args.output.suffix.lower()
+    if extension not in {".xlsx", ".tsv"}:
+        parser.error("Output must have an .xlsx or .tsv extension.")
 
     rows = []
     results = []
@@ -91,7 +97,10 @@ def main(argv=None):
             result.update(status="ok" if suggestions else "no_matches", count=len(suggestions))
 
     if completed:
-        write_tsv(args.output, rows)
+        if extension == ".xlsx":
+            write_xlsx(args.output, HEADERS, rows)
+        else:
+            write_tsv(args.output, rows)
     print(json.dumps({
         "output": str(args.output) if completed else None,
         "count": len(rows),

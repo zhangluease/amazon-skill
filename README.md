@@ -13,11 +13,11 @@
 请使用 $amazon-jp-listing-asin 查询「水筒」和「ステンレスボトル」在 Amazon 日本站的搜索框联想词。
 ```
 
-也可直接运行种子词联想脚本。输出包含日文原词和联想顺序。
+完整结果默认交付 Excel。也可直接运行种子词联想脚本，输出日文原词和联想顺序。Excel 导出需要 `openpyxl`。
 
 ```sh
 python3 skills/amazon-jp-listing-asin/scripts/amazon_jp_autocomplete.py \
-  --output reports/jp-keywords/example/autocomplete.tsv "水筒"
+  --output reports/jp-keywords/example/autocomplete.xlsx "水筒"
 ```
 
 ## 日本站知识产权初筛
