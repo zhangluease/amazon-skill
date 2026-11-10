@@ -5,12 +5,14 @@ import argparse
 from hashlib import sha256
 from importlib import import_module
 import json
+import math
 from pathlib import Path
 import platform
 import runpy
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import time
 from urllib.request import urlopen
 
 
@@ -36,10 +38,20 @@ CLI_SUFFIXES = {
     ("windows", "amd64"): "windows-amd64.exe",
 }
 EXCEL_DEPENDENCY = "openpyxl==3.1.5"
+EXPAND_META_SUFFIX = ".meta.json"
 
 
 class SetupError(Exception):
     """Report a setup failure without printing raw dependency or credential data."""
+
+
+def write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".json-", dir=path.parent) as directory:
+        staging = Path(directory) / path.name
+        staging.write_text(json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        staging.chmod(0o600)
+        staging.replace(path)
 
 
 def prepare_excel():
@@ -114,21 +126,105 @@ def config_path():
                  if (path := location / "config.json").is_file()), config)
 
 
+def cacheable_expand(response):
+    if not isinstance(response, dict):
+        return False
+    if (response.get("ok") is False or response.get("success") is False
+            or response.get("error") or response.get("errors") or response.get("partial") is True):
+        return False
+    status = str(response.get("status", "")).strip().lower()
+    if status in {"failed", "error", "cancelled", "canceled", "partial", "pending", "running", "queued", "in_progress"}:
+        return False
+    raw = response.get("raw")
+    return (isinstance(response.get("keywords"), list)
+            or isinstance(raw, dict) and isinstance(raw.get("keyword_data"), (list, dict)))
+
+
+def reject_nonfinite(value):
+    raise ValueError(f"Invalid JSON constant: {value}")
+
+
+def find_reusable_expand(output, asins, days):
+    best = None
+    now = time.time()
+    for meta_path in output.parent.parent.glob("*/02_kw_raw.json" + EXPAND_META_SUFFIX):
+        raw_path = meta_path.with_name("02_kw_raw.json")
+        if raw_path.resolve() == output:
+            continue
+        try:
+            meta_bytes = meta_path.read_bytes()
+            meta = json.loads(meta_bytes, parse_constant=reject_nonfinite)
+            if (not isinstance(meta, dict) or meta.get("site") != "JP" or meta.get("asins") != asins
+                    or meta.get("reused_from")):
+                continue
+            fetched = meta.get("fetched_at_epoch")
+            if type(fetched) not in (int, float) or not now - days * 86400 <= fetched <= now:
+                continue
+            if best is not None and fetched <= best[2]["fetched_at_epoch"]:
+                continue
+            raw_bytes = raw_path.read_bytes()
+            digest = meta.get("response_sha256")
+            if digest is not None and digest != sha256(raw_bytes).hexdigest():
+                continue
+            response = json.loads(raw_bytes, parse_constant=reject_nonfinite)
+            if cacheable_expand(response) and meta_bytes == meta_path.read_bytes():
+                best = (raw_path, response, meta)
+        except (OSError, ValueError):
+            continue
+    return best
+
+
 def expand(args):
+    if not math.isfinite(args.reuse_days) or args.reuse_days < 0:
+        raise SetupError("Cache reuse days must be a finite nonnegative number.")
     system = platform.system().lower()
     machine = platform.machine().lower()
     architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(machine, machine)
     suffix = CLI_SUFFIXES.get((system, architecture))
     if suffix is None:
         raise SetupError("ASIN lookup supports macOS Intel/Apple Silicon and Linux/Windows x64.")
+    output = Path(args.output).resolve()
+    config = config_path().resolve()
+    cli_asset = f"tools/bin/laochen-cli-{suffix}"
+    asset_root = STATE / "laochen" / REVISION
+    if output in (config, (asset_root / BACKEND).resolve(), (asset_root / cli_asset).resolve()):
+        raise SetupError("Output must not overwrite the config or an ASIN lookup dependency.")
+    meta_path = output.with_name(output.name + EXPAND_META_SUFFIX)
+    asins = sorted({asin.strip().upper() for asin in args.asins.split(",") if asin.strip()})
+    cached = find_reusable_expand(output, asins, args.reuse_days) if args.reuse_days else None
+    if cached is not None:
+        raw_path, response, meta = cached
+        meta_path.unlink(missing_ok=True)
+        write_json(output, response)
+        source = raw_path.parent.name
+        write_json(meta_path, dict(meta, reused_from=source))
+        print(json.dumps({
+            "command": "expand", "status": "completed", "exit_code": 0, "reused_from": source,
+        }, ensure_ascii=False))
+        return 0
+
     backend = ensure_asset(BACKEND)
-    cli = ensure_asset(f"tools/bin/laochen-cli-{suffix}")
-    return subprocess.call([
-        sys.executable, str(backend), "expand", "--site", "JP",
-        "--asins", args.asins, "--output", args.output,
-        "--reuse-days", str(args.reuse_days), "--cli", str(cli),
-        "--config", str(config_path()),
-    ])
+    cli = ensure_asset(cli_asset)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Keep upstream metadata private until the response passes the business checks.
+    with TemporaryDirectory(prefix=".expand-", dir=output.parent) as directory:
+        staging = Path(directory) / output.name
+        completed = subprocess.run([
+            sys.executable, str(backend), "expand", "--site", "JP",
+            "--asins", args.asins, "--output", str(staging), "--reuse-days", "0",
+            "--cli", str(cli), "--config", str(config),
+        ], stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+        if staging.is_file():
+            response_bytes = staging.read_bytes()
+            meta_path.unlink(missing_ok=True)
+            staging.replace(output)
+            if completed.returncode == 0 and cacheable_expand(json.loads(response_bytes)):
+                write_json(meta_path, {
+                    "asins": asins, "site": "JP", "fetched_at_epoch": time.time(),
+                    "response_sha256": sha256(response_bytes).hexdigest(),
+                })
+    print(completed.stdout, end="")
+    return completed.returncode
 
 
 def main():

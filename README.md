@@ -19,7 +19,7 @@
 请使用 $amazon-jp-listing-asin 以 H060518 加湿器滤芯找词。查询 Amazon 日本站联想和大日官网，核对在售、停售及停产机型，用型号和官方部件名扩词，去重后附官方证据。
 ```
 
-完整结果默认交付 Excel。以词找词的汇总推荐名单为 `seed-keywords.xlsx`。单独运行以下联想脚本可查看日文原词和联想顺序。
+两种方式都交付 Excel。ASIN 反查交付 `keywords.xlsx`，以词找词交付 `seed-keywords.xlsx`。同一任务执行两种方式时，两份主表都交付。单独运行以下联想脚本可查看日文原词和联想顺序。
 
 ```sh
 python3 skills/amazon-jp-listing-asin/scripts/amazon_jp_autocomplete.py \

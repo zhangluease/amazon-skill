@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from environment import SetupError
+from environment import SetupError, write_json
 from export_xlsx import write_xlsx
 
 
@@ -97,20 +97,30 @@ def main(argv=None):
             rows.extend((SOURCE, seed, position, keyword) for position, keyword in suggestions)
             result.update(status="ok" if suggestions else "no_matches", count=len(suggestions))
 
-    if completed:
-        if extension == ".xlsx":
-            try:
-                write_xlsx(args.output, HEADERS, rows)
-            except SetupError as error:
-                parser.exit(1, f"{error}\n")
-        else:
-            write_tsv(args.output, rows)
-    print(json.dumps({
-        "output": str(args.output) if completed else None,
+    raw_output = args.output.with_suffix(".json")
+    summary = {
+        "output": None,
+        "raw_output": None,
         "count": len(rows),
         "seeds": results,
-    }, ensure_ascii=False))
-    return 0 if completed == len(results) else 1
+        "export_status": "not_generated",
+    }
+    try:
+        write_json(raw_output, {"headers": HEADERS, "rows": rows, "seeds": results})
+        summary["raw_output"] = str(raw_output)
+        if completed:
+            if extension == ".xlsx":
+                write_xlsx(args.output, HEADERS, rows)
+            else:
+                write_tsv(args.output, rows)
+            summary.update(output=str(args.output), export_status="completed")
+    except Exception as error:
+        # The raw capture stays available even when the spreadsheet writer fails.
+        error_code = "export_failed" if summary["raw_output"] else "raw_save_failed"
+        message = str(error) if isinstance(error, SetupError) else type(error).__name__
+        summary.update(export_status="failed", error_code=error_code, message=message)
+    print(json.dumps(summary, ensure_ascii=False))
+    return 0 if completed == len(results) and summary["export_status"] == "completed" else 1
 
 
 if __name__ == "__main__":
