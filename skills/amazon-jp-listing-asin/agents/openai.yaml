@@ -1,4 +1,4 @@
 interface:
   display_name: "日本亚马逊关键词查找"
-  short_description: "反查竞品 ASIN 流量词，或合并 Amazon 搜索联想和厂家官网结果筛词"
-  default_prompt: "请使用 $amazon-jp-listing-asin 查找日本站关键词，以词找词时汇总搜索框联想和厂家官网结果后去重筛选。"
+  short_description: "反查竞品 ASIN 流量词，或汇总 Amazon 搜索联想和厂家官网的候选词"
+  default_prompt: "请使用 $amazon-jp-listing-asin 查找日本站关键词，按来源汇总并去重，交付完整候选表。"
