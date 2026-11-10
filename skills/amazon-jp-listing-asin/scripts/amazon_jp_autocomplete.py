@@ -11,6 +11,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from environment import SetupError
 from export_xlsx import write_xlsx
 
 
@@ -98,7 +99,10 @@ def main(argv=None):
 
     if completed:
         if extension == ".xlsx":
-            write_xlsx(args.output, HEADERS, rows)
+            try:
+                write_xlsx(args.output, HEADERS, rows)
+            except SetupError as error:
+                parser.exit(1, f"{error}\n")
         else:
             write_tsv(args.output, rows)
     print(json.dumps({

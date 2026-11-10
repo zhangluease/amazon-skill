@@ -7,8 +7,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unicodedata import east_asian_width
 
+from environment import SetupError, prepare_excel
+
 
 def write_xlsx(output, headers, rows, percentage_columns=()):
+    prepare_excel()
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -62,10 +65,8 @@ def main():
     table = json.loads(args.input.read_text(encoding="utf-8-sig"))
     try:
         write_xlsx(args.output, table["headers"], table["rows"], table.get("percentage_columns", ()))
-    except ModuleNotFoundError as error:
-        if error.name != "openpyxl":
-            raise
-        parser.exit(1, "Excel export requires openpyxl. Install it with python3 -m pip install openpyxl.\n")
+    except SetupError as error:
+        parser.exit(1, f"{error}\n")
 
 
 if __name__ == "__main__":

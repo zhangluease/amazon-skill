@@ -6,14 +6,14 @@
 
 [amazon-jp-listing-asin](skills/amazon-jp-listing-asin/SKILL.md) 支持两种输入。竞品 ASIN 或 `amazon.co.jp` 商品链接通过老陈的易逊后端反查流量词。日文种子词通过 Python 脚本请求 Amazon 日本站搜索框联想。提供本品资料时，可按相关性和搜索意图筛词。
 
-将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用代理的技能目录。ASIN 反查需另行安装上游 `lc-amazon-listing-asin` 并配置易逊 token。 [上游技能及配置说明](https://github.com/chenqinglin2019-tech/Laochen-Amazon-project/tree/main/skills/lc-amazon-listing-asin)
+将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。ASIN 反查使用本机配置的易逊 token。
 
 ```text
 请使用 $amazon-jp-listing-asin 反查我提供的日本亚马逊竞品 ASIN，整理前 20 个日文流量词和月搜索量。
 请使用 $amazon-jp-listing-asin 查询「水筒」和「ステンレスボトル」在 Amazon 日本站的搜索框联想词。
 ```
 
-完整结果默认交付 Excel。也可直接运行种子词联想脚本，输出日文原词和联想顺序。Excel 导出需要 `openpyxl`。
+完整结果默认交付 Excel。也可直接运行种子词联想脚本，输出日文原词和联想顺序。
 
 ```sh
 python3 skills/amazon-jp-listing-asin/scripts/amazon_jp_autocomplete.py \

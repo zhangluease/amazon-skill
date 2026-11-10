@@ -12,22 +12,23 @@ description: 查找日本亚马逊日文关键词。按竞品 ASIN 或 amazon.co
 - 用户给竞品 ASIN 或 `amazon.co.jp` 商品链接时走 ASIN 反查。用户给种子词或要求采集搜索框联想时走种子词联想。两种输入都给了就分别查询，按来源交付。
 - 本品名称、用途、规格、必保词和禁用词可用于筛词。已有有效 ASIN 或种子词即可先查。
 - 在 `reports/jp-keywords/` 下创建独立任务目录 `RUN`。下文命令中的 `SKILL` 指当前技能根目录，将路径替换为实际绝对路径。
-- 完整结果默认交付 Excel（`.xlsx`）。导出使用 `openpyxl`，缺少时在执行脚本的 Python 环境安装 `python3 -m pip install openpyxl`。
+- 使用当前 Agent 可调用的 Python 3.9+ 运行随附脚本。脚本按需准备运行环境，安装和复用成功时直接继续查询或导出。只在缺少 Python、依赖准备失败或需要用户补充凭据时说明具体问题。
+- 完整结果默认交付 Excel（`.xlsx`）。
 
 ## ASIN 反查
 
 从 `/dp/<ASIN>` 或 `/gp/product/<ASIN>` 商品链接提取 ASIN。去除空白、转为大写，校验为 10 位字母或数字，按输入顺序去重。列出被跳过的无效输入和非日本站链接。单次查询最多 20 个去重后的 ASIN，超出时请用户选定本轮 ASIN。
 
-1. 在当前项目或已配置的技能目录中定位已安装的 `lc-amazon-listing-asin`。下文的 `UPSTREAM` 指它的根目录。需要该目录里的 `scripts/backend_cli.py`、当前平台的 `tools/bin/` CLI，以及配置了老陈后端鉴权的 `config.json`。缺少依赖时，指出缺项并链接 [上游技能目录](https://github.com/chenqinglin2019-tech/Laochen-Amazon-project/tree/main/skills/lc-amazon-listing-asin)。已有凭据由上游脚本读取。用户提供新 token 时，用上游 `configure_credentials.py` 的标准输入 JSON 写入，避免在命令参数、日志和报告中暴露。
-2. 用上游 CLI 向老陈的易逊后端（默认 `https://mcp.yixunkuajing.com`）整组反查。ASIN 用英文逗号连接。
+1. 用随附的 [ASIN 反查脚本](scripts/environment.py) 向老陈的易逊后端整组反查。脚本按平台自动准备并校验固定版本的 CLI 和调用脚本，缓存到本机用户目录。ASIN 用英文逗号连接。
 
    ```sh
-   python3 "UPSTREAM/scripts/backend_cli.py" expand --site JP \
-     --asins "ASIN1,ASIN2" --output "RUN/02_kw_raw.json" --reuse-days 7
+   python3 "SKILL/scripts/environment.py" expand \
+     --asins "ASIN1,ASIN2" --output "RUN/02_kw_raw.json"
    ```
 
+2. 优先复用本技能或本机已配置的易逊凭据。命令提示缺少凭据时，只请用户配置易逊 token。通过 `python3 "SKILL/scripts/environment.py" configure` 的标准输入传递含 `backend_token` 的 JSON，保存到用户目录 `~/.amazon-jp-listing-asin/config.json`。凭据只通过安全的标准输入或本机配置传递，避免出现在命令参数、日志和报告中。
 3. 默认复用同一输出父目录内、相同 ASIN 集合且同为日本站的 7 天内结果。用户要求刷新时用 `--reuse-days 0`。记录站点、请求 ASIN、实际查询或缓存来源，以及响应明确提供的数据日期。查询日期与数据日期分开记录。
-4. 同时检查命令摘要和 `02_kw_raw.json`。缓存命中时仍检查业务状态和错误字段。区分鉴权、额度、网络、部分结果和后端明确返回的无数据。响应缺失、结构异常或失败时，按实际状态交付已有有效词，避免把失败当作零匹配。超时或提交状态未知时，先核对请求状态。
+4. 同时检查命令摘要和 `02_kw_raw.json`。缓存命中时仍检查业务状态和错误字段。区分环境准备、鉴权、额度、网络、部分结果和后端明确返回的无数据。响应缺失、结构异常或失败时，按实际状态交付已有有效词，避免把失败当作零匹配。超时或提交状态未知时，先核对请求状态。
 
 ## 种子词联想
 
