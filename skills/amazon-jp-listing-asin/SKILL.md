@@ -17,6 +17,12 @@ description: 查找日本亚马逊关键词。按竞品 ASIN 或 amazon.co.jp �
 - 使用当前 Agent 可调用的 Python 3.9+ 运行随附脚本。脚本按需准备运行环境，安装和复用成功时直接继续查询或导出。只在缺少 Python、依赖准备失败或需要用户补充凭据时说明具体问题。
 - 两种找词方式都必须交付 Excel（`.xlsx`）。ASIN 反查交付 `keywords.xlsx`，以词找词交付 `seed-keywords.xlsx`。同一任务执行两种方式时，分别交付两份主表。
 
+## 本地配置
+
+易逊和 ABA MCP 共用 `~/.amazon-jp-listing-asin/config.json`：易逊使用 `backend_token`，ABA 客户端使用 `aba_mcp.url` 和 `aba_mcp.access_token`。ABA 字段保存的是我们 MCP 服务的 Bearer Token，不是亚马逊临时 access token。配置结构、写入和客户端读取方式见 [统一客户端配置](references/client-config.md)。
+
+用 `python3 "SKILL/scripts/environment.py" config-status` 检查保存位置和凭据是否存在，输出不含 token。配置或轮换时，通过 `environment.py configure` 的标准输入更新相应字段；脚本保留另一渠道与其他已有字段。优先复用统一配置，不重复要求用户提供已保存的 token。使用 [MCP 请求头读取脚本](scripts/aba_mcp_headers.py) 让客户端直接读取此文件，凭据不进入工具业务参数、日志或报告。
+
 ## ASIN 反查
 
 从 `/dp/<ASIN>` 或 `/gp/product/<ASIN>` 商品链接提取 ASIN。去除空白、转为大写，校验为 10 位字母或数字，按输入顺序去重。列出被跳过的无效输入和非日本站链接。单次查询最多 20 个去重后的 ASIN，超出时请用户选定本轮 ASIN。

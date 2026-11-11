@@ -8,12 +8,13 @@ import json
 import math
 from pathlib import Path
 import platform
-import runpy
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
 from urllib.request import urlopen
+
+from skill_config import configure as configure_credentials, config_status
 
 
 SKILL = Path(__file__).resolve().parents[1]
@@ -22,10 +23,8 @@ UPSTREAM = "lc-amazon-listing-asin"
 REVISION = "87dead1472eb4ddfd28f99fd47a9593b5c3f7771"
 SOURCE = f"https://raw.githubusercontent.com/chenqinglin2019-tech/Laochen-Amazon-project/{REVISION}/skills/{UPSTREAM}"
 BACKEND = "scripts/backend_cli.py"
-CREDENTIALS = "scripts/configure_credentials.py"
 CHECKSUMS = {
     BACKEND: "8eaa03c831f3a32030f1a81f62cfd9dd4fd7bea1cccd97809d97380c6743fd24",
-    CREDENTIALS: "b93fb06e2f259a82ac19d459b03e9d3a58db98243b3d3487cf5c180dc167948f",
     "tools/bin/laochen-cli-darwin-amd64": "123350fd5b7ec8838fe46a3202fa5b791e85e5e2b77503de803e8c381602d5b6",
     "tools/bin/laochen-cli-darwin-arm64": "bde4a26fed7940a7a8d1a05cc0ee8da620251c48513488ea07daf70aa5658e97",
     "tools/bin/laochen-cli-linux-amd64": "80740278458d2ec2f0861e7885d2a5d12790f0edfb53f692b2ccdaf000eb89e3",
@@ -234,21 +233,25 @@ def main():
     lookup.add_argument("--asins", required=True)
     lookup.add_argument("--output", required=True)
     lookup.add_argument("--reuse-days", type=float, default=7)
-    commands.add_parser("configure", help="Save a backend token supplied as JSON on stdin")
+    commands.add_parser("configure", help="Merge backend_token and/or aba_mcp credentials from JSON on stdin")
+    commands.add_parser("config-status", help="Show credential presence and the local config path without token values")
     args = parser.parse_args()
     try:
         if args.command == "expand":
             return expand(args)
-        configure = runpy.run_path(str(ensure_asset(CREDENTIALS)))["configure"]
-        configure(STATE, json.load(sys.stdin))
+        if args.command == "config-status":
+            print(json.dumps(config_status(STATE), ensure_ascii=False))
+            return 0
+        result = configure_credentials(STATE, json.load(sys.stdin),
+                                       legacy_paths=[location / "config.json" for location in upstream_locations()])
     except SetupError as error:
         print(json.dumps({"status": "failed", "error_code": "setup_failed", "message": str(error)}))
         return 1
     except (OSError, ValueError):
-        message = "Could not save the local token." if args.command == "configure" else "Could not prepare the ASIN lookup."
+        message = "Could not read or update the local config." if args.command != "expand" else "Could not prepare the ASIN lookup."
         print(json.dumps({"status": "failed", "error_code": "local_setup_failed", "message": message}))
         return 1
-    print('{"status":"completed"}')
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

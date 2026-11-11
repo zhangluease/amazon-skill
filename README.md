@@ -11,7 +11,9 @@
 
 两种方式都保留完整候选和来源，版本或属性差异可备注，留给后续洗词环节。
 
-将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。ASIN 反查使用本机配置的易逊 token。ABA 使用已连接的 `https://spapi-mcp.bamboost.info/mcp`，无需自有 ASIN；连接不可用或报表未完成时说明状态，继续交付已有候选。ABA 排名和份额分别标注，不当作月搜索量或易逊流量占比。报表与筛选任务保存 ID，可续查并复用压缩源缓存。
+将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。易逊 `backend_token` 与 ABA MCP 客户端 `aba_mcp.access_token` 统一保存在 `~/.amazon-jp-listing-asin/config.json`；用 `environment.py configure` 从标准输入合并更新，用 `environment.py config-status` 查看脱敏状态。MCP 客户端通过随附的 `aba_mcp_headers.py` 读取同一配置，详见[客户端配置](skills/amazon-jp-listing-asin/references/client-config.md)。
+
+ABA 使用已连接的 `https://spapi-mcp.bamboost.info/mcp`，无需自有 ASIN；连接不可用或报表未完成时说明状态，继续交付已有候选。ABA 排名和份额分别标注，不当作月搜索量或易逊流量占比。报表与筛选任务保存 ID，可续查并复用压缩源缓存。
 
 ```text
 请使用 $amazon-jp-listing-asin 反查我提供的日本亚马逊竞品 ASIN，整理前 20 个日文流量词和月搜索量。
