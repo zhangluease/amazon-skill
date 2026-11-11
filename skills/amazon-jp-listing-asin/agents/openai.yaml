@@ -1,4 +1,11 @@
 interface:
   display_name: "日本亚马逊关键词查找"
-  short_description: "反查竞品 ASIN 流量词，或汇总 Amazon 搜索联想和厂家官网的候选词"
+  short_description: "汇总竞品 ASIN、搜索联想、厂家官网和日本站 ABA 的关键词及来源"
   default_prompt: "请使用 $amazon-jp-listing-asin 查找日本站关键词，按来源汇总并去重，交付完整候选表。"
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "amazon_sp_api"
+      description: "日本站 ABA 全站搜索词筛选，无需自有 ASIN"
+      transport: "streamable_http"
+      url: "https://spapi-mcp.bamboost.info/mcp"

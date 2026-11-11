@@ -6,12 +6,12 @@
 
 [amazon-jp-listing-asin](skills/amazon-jp-listing-asin/SKILL.md) 支持两种找词方式。
 
-- **根据 ASIN 找词**。用竞品 ASIN 或 `amazon.co.jp` 商品链接，通过老陈的易逊后端反查流量词。
-- **以词找词**。用日文种子词或配件型号查 Amazon 日本站搜索框联想和厂家官网，两个渠道都执行，再合并去重。查配件时核对在售、停售和停产机型。
+- **根据 ASIN 找词**。用竞品 ASIN 或 `amazon.co.jp` 商品链接，通过老陈的易逊后端反查，并用 ABA 全站搜索词中命中竞品点击 ASIN 的记录补充候选。
+- **以词找词**。用日文种子词或配件型号查 Amazon 日本站搜索框联想、厂家官网和 ABA 全站搜索词，三个渠道都尝试，再合并去重。查配件时核对在售、停售和停产机型。
 
 两种方式都保留完整候选和来源，版本或属性差异可备注，留给后续洗词环节。
 
-将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。ASIN 反查使用本机配置的易逊 token。
+将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。ASIN 反查使用本机配置的易逊 token。ABA 使用已连接的 `https://spapi-mcp.bamboost.info/mcp`，无需自有 ASIN；连接不可用或报表未完成时说明状态，继续交付已有候选。ABA 排名和份额分别标注，不当作月搜索量或易逊流量占比。报表与筛选任务保存 ID，可续查并复用压缩源缓存。
 
 ```text
 请使用 $amazon-jp-listing-asin 反查我提供的日本亚马逊竞品 ASIN，整理前 20 个日文流量词和月搜索量。
@@ -19,7 +19,7 @@
 请使用 $amazon-jp-listing-asin 以 H060518 加湿器滤芯找词。查询 Amazon 日本站联想和大日官网，核对在售、停售及停产机型，用型号和官方部件名扩词，去重后附官方证据。
 ```
 
-两种方式都交付 Excel。ASIN 反查交付 `keywords.xlsx`，以词找词交付 `seed-keywords.xlsx`。同一任务执行两种方式时，两份主表都交付。单独运行以下联想脚本可查看日文原词和联想顺序。
+两种方式都交付 Excel。ASIN 反查交付 `keywords.xlsx`，以词找词交付 `seed-keywords.xlsx`；已取得的 ABA 商品与周期明细另存 `aba-keywords.xlsx`。同一任务执行两种方式时，两份主表都交付。单独运行以下联想脚本可查看日文原词和联想顺序。
 
 ```sh
 python3 skills/amazon-jp-listing-asin/scripts/amazon_jp_autocomplete.py \
