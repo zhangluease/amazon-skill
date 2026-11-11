@@ -104,6 +104,6 @@ python3 "SKILL/scripts/export_xlsx.py" \
 
 默认滚动 7 天得到的是这些日期的候选词合集与逐日明细。每天的排名不能相加或简单平均为滚动 7 日排名；每天的份额也不能相加或简单平均为 7 日份额，因为这份报表没有提供相应的每日绝对分母。保留日期、部门、原词、ASIN 和各自指标。报告说明请求范围、实际完整取得的日期和缺口，不将其标为一份亚马逊官方 7 日汇总报表。
 
-全站搜索词报表仅覆盖各词的热门点击商品，通常为前三个商品。竞品未命中只表示未在该期覆盖范围中命中。联想、官网或易逊候选不因 ABA 未命中而删除。品牌词、型号差异与待确认关系按现有规则保留并备注。
+全站搜索词报表仅覆盖各词的热门点击商品，通常为前三个商品。竞品未命中只表示未在该期覆盖范围中命中。联想、官网或易逊候选不因 ABA 未命中而删除。Amazon 联想、易逊和 ABA 词保留品牌、型号差异与待确认关系并备注；仅官网来源的词另按[官网词相关性筛选](keyword-cleaning.md)决定主表去留，ABA 未命中本身不是剔除理由。
 
 字段依据：[亚马逊报表说明](https://developer-docs.amazon/sp-api/docs/report-type-values-analytics)、[官方搜索词 Schema](https://github.com/amzn/selling-partner-api-models/blob/main/schemas/reports/sellingPartnerSearchTermsReport.json)。
