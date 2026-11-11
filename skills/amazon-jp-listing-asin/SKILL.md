@@ -12,7 +12,7 @@ description: 查找日本亚马逊关键词。按竞品 ASIN 或 amazon.co.jp �
 - **根据 ASIN 找词**。用户提供竞品 ASIN 或 `amazon.co.jp` 商品链接时，走 ASIN 反查。
 - **以词找词**。输入日文种子词或配件型号时，执行该模式的全部渠道，再合并去重。同时提供竞品 ASIN 和种子词时，分别执行两种找词方式。
 - 本品名称、用途和规格可用于定位查询对象。必保词和禁用词作为后续洗词的备注。已有有效 ASIN、种子词或可识别的配件型号即可先查。
-- 两种方式均尝试 ABA 全站搜索词补充，流程见 [ABA 查询与字段口径](references/aba-search-terms.md)。无需自有 ASIN。MCP 不可用或报表未完成时，记录状态并继续交付其他渠道取得的候选。
+- 两种方式均通过随附 CLI 尝试 ABA 全站搜索词补充，流程见 [ABA 查询与字段口径](references/aba-search-terms.md)。无需自有 ASIN，也无需 Agent 注册 MCP。服务实际不可达或报表未完成时，记录状态并继续交付其他渠道取得的候选。
 - 在 `reports/jp-keywords/` 下创建独立任务目录 `RUN`。下文命令中的 `SKILL` 指当前技能根目录，将路径替换为实际绝对路径。
 - 使用当前 Agent 可调用的 Python 3.9+ 运行随附脚本。脚本按需准备运行环境，安装和复用成功时直接继续查询或导出。只在缺少 Python、依赖准备失败或需要用户补充凭据时说明具体问题。
 - 两种找词方式都必须交付 Excel（`.xlsx`）。ASIN 反查交付 `keywords.xlsx`，以词找词交付 `seed-keywords.xlsx`。同一任务执行两种方式时，分别交付两份主表。
@@ -21,7 +21,17 @@ description: 查找日本亚马逊关键词。按竞品 ASIN 或 amazon.co.jp �
 
 易逊和 ABA MCP 共用 `~/.amazon-jp-listing-asin/config.json`：易逊使用 `backend_token`，ABA 客户端使用 `aba_mcp.url` 和 `aba_mcp.access_token`。ABA 字段保存的是我们 MCP 服务的 Bearer Token，不是亚马逊临时 access token。配置结构、写入和客户端读取方式见 [统一客户端配置](references/client-config.md)。
 
-用 `python3 "SKILL/scripts/environment.py" config-status` 检查保存位置和凭据是否存在，输出不含 token。配置或轮换时，通过 `environment.py configure` 的标准输入更新相应字段；脚本保留另一渠道与其他已有字段。优先复用统一配置，不重复要求用户提供已保存的 token。使用 [MCP 请求头读取脚本](scripts/aba_mcp_headers.py) 让客户端直接读取此文件，凭据不进入工具业务参数、日志或报告。
+用 `python3 "SKILL/scripts/environment.py" config-status` 检查保存位置和凭据是否存在，输出不含 token。兼容已有的 `spapi_mcp.access_token`，无需重新提供；`environment.py normalize-config` 可将它归一为 `aba_mcp.access_token`。配置或轮换时，通过 `environment.py configure` 的标准输入更新相应字段；脚本保留另一渠道与其他已有字段。优先复用统一配置，凭据不进入工具业务参数、日志或报告。
+
+### ABA CLI 调用入口
+
+默认使用 [ABA CLI](scripts/aba_client.py) 从配置文件读取 token，直接通过 HTTP 调用我们的 MCP 服务。它与易逊的脚本调用方式一致，不依赖当前 Agent 是否列出了 MCP 工具。先执行真实连接检查：
+
+```sh
+python3 "SKILL/scripts/aba_client.py" status
+```
+
+检查成功后，用 `aba_client.py call --tool 工具名 --arguments-file 参数JSON --output 结果JSON` 执行报表创建、状态续查和 ASIN／种子词筛选；用 `collect-query` 取完分页，具体命令见 [ABA CLI 工作流](references/aba-search-terms.md#cli-调用方式)。保存了 token 不等于完成连接验证；不能仅因 Agent 没有注册 MCP 或看不到原生工具，就认定 ABA 未接入或跳过查询。用户明确选择原生 MCP 工具时，可使用同名工具和 [请求头读取脚本](scripts/aba_mcp_headers.py)。
 
 ## ASIN 反查
 

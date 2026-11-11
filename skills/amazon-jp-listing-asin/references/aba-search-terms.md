@@ -1,10 +1,38 @@
 # ABA 全站搜索词补充
 
-用于 ASIN 反查和以词找词。MCP 地址为 `https://spapi-mcp.bamboost.info/mcp`，固定日本站 `A1VC38T7YXB528`。客户端 token 保存到 `~/.amazon-jp-listing-asin/config.json` 的 `aba_mcp.access_token`，与易逊共用一份配置，由 MCP 连接层的 helper 读取；配置及轮换见 [统一客户端配置](client-config.md)。亚马逊授权由服务器管理，凭据不写入技能源码、工具业务参数或报告。默认只使用 `GET_BRAND_ANALYTICS_SEARCH_TERMS_REPORT`；无需自有 ASIN，不调用需要自有品牌 ASIN 的 SQP。
+用于 ASIN 反查和以词找词。MCP 地址为 `https://spapi-mcp.bamboost.info/mcp`，固定日本站 `A1VC38T7YXB528`。默认通过随附 `scripts/aba_client.py` CLI 调用，无需 Agent 注册 MCP。客户端 token 保存到 `~/.amazon-jp-listing-asin/config.json` 的 `aba_mcp.access_token`，兼容 `spapi_mcp.access_token`；配置及轮换见 [统一客户端配置](client-config.md)。亚马逊授权由服务器管理，凭据不写入技能源码、工具业务参数或报告。默认只使用 `GET_BRAND_ANALYTICS_SEARCH_TERMS_REPORT`；无需自有 ASIN，不调用需要自有品牌 ASIN 的 SQP。
+
+## CLI 调用方式
+
+CLI 只依赖 Python 3.9+ 标准库，直接从配置读取 token 并发送认证请求头，支持 JSON 与 SSE 响应。无需手工用 curl 拼接凭据。以下所有 `--tool` 名称对应后文的同名服务端工具。
+
+```sh
+python3 "SKILL/scripts/aba_client.py" status
+python3 "SKILL/scripts/aba_client.py" tools --output "RUN/aba-tools.json"
+python3 "SKILL/scripts/aba_client.py" call --tool aba_create_report \
+  --arguments-file "RUN/aba-create-arguments.json" --output "RUN/aba-created.json"
+python3 "SKILL/scripts/aba_client.py" call --tool aba_get_report \
+  --arguments-file "RUN/aba-report-arguments.json" --output "RUN/aba-report-status.json"
+python3 "SKILL/scripts/aba_client.py" call --tool aba_query_search_terms \
+  --arguments-file "RUN/aba-filter-arguments.json" --output "RUN/aba-query.json"
+```
+
+参数文件使用后文各工具的 JSON 参数对象。`aba-report-arguments.json` 为 `{"reportId":"实际报表ID"}`。筛选参数示例为 `{"reportId":"实际报表ID","seedTerms":["水筒"]}`，ASIN 模式替换为 `asins`。创建与筛选返回的 ID 立即写入 manifest，状态查询使用已有 ID。
+
+筛选提交后，按返回间隔调用 `aba_get_search_terms_query` 查状态，参数为 `{"queryId":"实际查询ID"}`。完成后用下面命令取得全部页面；脚本直接生成 `aba_to_table.py` 所需的容器格式，逐页落盘，网络中断后重复相同命令会沿已保存的游标继续：
+
+```sh
+python3 "SKILL/scripts/aba_client.py" collect-query \
+  --query-id "实际查询ID" --report-period WEEK --output "RUN/aba-query-pages.json"
+```
+
+每个筛选批次使用独立的分页结果文件；多个批次的 `queries` 再汇总为一份输入交给转换器。采集未完成时保留已有页面；脚本明确返回 `in_progress`、`partial` 或 `failed`，不能记为无匹配。鉴权、网络、限流和业务错误用脱敏错误码说明；创建请求断线时可能标记 `request_outcome_unknown=true`，不能盲目重复创建。CLI 不自动重试创建报表。
+
+默认配置路径固定为统一的 `config.json`。用户已保存的配置在其他明确位置时，可用 `aba_client.py --config "已有配置的绝对路径/config.json" status` 读取，不要把 token 复制进参数文件或命令参数。只有 CLI 实际失败后才按具体原因说明该渠道缺口；不能以“当前 Agent 没有 MCP 工具”替代连接检查。
 
 ## 创建与续查
 
-1. 发现并调用 `aba_status`，检查服务器端凭据与 `searchTermsQuery.supported`。客户端认证失败时先用 `environment.py config-status` 检查统一配置，并确认 MCP helper 从该文件读取；只在缺少有效客户端 token 时请用户配置 `aba_mcp.access_token`。工具缺失、未连接、服务器端凭据未配置或旧版未提供筛选工具时，记录具体状态，继续其他渠道。不要为取得 ABA 而要求用户提供自有 ASIN。
+1. 用 CLI `status` 调用 `aba_status`，检查服务器端凭据与 `searchTermsQuery.supported`。客户端认证失败时先用 `environment.py config-status` 检查统一配置，兼容的旧字段无需重新填写；只在缺少有效客户端 token 时请用户配置 `aba_mcp.access_token`。服务器实际不可达、服务器端凭据未配置或旧版未提供筛选工具时，记录具体状态，继续其他渠道。不要为取得 ABA 而要求用户提供自有 ASIN。
 2. 默认查询最近一个已结束的完整周（星期日至星期六），以日本站日期计算。用户指定日、周、月或季度时遵从指定周期；不能跨多个周期，也不能使用未结束的周期。保存统计日期与本次查询时间及其时区。
 3. 在报告根目录已有记录中，按站点、报表类型、周期和日期查找可复用的 `reportId`。已提交的报表用 `aba_get_report` 续查，不重复创建。首次创建时调用：
 

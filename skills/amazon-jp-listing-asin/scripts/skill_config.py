@@ -11,6 +11,7 @@ import tempfile
 STATE = Path.home() / ".amazon-jp-listing-asin"
 ABA_URL = "https://spapi-mcp.bamboost.info/mcp"
 BACKEND_URL = "https://mcp.yixunkuajing.com"
+ABA_CONFIG_KEYS = ("aba_mcp", "spapi_mcp")
 
 
 def read_config(path):
@@ -31,23 +32,72 @@ def validate_token(value, *, bearer=False):
     return value
 
 
+def aba_settings(config):
+    """Accept the historical field spelling without silently choosing conflicting tokens."""
+    candidates = []
+    for name in ABA_CONFIG_KEYS:
+        if name not in config:
+            continue
+        section = config[name]
+        if not isinstance(section, dict):
+            raise ValueError("ABA_MCP_CONFIG_INVALID")
+        token = section.get("access_token")
+        if token is None or token == "":
+            continue
+        validate_token(token, bearer=True)
+        if section.get("url", ABA_URL) != ABA_URL:
+            raise ValueError("ABA_MCP_URL_INVALID")
+        candidates.append((name, token))
+    if len({token for _name, token in candidates}) > 1:
+        raise ValueError("ABA_MCP_CONFIG_CONFLICT")
+    name, token = candidates[0] if candidates else (None, None)
+    return {"url": ABA_URL, "access_token": token, "source": name}
+
+
+def unify_aba_config(config, update=None):
+    previous = {}
+    for name in reversed(ABA_CONFIG_KEYS):
+        section = config.get(name, {})
+        if not isinstance(section, dict):
+            raise ValueError("ABA_MCP_CONFIG_INVALID")
+        previous.update(section)
+    if update is not None:
+        previous.update(update)
+    else:
+        settings = aba_settings(config)
+        if settings["access_token"] is not None:
+            previous["access_token"] = settings["access_token"]
+    previous["url"] = ABA_URL
+    config["aba_mcp"] = previous
+    config.pop("spapi_mcp", None)
+
+
 def configure(root, payload, legacy_paths=()):
     """Merge credential updates atomically; preserve unrelated config fields."""
     root = Path(root)
     path = root / "config.json"
     if (not isinstance(payload, dict) or not payload
-            or set(payload) - {"backend_token", "aba_mcp"}):
+            or set(payload) - {"backend_token", *ABA_CONFIG_KEYS}):
         raise ValueError("EXPECTED_BACKEND_TOKEN_OR_ABA_MCP")
     if "backend_token" in payload:
         validate_token(payload["backend_token"])
-    if "aba_mcp" in payload:
-        aba = payload["aba_mcp"]
+    for name in ABA_CONFIG_KEYS:
+        if name not in payload:
+            continue
+        aba = payload[name]
         if (not isinstance(aba, dict) or "access_token" not in aba
                 or set(aba) - {"url", "access_token"}):
             raise ValueError("EXPECTED_ABA_MCP_ACCESS_TOKEN")
         validate_token(aba["access_token"], bearer=True)
         if aba.get("url", ABA_URL) != ABA_URL:
             raise ValueError("ABA_MCP_URL_INVALID")
+    if any(name in payload for name in ABA_CONFIG_KEYS):
+        aba_settings(payload)
+        update = {}
+        for name in reversed(ABA_CONFIG_KEYS):
+            update.update(payload.get(name, {}))
+        payload = {key: value for key, value in payload.items() if key not in ABA_CONFIG_KEYS}
+        payload["aba_mcp"] = update
 
     config = read_config(path) if path.exists() or path.is_symlink() else {}
     # Creating an ABA-only primary file must not hide a working legacy backend token.
@@ -67,11 +117,8 @@ def configure(root, payload, legacy_paths=()):
     config.setdefault("backend_token", "")
     if "backend_token" in payload:
         config["backend_token"] = payload["backend_token"]
-    if "aba_mcp" in payload:
-        previous = config.get("aba_mcp", {})
-        if not isinstance(previous, dict):
-            raise ValueError("ABA_MCP_CONFIG_INVALID")
-        config["aba_mcp"] = {**previous, "url": ABA_URL, **payload["aba_mcp"]}
+    if "aba_mcp" in payload or any(name in config for name in ABA_CONFIG_KEYS):
+        unify_aba_config(config, payload.get("aba_mcp"))
 
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name == "posix":
@@ -94,20 +141,34 @@ def configure(root, payload, legacy_paths=()):
 
 def aba_headers(root=STATE):
     config = read_config(Path(root) / "config.json")
-    aba = config.get("aba_mcp")
-    if not isinstance(aba, dict) or aba.get("url") != ABA_URL:
-        raise ValueError("ABA_MCP_CONFIG_INVALID")
-    token = validate_token(aba.get("access_token"), bearer=True)
+    aba = aba_settings(config)
+    if aba["access_token"] is None:
+        raise ValueError("ABA_MCP_ACCESS_TOKEN_MISSING")
+    token = aba["access_token"]
     return {"Authorization": "Bearer " + token}
+
+
+def normalize_config(root=STATE, legacy_paths=()):
+    settings = aba_settings(read_config(Path(root) / "config.json"))
+    if settings["access_token"] is None:
+        raise ValueError("ABA_MCP_ACCESS_TOKEN_MISSING")
+    return configure(root, {"aba_mcp": {"access_token": settings["access_token"]}}, legacy_paths)
 
 
 def config_status(root=STATE):
     path = Path(root) / "config.json"
     config = read_config(path) if path.exists() or path.is_symlink() else {}
-    aba = config.get("aba_mcp", {})
+    error = None
+    try:
+        settings = aba_settings(config)
+    except ValueError as failure:
+        error = str(failure)
+        settings = {"access_token": None, "source": None}
     return {"config_file": str(path), "exists": path.is_file(),
             "backend_token_configured": bool(config.get("backend_token")),
-            "aba_mcp_access_token_configured": isinstance(aba, dict) and bool(aba.get("access_token"))}
+            "aba_mcp_access_token_configured": settings["access_token"] is not None,
+            "aba_mcp_config_source": settings["source"],
+            "aba_mcp_config_error": error}
 
 
 def main(argv=None):

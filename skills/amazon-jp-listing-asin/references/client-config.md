@@ -15,6 +15,8 @@
 
 `aba_mcp.access_token` 是连接我们部署的 MCP 服务的客户端凭据，不是亚马逊 LWA 临时 access token。亚马逊 refresh token、client secret 和临时 access token 仍由服务器管理。
 
+兼容历史或其他 Agent 写入的 `spapi_mcp.access_token`，未写 `url` 时使用固定服务地址。CLI 和请求头 helper 均可直接读取该字段，无需重新提供 token。运行 `environment.py normalize-config` 可将旧节合并到 `aba_mcp` 并移除旧节，保留易逊和其他字段。两节存在不同 token 时明确返回 `ABA_MCP_CONFIG_CONFLICT`，不猜测应使用哪个凭据。
+
 ## 写入与检查
 
 通过 `python3 "SKILL/scripts/environment.py" configure` 的标准输入传入 JSON。支持只更新一个渠道，也支持同时更新；未提供的配置字段保持原值。不要把真实 token 写进命令参数、技能源码、工具参数或报告。
@@ -36,6 +38,17 @@ python3 "SKILL/scripts/environment.py" config-status
 空的 `backend_token` 表示易逊尚未配置，不影响已配置的 ABA 渠道。
 
 ## MCP 客户端读取
+
+默认使用随附 CLI，直接读取这份配置并访问 HTTP MCP 服务，不需要 Agent 的 MCP 注册配置：
+
+```sh
+python3 "SKILL/scripts/aba_client.py" status
+python3 "SKILL/scripts/aba_client.py" tools
+```
+
+状态检查是实际网络请求；`environment.py config-status` 只检查本地配置。之后通过 CLI 的 `call` 和 `collect-query` 执行查询与完整分页采集，见 [CLI 工作流](aba-search-terms.md#cli-调用方式)。配置保存成功后应实际执行状态检查，不能直接标为“脚本未接入，不会用于查询”。
+
+### 可选的原生 MCP 接入
 
 随附的 `scripts/aba_mcp_headers.py` 从同一 `config.json` 读取 ABA token，向 MCP 客户端输出 `Authorization` 请求头。它的标准输出是认证协议数据，只供客户端读取；不要直接把脚本输出打印进聊天、终端摘要或日志。
 

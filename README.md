@@ -11,7 +11,9 @@
 
 两种方式都保留完整候选和来源，版本或属性差异可备注，留给后续洗词环节。
 
-将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。易逊 `backend_token` 与 ABA MCP 客户端 `aba_mcp.access_token` 统一保存在 `~/.amazon-jp-listing-asin/config.json`；用 `environment.py configure` 从标准输入合并更新，用 `environment.py config-status` 查看脱敏状态。MCP 客户端通过随附的 `aba_mcp_headers.py` 读取同一配置，详见[客户端配置](skills/amazon-jp-listing-asin/references/client-config.md)。
+将整个 `skills/amazon-jp-listing-asin/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。易逊 `backend_token` 与 ABA MCP 客户端 `aba_mcp.access_token` 统一保存在 `~/.amazon-jp-listing-asin/config.json`；兼容其他 Agent 已写入的 `spapi_mcp.access_token`。用 `environment.py configure` 从标准输入合并更新，用 `environment.py config-status` 查看脱敏状态，`environment.py normalize-config` 可归一旧字段。
+
+ABA 默认通过随附 `aba_client.py` CLI 直连服务，无需 Agent 注册 MCP，也无需安装 MCP SDK；只需 Python 3.9+。运行 `python3 skills/amazon-jp-listing-asin/scripts/aba_client.py status` 实测连接，`call` 执行工具，`collect-query` 完整采集并支持分页中断续取。选择原生 MCP 时也可通过 `aba_mcp_headers.py` 读取同一配置，详见[客户端配置](skills/amazon-jp-listing-asin/references/client-config.md)。
 
 ABA 使用已连接的 `https://spapi-mcp.bamboost.info/mcp`，无需自有 ASIN；连接不可用或报表未完成时说明状态，继续交付已有候选。ABA 排名和份额分别标注，不当作月搜索量或易逊流量占比。报表与筛选任务保存 ID，可续查并复用压缩源缓存。
 

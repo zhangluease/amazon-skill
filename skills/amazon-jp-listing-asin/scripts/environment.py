@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 import time
 from urllib.request import urlopen
 
-from skill_config import configure as configure_credentials, config_status
+from skill_config import configure as configure_credentials, config_status, normalize_config
 
 
 SKILL = Path(__file__).resolve().parents[1]
@@ -235,6 +235,7 @@ def main():
     lookup.add_argument("--reuse-days", type=float, default=7)
     commands.add_parser("configure", help="Merge backend_token and/or aba_mcp credentials from JSON on stdin")
     commands.add_parser("config-status", help="Show credential presence and the local config path without token values")
+    commands.add_parser("normalize-config", help="Normalize a saved spapi_mcp token to aba_mcp without re-entering it")
     args = parser.parse_args()
     try:
         if args.command == "expand":
@@ -242,8 +243,11 @@ def main():
         if args.command == "config-status":
             print(json.dumps(config_status(STATE), ensure_ascii=False))
             return 0
-        result = configure_credentials(STATE, json.load(sys.stdin),
-                                       legacy_paths=[location / "config.json" for location in upstream_locations()])
+        legacy_paths = [location / "config.json" for location in upstream_locations()]
+        if args.command == "normalize-config":
+            result = normalize_config(STATE, legacy_paths)
+        else:
+            result = configure_credentials(STATE, json.load(sys.stdin), legacy_paths=legacy_paths)
     except SetupError as error:
         print(json.dumps({"status": "failed", "error_code": "setup_failed", "message": str(error)}))
         return 1

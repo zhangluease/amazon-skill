@@ -121,6 +121,36 @@ class SkillConfigTests(unittest.TestCase):
         self.assertEqual(helper.stdout, "")
         self.assertNotIn(TOKEN, helper.stderr)
 
+    def test_screenshot_spapi_field_is_usable_without_reentering_credentials(self):
+        self.root.mkdir()
+        (self.root / "config.json").write_text(json.dumps({
+            "backend_token": "keep-backend", "spapi_mcp": {"access_token": TOKEN, "custom": 1}}))
+        self.assertEqual(MODULE.aba_headers(self.root), {"Authorization": "Bearer " + TOKEN})
+        status = MODULE.config_status(self.root)
+        self.assertTrue(status["aba_mcp_access_token_configured"])
+        self.assertEqual(status["aba_mcp_config_source"], "spapi_mcp")
+        self.assertNotIn(TOKEN, json.dumps(status))
+        MODULE.normalize_config(self.root)
+        data = self.read()
+        self.assertNotIn("spapi_mcp", data)
+        self.assertEqual(data["aba_mcp"]["access_token"], TOKEN)
+        self.assertEqual(data["aba_mcp"]["custom"], 1)
+        self.assertEqual(data["backend_token"], "keep-backend")
+
+    def test_alias_input_normalizes_and_conflicting_saved_tokens_are_explicit(self):
+        self.configure({"spapi_mcp": {"access_token": TOKEN}})
+        self.assertEqual(self.read()["aba_mcp"]["access_token"], TOKEN)
+        self.assertNotIn("spapi_mcp", self.read())
+        data = self.read()
+        data["spapi_mcp"] = {"access_token": "different-valid-token"}
+        (self.root / "config.json").write_text(json.dumps(data))
+        with self.assertRaisesRegex(ValueError, "ABA_MCP_CONFIG_CONFLICT"):
+            MODULE.aba_headers(self.root)
+        self.assertEqual(MODULE.config_status(self.root)["aba_mcp_config_error"], "ABA_MCP_CONFIG_CONFLICT")
+        self.configure({"aba_mcp": {"access_token": "explicit-replacement"}})
+        self.assertNotIn("spapi_mcp", self.read())
+        self.assertEqual(MODULE.aba_headers(self.root)["Authorization"], "Bearer explicit-replacement")
+
 
 if __name__ == "__main__":
     unittest.main()
