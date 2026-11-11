@@ -12,7 +12,7 @@ description: 查找日本亚马逊关键词。按竞品 ASIN 或 amazon.co.jp �
 - **根据 ASIN 找词**。用户提供竞品 ASIN 或 `amazon.co.jp` 商品链接时，走 ASIN 反查。
 - **以词找词**。输入日文种子词或配件型号时，执行该模式的全部渠道，再合并去重。同时提供竞品 ASIN 和种子词时，分别执行两种找词方式。
 - 本品名称、用途和规格可用于定位查询对象。必保词和禁用词作为后续洗词的备注。已有有效 ASIN、种子词或可识别的配件型号即可先查。
-- 两种方式均通过随附 CLI 尝试 ABA 全站搜索词补充，流程见 [ABA 查询与字段口径](references/aba-search-terms.md)。无需自有 ASIN，也无需 Agent 注册 MCP。服务实际不可达或报表未完成时，记录状态并继续交付其他渠道取得的候选。
+- 两种方式均通过随附 CLI 尝试 ABA 全站搜索词补充，默认目标窗口为查询日前 7 天，不含查询当天，并拆为 7 份日报。流程见 [ABA 查询与字段口径](references/aba-search-terms.md)。无需自有 ASIN，也无需 Agent 注册 MCP。服务实际不可达或某日期未取得数据时，记录日期缺口并继续交付已取得的候选。
 - 在 `reports/jp-keywords/` 下创建独立任务目录 `RUN`。下文命令中的 `SKILL` 指当前技能根目录，将路径替换为实际绝对路径。
 - 使用当前 Agent 可调用的 Python 3.9+ 运行随附脚本。脚本按需准备运行环境，安装和复用成功时直接继续查询或导出。只在缺少 Python、依赖准备失败或需要用户补充凭据时说明具体问题。
 - 两种找词方式都必须交付 Excel（`.xlsx`）。ASIN 反查交付 `keywords.xlsx`，以词找词交付 `seed-keywords.xlsx`。同一任务执行两种方式时，分别交付两份主表。
@@ -31,7 +31,9 @@ description: 查找日本亚马逊关键词。按竞品 ASIN 或 amazon.co.jp �
 python3 "SKILL/scripts/aba_client.py" status
 ```
 
-检查成功后，用 `aba_client.py call --tool 工具名 --arguments-file 参数JSON --output 结果JSON` 执行报表创建、状态续查和 ASIN／种子词筛选；用 `collect-query` 取完分页，具体命令见 [ABA CLI 工作流](references/aba-search-terms.md#cli-调用方式)。保存了 token 不等于完成连接验证；不能仅因 Agent 没有注册 MCP 或看不到原生工具，就认定 ABA 未接入或跳过查询。用户明确选择原生 MCP 工具时，可使用同名工具和 [请求头读取脚本](scripts/aba_mcp_headers.py)。
+检查成功后，运行 `aba_client.py plan-window --output "RUN/aba-window-plan.json"` 生成查询日前 7 天的逐日报表参数；默认查询日按北京时间，用户明确给出查询日时用 `--as-of YYYY-MM-DD`。例如 2026-11-11 查询，对应 2026-11-04 至 2026-11-10。计划只计算日期，不代表数据已经发布。
+
+按计划逐日复用或创建报表，用 `aba_client.py call --tool 工具名 --arguments-file 参数JSON --output 结果JSON` 执行状态续查和 ASIN／种子词筛选，再用 `collect-query` 取完每个查询的分页，具体命令见 [ABA CLI 工作流](references/aba-search-terms.md#cli-调用方式)。保留每日指标和实际取得的日期范围。保存了 token 不等于完成连接验证；不能仅因 Agent 没有注册 MCP 或看不到原生工具，就认定 ABA 未接入或跳过查询。用户明确选择原生 MCP 工具时，可使用同名工具和 [请求头读取脚本](scripts/aba_mcp_headers.py)。
 
 ## ASIN 反查
 
@@ -81,7 +83,7 @@ python3 "SKILL/scripts/amazon_jp_autocomplete.py" \
 
 - ASIN 反查的关键词取自响应的 `keywords` 数组（字符串或含 `keyword` 的对象），缺少该数组时读取 `raw.keyword_data`。按原词关联 `raw.keyword_data` 里的指标。月搜索量使用 `searches` 或 `monthly_searches`，流量占比使用 `trafficPercentage` 或 `traffic_percentage`。指标缺失标记「未返回」，保留真实的零。逐词命中 ASIN 和排名仅在响应有明确对应关系时列出，整组查询的输入 ASIN 另列。
 - ASIN 反查保留服务端返回的日文原词，仅合并去除首尾空白后完全相同的词。平假名、片假名、汉字、空格差异和长尾变体可归到同一意图组，仍逐词保留指标。重复记录的流量占比不相加。指标冲突时标注各自来源或口径。
-- ABA 的搜索频率排名、搜索部门、点击 ASIN、点击份额排名、点击份额、转化份额和统计日期分别记录，不填入易逊月搜索量或流量占比列。份额为 0–1 的比例，保留零和缺失的区别；转化份额不是转化率，点击份额排名不是自然排名。跨部门、跨周期和跨 ASIN 的指标不混合。联想、官网和易逊候选不因 ABA 未命中而删除。详见 [ABA 指标与合并边界](references/aba-search-terms.md#指标解释与合并边界)。
+- ABA 的搜索频率排名、搜索部门、点击 ASIN、点击份额排名、点击份额、转化份额和统计日期分别记录，不填入易逊月搜索量或流量占比列。份额为 0–1 的比例，保留零和缺失的区别；转化份额不是转化率，点击份额排名不是自然排名。跨部门、跨周期和跨 ASIN 的指标不混合。滚动 7 天只合并候选词，逐日排名与份额不相加，也不简单平均为 7 日指标；报告列出请求日期、已取得日期和缺口日期。联想、官网和易逊候选不因 ABA 未命中而删除。详见 [ABA 指标与合并边界](references/aba-search-terms.md#指标解释与合并边界)。
 - 可按品名、属性、用途、人群或场景做意图分组，并标注竞品品牌、版本差异、待核实的关系或用户提供的禁用词。保留这些候选及其原始来源。有必保词未命中时，单独标记为用户提供、查询未命中。
 - 按 [关键词报告模板](references/report-template.md) 在任务目录生成中文 `report.md`。报告中每种找词方式展示最多 20 个关键词或用户指定的数量，Excel 主表保留完整候选。交代各渠道查询状态，在末尾链接本轮工作簿和可用证据，本地文件用相对路径。已执行的方式没有采集到关键词时，仍生成带表头的空结果主表，并在报告说明原因。导出失败时，保留已取得的数据并报告导出状态。
 

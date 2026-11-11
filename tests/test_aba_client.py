@@ -164,6 +164,42 @@ class AbaClientTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ClientError, "MCP_RESPONSE_INVALID"):
             MODULE.parse_response(b'not JSON', 1, "application/json")
 
+    def test_default_window_is_the_seven_days_before_the_query_date(self):
+        plan = MODULE.rolling_window_plan("2026-11-11")
+        self.assertEqual(plan["requestedStartDate"], "2026-11-04")
+        self.assertEqual(plan["requestedEndDate"], "2026-11-10")
+        self.assertEqual(plan["reportCount"], 7)
+        dates = [row["date"] for row in plan["reports"]]
+        self.assertEqual(len(set(dates)), 7)
+        self.assertNotIn("2026-11-11", dates)
+        for row in plan["reports"]:
+            request = row["request"]
+            self.assertEqual(request["reportPeriod"], "DAY")
+            self.assertEqual(request["dataStartTime"][:10], request["dataEndTime"][:10])
+            self.assertNotIn("asins", request)
+            self.assertEqual(row["availability"], "not_checked")
+
+    def test_window_boundaries_and_planning_without_credentials_or_network(self):
+        with patch.object(MODULE, "datetime") as clock:
+            clock.now.return_value.date.return_value = MODULE.date(2026, 11, 11)
+            plan = MODULE.rolling_window_plan()
+            self.assertEqual(plan["queryDate"], "2026-11-11")
+            self.assertEqual(clock.now.call_args[0][0].utcoffset(None).total_seconds(), 8 * 3600)
+        for as_of, start, end in [("2027-01-03", "2026-12-27", "2027-01-02"),
+                                  ("2028-03-01", "2028-02-23", "2028-02-29"),
+                                  ("2026-03-01", "2026-02-22", "2026-02-28")]:
+            plan = MODULE.rolling_window_plan(as_of)
+            self.assertEqual((plan["requestedStartDate"], plan["requestedEndDate"]), (start, end))
+        with self.assertRaisesRegex(MODULE.ClientError, "WINDOW_QUERY_DATE_INVALID"):
+            MODULE.rolling_window_plan("2026-02-30")
+        target = self.root / "window.json"
+        with patch.object(MODULE, "AbaClient", side_effect=AssertionError("planning must be offline")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = MODULE.main(["--config", str(self.root / "missing.json"), "plan-window",
+                                    "--as-of", "2026-11-11", "--output", str(target)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(target.read_text())["reportCount"], 7)
+
     def test_collection_checkpoints_pages_and_resumes_without_repeating_the_first_page(self):
         target = self.root / "pages.json"
         first = query_page(next_cursor="two")

@@ -9,6 +9,7 @@ CLI 只依赖 Python 3.9+ 标准库，直接从配置读取 token 并发送认�
 ```sh
 python3 "SKILL/scripts/aba_client.py" status
 python3 "SKILL/scripts/aba_client.py" tools --output "RUN/aba-tools.json"
+python3 "SKILL/scripts/aba_client.py" plan-window --output "RUN/aba-window-plan.json"
 python3 "SKILL/scripts/aba_client.py" call --tool aba_create_report \
   --arguments-file "RUN/aba-create-arguments.json" --output "RUN/aba-created.json"
 python3 "SKILL/scripts/aba_client.py" call --tool aba_get_report \
@@ -17,36 +18,39 @@ python3 "SKILL/scripts/aba_client.py" call --tool aba_query_search_terms \
   --arguments-file "RUN/aba-filter-arguments.json" --output "RUN/aba-query.json"
 ```
 
-参数文件使用后文各工具的 JSON 参数对象。`aba-report-arguments.json` 为 `{"reportId":"实际报表ID"}`。筛选参数示例为 `{"reportId":"实际报表ID","seedTerms":["水筒"]}`，ASIN 模式替换为 `asins`。创建与筛选返回的 ID 立即写入 manifest，状态查询使用已有 ID。
+`plan-window` 默认以北京时间的查询日生成前 7 天，不含当天；`--as-of YYYY-MM-DD` 可固定用户指定的查询日。计划的 `reports[].request` 是每个日期应提交的完整创建参数；每个日期状态起初为 `not_checked`，不能把日期计划当作已取到数据。滚动窗口每一天使用独立的 `RUN/aba/YYYY-MM-DD/` 子目录保存参数、ID、状态和分页文件，避免覆盖其他日期；上面其他命令分别对单日报表执行，将对应子目录作为其输出位置。
+
+参数文件使用后文各工具的 JSON 参数对象。`aba-report-arguments.json` 为 `{"reportId":"实际报表ID"}`。筛选参数示例为 `{"reportId":"实际报表ID","seedTerms":["水筒"]}`，ASIN 模式替换为 `asins`。创建与筛选返回的 ID 立即写入总 manifest 并关联数据日期，状态查询使用已有 ID。
 
 筛选提交后，按返回间隔调用 `aba_get_search_terms_query` 查状态，参数为 `{"queryId":"实际查询ID"}`。完成后用下面命令取得全部页面；脚本直接生成 `aba_to_table.py` 所需的容器格式，逐页落盘，网络中断后重复相同命令会沿已保存的游标继续：
 
 ```sh
 python3 "SKILL/scripts/aba_client.py" collect-query \
-  --query-id "实际查询ID" --report-period WEEK --output "RUN/aba-query-pages.json"
+  --query-id "实际查询ID" --report-period DAY --output "RUN/aba-query-pages.json"
 ```
 
-每个筛选批次使用独立的分页结果文件；多个批次的 `queries` 再汇总为一份输入交给转换器。采集未完成时保留已有页面；脚本明确返回 `in_progress`、`partial` 或 `failed`，不能记为无匹配。鉴权、网络、限流和业务错误用脱敏错误码说明；创建请求断线时可能标记 `request_outcome_unknown=true`，不能盲目重复创建。CLI 不自动重试创建报表。
+每个日期及筛选批次使用独立的分页结果文件，日报的 `collect-query --report-period` 使用 `DAY`；多个日期、批次的 `queries` 再汇总为一份输入交给转换器。采集未完成时保留已有页面；脚本明确返回 `in_progress`、`partial` 或 `failed`，不能记为无匹配。鉴权、网络、限流和业务错误用脱敏错误码说明；创建请求断线时可能标记 `request_outcome_unknown=true`，不能盲目重复创建。CLI 不自动重试创建报表。
 
 默认配置路径固定为统一的 `config.json`。用户已保存的配置在其他明确位置时，可用 `aba_client.py --config "已有配置的绝对路径/config.json" status` 读取，不要把 token 复制进参数文件或命令参数。只有 CLI 实际失败后才按具体原因说明该渠道缺口；不能以“当前 Agent 没有 MCP 工具”替代连接检查。
 
 ## 创建与续查
 
 1. 用 CLI `status` 调用 `aba_status`，检查服务器端凭据与 `searchTermsQuery.supported`。客户端认证失败时先用 `environment.py config-status` 检查统一配置，兼容的旧字段无需重新填写；只在缺少有效客户端 token 时请用户配置 `aba_mcp.access_token`。服务器实际不可达、服务器端凭据未配置或旧版未提供筛选工具时，记录具体状态，继续其他渠道。不要为取得 ABA 而要求用户提供自有 ASIN。
-2. 默认查询最近一个已结束的完整周（星期日至星期六），以日本站日期计算。用户指定日、周、月或季度时遵从指定周期；不能跨多个周期，也不能使用未结束的周期。保存统计日期与本次查询时间及其时区。
-3. 在报告根目录已有记录中，按站点、报表类型、周期和日期查找可复用的 `reportId`。已提交的报表用 `aba_get_report` 续查，不重复创建。首次创建时调用：
+2. 默认目标范围为查询日前 7 个日期，即 `[查询日−7天, 查询日−1天]`，不含查询当天。查询日默认按北京时间，用户明确提供日期时优先采用。每个日期单独请求一份 `DAY` 报表；例如 2026-11-11 查询，目标范围为 11-04 至 11-10，共 7 份日报。不能把这段任意日期范围作为一份 `WEEK` 或跨日 `DAY` 请求。用户明确指定日、周、月或季度时遵从指定周期，单份周报仍须星期日至星期六。保存统计日期与本次查询时间及其时区。
+3. 在报告根目录已有记录中，逐日按站点、报表类型、周期和日期查找可复用的 `reportId`。已提交的报表用 `aba_get_report` 续查，不重复创建。默认按 `plan-window` 的每个 `reports[].request` 创建；以目标范围第一天为例：
 
    ```json
    {
      "reportType": "GET_BRAND_ANALYTICS_SEARCH_TERMS_REPORT",
-     "reportPeriod": "WEEK",
-     "dataStartTime": "2026-11-01T00:00:00Z",
-     "dataEndTime": "2026-11-07T23:59:59Z"
+     "reportPeriod": "DAY",
+     "dataStartTime": "2026-11-04T00:00:00Z",
+     "dataEndTime": "2026-11-04T23:59:59Z"
    }
    ```
 
-   日期仅为调用格式示例，执行时替换。创建这个报表时不传 `asins`；竞品筛选在后续工具中进行。立即把请求、返回的 `reportId` 和状态写入 `RUN/aba-manifest.json`，同一任务的两种模式共用报表。
+   日期仅为调用格式示例，执行时使用日期计划。创建这个报表时不传 `asins`；竞品筛选在后续工具中进行。立即把请求、返回的 `reportId` 和状态写入 `RUN/aba-manifest.json`。总 manifest 分别记录目标日期、每日报表和查询 ID、实际已取得日期及缺口日期；同一日期的报表供两种找词方式共用。
 4. 按至少 30 秒间隔查状态，遇限流按服务端提示退避。`IN_QUEUE`、`IN_PROGRESS` 记录为处理中。`FATAL`、`CANCELLED` 或请求失败记录真实状态，不能当作无匹配。只有 `DONE` 才提交筛选。默认本轮最多等待 15 分钟；仍在处理时保存 ID，交付其他渠道已取得的结果并标注 ABA 待完成，后续可续查。用户明确要求等待完成时继续等待。
+5. 统计日期已结束，不代表该日期的数据已发布。依据实际报表和筛选状态判断可用性；处理中不能解释成未发布，`FATAL` 也不能一概归因为数据延迟。只交付已取得的有效日期，未取得日期记录准确状态，不用零补齐，也不悄悄把窗口向前移动来凑 7 天。某日期失败仍继续其他日期和其他渠道。7 份日报分别生成和扫描，请求次数更多，耗时取决于生成速度和缓存；复用已有每日报表及源缓存。
 
 ## 服务端筛选与分页
 
@@ -66,7 +70,7 @@ python3 "SKILL/scripts/aba_client.py" collect-query \
 {
   "queries": [
     {
-      "reportPeriod": "WEEK",
+      "reportPeriod": "DAY",
       "pages": ["替换为从首页到末页的完整结果对象"]
     }
   ]
@@ -97,6 +101,8 @@ python3 "SKILL/scripts/export_xlsx.py" \
 | `conversionShare` | ABA转化份额 | 该商品转化数／这个词的全部转化数，不是转化率 |
 
 份额为 0–1 的比例，Excel 用百分比格式，零保持为零，缺失留空。ABA 不提供绝对搜索量，不能从排名估算月搜索量；ABA 份额不能填进易逊的流量占比列。主表已有易逊指标时保留原值和来源。ABA-only 候选的月搜索量和易逊流量占比留空。
+
+默认滚动 7 天得到的是这些日期的候选词合集与逐日明细。每天的排名不能相加或简单平均为滚动 7 日排名；每天的份额也不能相加或简单平均为 7 日份额，因为这份报表没有提供相应的每日绝对分母。保留日期、部门、原词、ASIN 和各自指标。报告说明请求范围、实际完整取得的日期和缺口，不将其标为一份亚马逊官方 7 日汇总报表。
 
 全站搜索词报表仅覆盖各词的热门点击商品，通常为前三个商品。竞品未命中只表示未在该期覆盖范围中命中。联想、官网或易逊候选不因 ABA 未命中而删除。品牌词、型号差异与待确认关系按现有规则保留并备注。
 

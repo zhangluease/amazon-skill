@@ -2,6 +2,7 @@
 """Call the ABA HTTP MCP directly using the skill config, without Agent MCP registration."""
 
 import argparse
+from datetime import date, datetime, timedelta, timezone
 import http.client
 import json
 from pathlib import Path
@@ -26,6 +27,27 @@ TOOL_FIELDS = {
     "aba_query_search_terms": {"reportId", "asins", "seedTerms"},
     "aba_get_search_terms_query": {"queryId", "cursor", "pageSize"},
 }
+
+
+def rolling_window_plan(as_of=None):
+    """Plan the seven days preceding the query date as seven valid DAY requests."""
+    try:
+        query_date = date.fromisoformat(as_of) if as_of is not None else datetime.now(timezone(timedelta(hours=8))).date()
+    except (ValueError, TypeError):
+        raise ClientError("WINDOW_QUERY_DATE_INVALID") from None
+    start = query_date - timedelta(days=7)
+    end = query_date - timedelta(days=1)
+    reports = []
+    for offset in range(7):
+        selected = (start + timedelta(days=offset)).isoformat()
+        reports.append({"date": selected, "availability": "not_checked", "request": {
+            "reportType": "GET_BRAND_ANALYTICS_SEARCH_TERMS_REPORT", "reportPeriod": "DAY",
+            "dataStartTime": selected + "T00:00:00Z", "dataEndTime": selected + "T23:59:59Z"}})
+    return {"mode": "ROLLING_7_DAYS", "queryDate": query_date.isoformat(),
+            "queryTimezone": "Asia/Shanghai", "marketplaceId": "A1VC38T7YXB528",
+            "requestedStartDate": start.isoformat(), "requestedEndDate": end.isoformat(),
+            "reportCount": len(reports), "reports": reports,
+            "metricAggregation": "retain_daily_metrics_and_union_keywords"}
 
 
 class ClientError(Exception):
@@ -245,6 +267,9 @@ def main(argv=None):
     parser.add_argument("--config", type=Path, default=STATE / "config.json")
     parser.add_argument("--timeout", type=float, default=180)
     commands = parser.add_subparsers(dest="command")
+    window = commands.add_parser("plan-window")
+    window.add_argument("--as-of", help="Query date YYYY-MM-DD; defaults to today's Asia/Shanghai date")
+    window.add_argument("--output", type=Path)
     for name in ("status", "tools"):
         command = commands.add_parser(name)
         command.add_argument("--output", type=Path)
@@ -274,6 +299,14 @@ def main(argv=None):
                 protected.append(source)
                 arguments = json.loads(source.read_text(encoding="utf-8-sig"))
         protect_output(output, protected)
+        if args.command == "plan-window":
+            data = rolling_window_plan(args.as_of)
+            if output:
+                write_json(output, data)
+                data = {key: data[key] for key in ("mode", "queryDate", "requestedStartDate", "requestedEndDate", "reportCount")}
+                data["output_file"] = str(output)
+            print(json.dumps(data, ensure_ascii=False))
+            return 0
         client = AbaClient(args.config, timeout=args.timeout)
         if args.command == "collect-query":
             result = collect_query(client, args.query_id, args.report_period, output)
