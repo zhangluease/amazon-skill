@@ -17,11 +17,14 @@ description: 根据关键词和图片风格，在花瓣网搜索 POD 素材参�
 
 ## 取得候选
 
-1. 复用用户已登录的花瓣浏览器，使用搜索框输入关键词和风格。无账号时先尝试公开内容，不为初筛强制注册。不要以发现页的随机推荐代替关键词搜索。
+1. 优先使用随附 [huaban_browser.cjs](scripts/huaban_browser.cjs) 运行完整 Playwright 无头采集：先进入发现页建立游客会话，再导航到搜索页，监听网页自身的 JSON 与图片响应并缓存预览。本次实测匿名搜索 38 张约 3.3 秒，无需预先登录；相似图加推荐画板约 8 秒取得并缓存 60 个候选。不要以发现页的随机推荐代替关键词搜索。无头访问失败时可用 `--headed`，它仍是批量脚本，不必逐步 Browser Use。
 2. 对结果看图，选择少量符合条件的种子。右键“找相似”或详情页“找相似”继续找；详情页“推荐画板”与“所在画板”也可进入。页面不同版本的相似分类名称可能不同，以当前页面为准。
 3. 优先从 2–3 张符合风格的种子扩展，比较推荐画板的封面与实际内容，避免只凭画板标题判断。默认最多扩展两层、检查约 60 个去重候选；已有足够多样的好图时提前结束，用户要求更多时再增加。
-4. 有可用、经验证的 HTTP 会话时，可直接读取 JSON。仅有 Cookie 不能保证成功：可能还有 Bearer、实验头、浏览器校验或设备条件。请求失败时回到浏览器正常页面，不反复试猜接口或签名。
-5. 当前浏览器工具若只允许只读 DOM evaluate，就只读取页面中的图片、链接、文字，不能在 evaluate 中调用 fetch、读取 Cookie、应用内部状态或任意运行时对象。可使用 [extract_cards.js](scripts/extract_cards.js) 的函数表达式提取已呈现的图片卡片。工具支持完整 Playwright/CDP 网络能力时，才按其文档采用响应监听或页面请求。
+4. 需要登录的内容才使用用户已提供的站点会话文件 `--state`，或交给可见浏览器由用户完成登录；不因没有 Cookie 就强制登录或注册。本次匿名公开搜索可用，但不能保证所有账号、网络、接口和时间都相同。浏览器脚本也失败时，复用已登录 Browser Use，核对登录提示、验证码或访问错误；不要把 405 简单判断为没登录。
+5. 有可用、经验证的 HTTP 会话时，可直接读取 JSON。仅有 Cookie 不能保证成功：可能还有 Bearer、实验头、浏览器校验或设备条件。请求失败时切换已验证浏览器方式，不反复试猜接口或签名。
+6. 当前 Browser Use 工具若只允许只读 DOM evaluate，就只读取页面中的图片、链接、文字，不能在该工具 evaluate 中调用 fetch、读取 Cookie、应用内部状态或任意运行时对象。可使用 [extract_cards.js](scripts/extract_cards.js) 的函数表达式提取已呈现的图片卡片。随附独立脚本使用完整 Playwright，可按其正式 API 监听响应；两种执行面不要混淆。
+
+定位约定：点击、填表优先使用 `getByRole` 配合可访问名称、`getByLabel` 等语义定位；根据控件实际语义选择，不套用固定的全局优先级。批量图片读取继续使用网络响应和采集链接等稳定业务属性，保留没有有效 alt 的图片，不将整批提取机械替换为 `getByRole('img')`。语义定位可以直接用于无头脚本，无需额外获取 AX 树快照。详见[定位原则](references/huaban-access.md#定位原则)。
 
 搜索、相似图、推荐画板的来源路径分别保存。API 图片元数据与页面缩略图尺寸分开标记。图片地址的 `auth_key` 和变换后缀原样保留，不能凭 file key 拼接原图，也不能把缩略图放大当作高清素材。
 
@@ -45,7 +48,7 @@ description: 根据关键词和图片风格，在花瓣网搜索 POD 素材参�
 - `candidates.json`：完整候选与去重后的来源路径，含未入选和待核实项。
 - `report.md`：查询词、访问方式、搜索/相似/画板覆盖情况、初筛取舍与缺口。
 
-优先缓存预览用于图集，保留原始采集链接。图片 CDN 的直连与跨站外链也可能失败，取得 `auth_key` 不代表可直接嵌入图集。HTTP 下载失败时，用浏览器已支持的下载功能；当前 Chrome 可按 Shift 右键显示原生菜单，再“图片存储为”。实测原生保存成功；`downloadMedia` 可能已下载文件但仍等待超时，先检查明确的下载结果，不盲目重复。
+优先用独立脚本监听浏览器图片响应并读取响应体，保存为本地预览；这样无需再次请求 CDN 或逐张右键。图片 CDN 的独立 HTTP 下载与跨站外链可能失败，取得 `auth_key` 不代表可直接嵌入图集。脚本不可用时才用浏览器已支持的下载功能；当前 Chrome 可按 Shift 右键显示原生菜单，再“图片存储为”。`downloadMedia` 可能已下载文件但仍等待超时，先检查明确的下载结果，不盲目重复。
 
 将浏览器返回或明确保存的本地图片绝对路径填入候选 `local_image`，图集脚本会复制到同目录资源文件夹。没有下载到图时保留链接并说明，不交付空白图集冒充初筛完成。签名图片地址可能过期，需要重访采集刷新。图集默认不展示“排除”项，它们仍保存在完整候选 JSON；`--selected-only` 只展示“保留”。
 
@@ -54,6 +57,8 @@ description: 根据关键词和图片风格，在花瓣网搜索 POD 素材参�
 脚本使用方式：
 
 ```sh
+node scripts/huaban_browser.cjs --query '狗 动漫' --limit 40 --out /absolute/output/search
+python3 scripts/huaban_tools.py normalize /absolute/output/search/response.json --via keyword --query '狗 动漫' --style '动漫' --output candidates.json
 python3 scripts/huaban_tools.py api-url search --query '碎花 水彩' --limit 20
 python3 scripts/huaban_tools.py api-url similar --pin-id 6498350553
 python3 scripts/huaban_tools.py api-url related-boards --pin-id 6498350553 --preview
@@ -61,6 +66,6 @@ python3 scripts/huaban_tools.py normalize response.json --via keyword --query '�
 python3 scripts/huaban_tools.py gallery candidates.json --download --output gallery.html
 ```
 
-以上命令在 skill 目录执行；从其他目录运行时使用脚本绝对路径。`api-url` 只输出 URL，不发请求。浏览器读取的 JSON 或 DOM 卡片可保存为 `response.json` 再 normalize。看图后补充判断字段再渲染正式初筛图集。
+以上命令在 skill 目录执行；从其他目录运行时使用脚本绝对路径。独立浏览器脚本需要 Node.js 18+、Chrome 与 Playwright；依赖缺失时在 skill 目录执行 `npm install`，不要修改用户日常 Chrome 配置。它输出 `response.json`、带来源的完整记录、预览缓存、截图与耗时；`--similar <pin_id>`、`--board <board_id>` 可多次提供，用于看图选种子后的扩展。`api-url` 只输出 URL，不发请求。看图后补充判断字段再渲染正式初筛图集。
 
 接口与验证码不可用时交付已有结果和明确缺口。不要用 HTTP 200、登录页、校验脚本或空响应证明成功；不要把“浏览器内成功”写成“Cookie 在独立 HTTP 客户端中已验证成功”。

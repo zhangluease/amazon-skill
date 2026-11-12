@@ -10,7 +10,7 @@
 请使用 $pod-huaban-materials，找“猫”的素材，风格要复古木刻、黑白单色，适合 T 恤，初筛 12 张。
 ```
 
-优先使用已登录浏览器；已验证搜索、相似图与推荐画板可在浏览器会话中返回 JSON。独立 HTTP 客户端支持从本地文件读取 Cookie/请求头，但本次尚未验证 Cookie 单独重放成功。接口状态、工具能力边界和命令见[访问说明](skills/pod-huaban-materials/references/huaban-access.md)。附 Python 3.9+ 工具用于 URL 生成、响应校验、去重和 HTML 图集输出；不会把搜索结果当作已获 POD 商用授权。
+优先使用独立 Playwright 无头脚本，批量捕获网站 JSON 和图片响应；本次未登录搜索 38 张约 3.3 秒，相似图和画板扩展约 8 秒缓存 60 个候选。无障碍定位可与无头模式同时使用，Browser Use 作为备用。浏览器脚本需要 Node.js 18+、Chrome 和 Playwright；skill 目录执行 `npm install` 准备依赖。附 Python 3.9+ 工具用于响应校验、去重和 HTML 图集输出。接口、登录处理和命令见[访问说明](skills/pod-huaban-materials/references/huaban-access.md)；初筛素材的 POD 授权仍需核实。
 
 ## 日本站关键词查找
 
