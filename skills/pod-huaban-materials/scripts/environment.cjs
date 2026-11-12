@@ -7,6 +7,7 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const { execFile, spawnSync } = require('node:child_process');
 const { promisify } = require('node:util');
+const { desktopAvailability } = require('./human_verification.cjs');
 const execute = promisify(execFile);
 const SKILL = path.resolve(__dirname, '..');
 const VERSION = require('../package.json').dependencies.playwright;
@@ -140,6 +141,7 @@ async function ensureEnvironment(options = {}) {
   const output = path.resolve(options.out || path.join(process.cwd(), 'reports', 'pod-materials', 'environment-check'));
   const report = { ready: false, network_tested: false, platform: process.platform, architecture: process.arch,
     expected_playwright: VERSION, runtime_cache: cacheRoot(), output, checks: {}, actions: [] };
+  report.checks.human_handoff = desktopAvailability();
   const major = Number(process.versions.node.split('.')[0]);
   report.checks.node = { status: major >= 18 ? 'ok' : 'unsupported', version: process.versions.node,
     ...(major >= 18 ? {} : { remedy: '安装 Node.js 18+（建议当前 LTS），重新打开 Agent 后再检查。' }) };
@@ -225,7 +227,9 @@ async function main(argv = process.argv.slice(2)) {
       return passed ? 0 : 3;
     } catch (error) {
       const result = { ready: false, network_tested: error.code !== 'ENVIRONMENT_NOT_READY', command: 'smoke',
-        category: error.code === 'ENVIRONMENT_NOT_READY' ? 'environment_not_ready' : 'site_or_collection_failed', output: out };
+        category: error.code === 'ENVIRONMENT_NOT_READY' ? 'environment_not_ready'
+          : /^HUMAN_VERIFICATION_/.test(error.code || '') ? error.code.toLowerCase() : 'site_or_collection_failed',
+        ...(error.verification ? { verification: error.verification } : {}), output: out };
       await fs.writeFile(path.join(out, 'smoke.json'), JSON.stringify(result, null, 2)).catch(() => {});
       console.log(JSON.stringify(result));
       return error.code === 'ENVIRONMENT_NOT_READY' ? 2 : 3;

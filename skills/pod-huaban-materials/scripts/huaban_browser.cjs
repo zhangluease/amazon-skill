@@ -4,13 +4,15 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { ensureEnvironment } = require('./environment.cjs');
+const { createHandoff } = require('./human_verification.cjs');
 
 function argumentsFor(argv) {
   const result = { similar: [], board: [], limit: 40, headed: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     if (key === 'headed') result.headed = true;
-    else if (['query', 'out', 'state', 'limit', 'similar', 'board', 'source-file-id', 'browser'].includes(key)) {
+    else if (['query', 'out', 'state', 'limit', 'similar', 'board', 'source-file-id', 'browser',
+      'human-verification', 'verification-timeout'].includes(key)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw Error('参数缺少值');
       if (key === 'similar' || key === 'board') result[key].push(value);
@@ -18,6 +20,11 @@ function argumentsFor(argv) {
     } else throw Error('未知参数');
   }
   result.limit = Number(result.limit);
+  result['human-verification'] ||= 'auto';
+  result['verification-timeout'] = Number(result['verification-timeout'] || 300);
+  if (!['auto', 'off'].includes(result['human-verification'])) throw Error('不支持的验证接管模式');
+  if (!Number.isInteger(result['verification-timeout']) || result['verification-timeout'] < 30
+    || result['verification-timeout'] > 900) throw Error('验证等待时间应为 30–900 秒');
   if (result.browser && !['auto', 'chrome', 'chromium'].includes(result.browser)) throw Error('不支持的浏览器');
   if (!result.out || (!result.query && !result.similar.length && !result.board.length))
     throw Error('需要 --out 与 --query、--similar 或 --board');
@@ -51,15 +58,17 @@ function isDataForSource(urlPath, source) {
   return false;
 }
 
-async function collect(options) {
+async function collect(options, dependencies = {}) {
   const output = path.resolve(options.out);
   const started = Date.now();
-  const environment = await ensureEnvironment({ out: output, prepare: true, keepBrowser: true,
+  const environment = await (dependencies.prepare || ensureEnvironment)({ out: output, prepare: true, keepBrowser: true,
     headless: !options.headed, browserPreference: options.browser || 'auto' });
   if (!environment.report.ready) throw Object.assign(Error('环境未就绪'), {
     code: 'ENVIRONMENT_NOT_READY', report: environment.report });
   const browser = environment.browser;
+  const session = { browser, headless: !options.headed };
   let page;
+  let handoff;
   try {
     await fs.mkdir(path.join(output, 'browser-assets'), { recursive: true });
     // Preserve the installed Chrome version and normal Chrome UA in both modes.
@@ -76,12 +85,14 @@ async function collect(options) {
         origins: (supplied.origins || []).filter(o => o.origin === 'https://huaban.com')
       };
     }
-    const context = await browser.newContext({ userAgent, storageState,
-      locale: 'zh-CN', viewport: { width: 1600, height: 1800 } });
+    const contextOptions = { userAgent, storageState,
+      locale: 'zh-CN', viewport: { width: 1600, height: 1800 } };
+    const context = await browser.newContext(contextOptions);
     page = await context.newPage();
+    Object.assign(session, { context, page, contextOptions });
     const documents = [], events = [], images = new Map(), jobs = [];
     let active = null;
-    page.on('response', response => {
+    const observePage = observed => observed.on('response', response => {
       const source = active;
       if (!source) return;
       const url = new URL(response.url()), type = response.headers()['content-type'] || '';
@@ -102,9 +113,34 @@ async function collect(options) {
           } catch { /* A candidate without an image stays explicitly incomplete. */ }
         })());
     });
-    const warmup = await page.goto('https://huaban.com/discovery', {
-      waitUntil: 'load', timeout: 25000 });
-    if (!warmup.ok()) throw Error('发现页 HTTP ' + warmup.status() + '，停止本轮请求');
+    observePage(page);
+    handoff = createHandoff({ session, output, onPage: observePage,
+      mode: options['human-verification'] || 'auto', timeoutMs: (options['verification-timeout'] || 300) * 1000,
+      desktop: dependencies.desktop, notify: dependencies.notify,
+      launch: () => environment.playwright.chromium.launch({
+        ...(environment.report.checks.browser.engine === 'chrome' ? { channel: 'chrome' } : {}),
+        headless: false, timeout: 12000 }) });
+    // Replace a prior run's handoff status when the same output directory is reused.
+    await fs.writeFile(path.join(output, 'verification.json'), JSON.stringify(handoff.report, null, 2) + '\n');
+    const handleVerification = async (target, detectTimeoutMs = 0) => {
+      const handled = await handoff.handle(target, detectTimeoutMs);
+      page = session.page;
+      if (handled && page.url() !== target) {
+        const response = await page.goto(target, { waitUntil: 'load', timeout: 25000 });
+        await handoff.handle(target); // A second challenge stops, rather than opening another window.
+        if (!response?.ok()) throw Error('目标页 HTTP ' + response?.status() + '，停止本轮请求');
+      }
+      return handled;
+    };
+    const navigate = async target => {
+      let response;
+      try { response = await page.goto(target, { waitUntil: 'load', timeout: 25000 }); }
+      catch (error) { if (await handleVerification(target)) return; throw error; }
+      // Error pages may render their challenge after load. Only observe this document briefly.
+      if (await handleVerification(target, response?.ok() ? 0 : 1500)) return;
+      if (!response?.ok()) throw Error('页面 HTTP ' + response?.status() + '，停止本轮请求');
+    };
+    await navigate('https://huaban.com/discovery');
     const targets = [];
     if (options.query) targets.push({ via: 'keyword', url: 'https://huaban.com/search?q=' +
       encodeURIComponent(options.query), provenance: { via: 'keyword', query: options.query } });
@@ -117,13 +153,17 @@ async function collect(options) {
         ...(options['source-file-id'] ? { source_file_id: options['source-file-id'] } : {}) } });
     for (const target of targets) {
       active = { ...target, pins: [] };
-      const response = await page.goto(target.url, { waitUntil: 'load', timeout: 25000 });
-      if (!response.ok()) throw Error('目标页 HTTP ' + response.status() + '，停止本轮请求');
-      try {
-        await page.locator('a[href*="/pins/"] img').first().waitFor({ state: 'visible', timeout: 10000 });
-        await page.waitForFunction(() => [...document.querySelectorAll('a[href*="/pins/"] img')]
-          .filter(img => img.complete && img.naturalWidth).length >= 8, null, { timeout: 8000 });
-      } catch { /* Verify candidate and image counts below, including empty pages. */ }
+      await navigate(target.url);
+      const waitForCards = async () => {
+        try {
+          await page.locator('a[href*="/pins/"] img').first().waitFor({ state: 'visible', timeout: 10000 });
+          await page.waitForFunction(minimum => [...document.querySelectorAll('a[href*="/pins/"] img')]
+            .filter(img => img.complete && img.naturalWidth).length >= minimum,
+          Math.min(8, options.limit), { timeout: 8000 });
+        } catch { /* Check for a late challenge before treating the page as empty. */ }
+      };
+      await waitForCards();
+      if (await handleVerification(target.url)) await waitForCards();
       await page.screenshot({ path: path.join(output, `overview-${documents.length + 1}.jpg`) });
       const dom = await page.locator('a[href*="/pins/"] img').evaluateAll(elements => elements.map(img => {
         const id = img.closest('a')?.getAttribute('href')?.match(/\/pins\/(\d+)/)?.[1];
@@ -167,8 +207,9 @@ async function collect(options) {
         cached++;
       }
     }
-    const summary = { headless: !options.headed, supplied_state: Boolean(options.state),
+    const summary = { headless: session.headless, supplied_state: Boolean(options.state),
       browser_engine: environment.report.checks.browser.engine,
+      human_verification: handoff.report,
       normal_chrome_ua: true, elapsed_ms: Date.now() - started,
       candidates: documents.reduce((sum, d) => sum + d.pins.length, 0), cached, events };
     await fs.writeFile(path.join(output, 'browser-candidates.json'), JSON.stringify({ documents, summary }, null, 2));
@@ -178,20 +219,29 @@ async function collect(options) {
     if (!options.quiet) console.log(JSON.stringify(summary));
     return summary;
   } catch (error) {
+    page = session.page || page;
     if (page) await page.screenshot({ path: path.join(output, 'failure.jpg') }).catch(() => {});
     const status = String(error.message).match(/HTTP (\d{3})/)?.[1];
     await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({
-      status: status ? Number(status) : null, category: status ? 'access_blocked' : 'collection_failed',
+      status: status ? Number(status) : null,
+      category: /^HUMAN_VERIFICATION_/.test(error.code || '') ? error.code.toLowerCase()
+        : status ? 'access_blocked' : 'collection_failed',
+      ...(error.verification ? { verification: error.verification } : {}),
       elapsed_ms: Date.now() - started
     }, null, 2));
     throw error;
-  } finally { await browser.close(); }
+  } finally { await session.browser.close().catch(() => {}); }
 }
 
 if (require.main === module) Promise.resolve().then(() => collect(argumentsFor(process.argv.slice(2)))).catch(error => {
   if (error.code === 'ENVIRONMENT_NOT_READY') {
     console.error(JSON.stringify({ error: error.code, ...error.report }));
     process.exitCode = 2;
+    return;
+  }
+  if (/^HUMAN_VERIFICATION_/.test(error.code || '')) {
+    console.error(JSON.stringify({ error: error.code, verification: error.verification }));
+    process.exitCode = 3;
     return;
   }
   // Do not echo server content, storageState, cookies, or credentials on failures.
