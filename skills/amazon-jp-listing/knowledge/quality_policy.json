@@ -1,0 +1,83 @@
+{
+  "version": "2.2",
+  "checked_at": "2026-10-01",
+  "default_limits": {
+    "title_max_chars": 75,
+    "item_highlight_max_chars": 125,
+    "bullets_count": 5,
+    "bullet_max_chars": 250,
+    "bullets_total_max_chars": 1250,
+    "search_terms_max_bytes": 249
+  },
+  "limit_provenance": {
+    "title_max_chars": {
+      "kind": "skill_default",
+      "source_id": "skill_editorial_v2",
+      "note": "沿用上游 75 字符写作预算；目标日本站类目有明确不同要求时核对并更新本轮配置。"
+    },
+    "item_highlight_max_chars": {
+      "kind": "platform",
+      "source_id": "amazon_title_2026"
+    },
+    "bullets_count": {
+      "kind": "skill_default",
+      "note": "本 skill 固定交付 5 条，不声称全类目统一平台数量"
+    },
+    "bullet_max_chars": {
+      "kind": "skill_default",
+      "source_id": "skill_editorial_v2",
+      "note": "每条 250 字符为本技能预算，不作为全类目统一平台限制。"
+    },
+    "bullets_total_max_chars": {
+      "kind": "editorial_budget",
+      "note": "5×250；不宣称平台总字符硬限制"
+    },
+    "search_terms_max_bytes": {
+      "kind": "skill_default",
+      "source_id": "skill_editorial_v2",
+      "note": "JP 默认 499 UTF-8 字节；执行真实任务时核对日本站目标类目当前要求。"
+    }
+  },
+  "sites": {
+    "JP": {
+      "language": "Japanese",
+      "language_code": "ja",
+      "length_unit": "source",
+      "qa_enabled": false,
+      "search_terms_max_bytes": 499
+    }
+  },
+  "semantic_checks": [
+    "identity",
+    "readability",
+    "factual_support",
+    "language",
+    "variant_scope",
+    "qa_relevance",
+    "keyword_usage"
+  ],
+  "media_checks": [
+    "image_truth"
+  ],
+  "media_limits": {
+    "main_count": 1,
+    "secondary_count": 6,
+    "a_plus_min_images": 5,
+    "a_plus_default_images": 5
+  },
+  "media_limit_provenance": {
+    "kind": "user_requirement",
+    "source_id": "user_delivery_media_v21",
+    "note": "本次确认的创意交付数量，不作为 Amazon 平台统一图片数量声明"
+  },
+  "title_compliance": {
+    "banned_characters": "!$?_{}^¬¦",
+    "max_word_repeats": 2,
+    "source_id": "amazon_title_rules_2025",
+    "severity": {
+      "banned_characters": "error",
+      "max_word_repeats": "warning"
+    }
+  },
+  "qa_max_keywords": 8
+}

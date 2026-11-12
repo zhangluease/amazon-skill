@@ -1,0 +1,50 @@
+version: '2.2'
+domain: general
+contract_ref: ../data_contract.md
+policy_ref: ../quality_policy.json
+sources_ref: ../sources.json
+rules:
+- id: evidence_order
+  type: required
+  source_id: user_product_identity
+  prompt_fragment: 产品身份和已确认事实优先于流量建议。官方平台要求、研究论文结论和内部写作策略要分开标明来源；quality_policy.json 是数字预算的唯一配置。
+- id: identity_not_downgraded
+  type: required
+  source_id: user_product_identity
+  prompt_fragment: 原始品名和 protected_terms 是必保的产品身份。后台类目枚举、竞品主词或所谓官方词都不能替代用户的实际产品；术语有歧义时先核实，不为搜索量改名。
+- id: a9_coverage
+  type: editorial
+  source_id: amazon_search_terms_2026
+  prompt_fragment: 标题、五点和后台词要协同，用满可用字段（Amazon 员工指引）。目标是让高流量 eligible 词的每个词都出现在某个可索引字段里：核心词进标题，次要词进 Highlight 或五点，剩余的同义词和长尾进后台词。用 coverage 报告检查覆盖率和后台字节利用率，最多改进一轮，不把覆盖率当成堆砌关键词的理由。
+- id: cosmo_intents
+  type: editorial
+  source_id: cosmo_paper
+  prompt_fragment: COSMO 由搜索词加购买商品标题生成 15 类"产品—意图"常识关系（用途/功能、事件、人群、地点、季节、身体部位、搭配、产品类型等），用于搜索相关性、导航和推荐。按 intent_map 把已确认的关系用自然语句写进标题、Highlight、五点或长描，并让附图展示同样的场景。论文没有给出卖家字段权重，不写无依据的关系。
+- id: shopping_assistant
+  type: editorial
+  source_id: amazon_rufus_attributes
+  prompt_fragment: Alexa for Shopping（原 Rufus）从商品详情、评论和问答中检索信息。Amazon 员工指引是：完整准确的属性有助于被推荐，listing 应回答 who/what/when/where/why/how。因此要交付 attribute_suggestions 和至少 6 项问答覆盖矩阵，所有站点都适用。
+- id: keywords_candidate_pool
+  type: required
+  source_id: user_product_identity
+  prompt_fragment: 只用统一工具导出的 eligible 词和有依据的本品补充词做候选；deferred/excluded 不进入投放或 QA。05 的 placement_plan 最终由 coverage --write-placement 按实际文案生成。
+- id: competitor_boundary
+  type: required
+  source_id: user_product_identity
+  prompt_fragment: 竞品关键词（云端扩词或用户表格）和问答只帮助理解搜索需求，不能证明本品的材质、尺寸、认证、性能、适配或变体组合。不要求本品文案覆盖竞品的共性；竞品品牌词不进入本品文案。
+- id: geo_specificity
+  type: editorial
+  source_id: geo_paper
+  prompt_fragment: GEO 论文（Princeton/IIT Delhi 等，KDD 2024）中具体数据、来源引用和流畅表达能提升生成式引擎的可见度，关键词堆砌无效。用真实参数、已确认的认证和清晰条件句来写；该论文没有在 Amazon 上验证，不承诺收录或排名。
+- id: qa_relevance_gate
+  type: required
+  source_id: skill_ai_answerability
+  prompt_fragment: 06_qa.raw.json 保存 US 原始响应；06_qa.json 逐题写 question_reviews。irrelevant 或 uncertain 的问题不写答案；相关但缺事实的写 unsupported；自拟问题标 local_editorial，不冒充后端结果。
+- id: visual_boundary
+  type: editorial
+  source_id: amazon_visual_search
+  prompt_fragment: Lens Live 用视觉向量匹配商品，官方没有说图片文字（OCR）、文件名或 alt 会进入检索。真实图片用来证明购买理由，关键参数同步写在正文里。
+- id: semantic_review_required
+  type: required
+  source_id: skill_editorial_v2
+  prompt_fragment: 机器检查只能确认结构、数值和引用范围。生成后由独立复审检查身份、可读性、事实、语言、子体范围、问题相关性、关键词实际使用和画面真实性；文件生成不等于验收通过。

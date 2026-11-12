@@ -155,7 +155,7 @@ class AbaClient:
         if self.initialized:
             return
         result = self._post("initialize", {"protocolVersion": PROTOCOL, "capabilities": {},
-                            "clientInfo": {"name": "amazon-jp-listing-asin-cli", "version": "0.1.0"}})
+                            "clientInfo": {"name": "amazon-jp-keywords-cli", "version": "0.1.0"}})
         if result.get("protocolVersion") != PROTOCOL:
             raise ClientError("MCP_PROTOCOL_UNSUPPORTED")
         self.initialized = True

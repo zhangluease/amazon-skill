@@ -3,7 +3,7 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "skills/amazon-jp-listing-asin/scripts/aba_to_table.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "skills/amazon-jp-keywords/scripts/aba_to_table.py"
 SPEC = importlib.util.spec_from_file_location("aba_to_table", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)

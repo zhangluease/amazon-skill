@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "skills/amazon-jp-listing-asin/scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "skills/amazon-jp-keywords/scripts"
 SPEC = importlib.util.spec_from_file_location("skill_config_under_test", SCRIPTS / "skill_config.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)

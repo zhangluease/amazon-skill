@@ -1,0 +1,30 @@
+version: '2.2'
+domain: description
+contract_ref: ../data_contract.md
+policy_ref: ../quality_policy.json
+sources_ref: ../sources.json
+rules:
+- id: description_information_first
+  type: editorial
+  source_id: skill_editorial_v2
+  prompt_fragment: 先说明产品和适用任务，再补使用方法、适配条件、包装清单、保养和必要限制。不重写标题和全部五点，不写泛泛的故事开头或长串场景清单。
+- id: description_answerable_facts
+  type: editorial
+  source_id: amazon_rufus_attributes
+  prompt_fragment: 每句都是能独立理解的事实陈述（哪个产品或部件、什么能力、什么条件下适用），能直接回答 who/what/when/where/why/how。Amazon 建议在描述中回答常见问题，购物助手会读取商品详情。
+- id: description_specific_evidence
+  type: editorial
+  source_id: geo_paper
+  prompt_fragment: GEO 实验中效果最好的是具体数据、可核验来源和流畅易懂的表达，关键词堆砌无效。迁移到 listing 上，就是用真实参数、已确认的认证或标准、清楚的适用条件来写，不添加无依据的统计、引文或权威口吻。
+- id: description_grounded_detail
+  type: required
+  source_id: user_product_identity
+  prompt_fragment: 不因泛化场景或高流量词扩大用途。参数使用同一个规范化展示值，并保留维度标签。
+- id: description_family_scope
+  type: required
+  source_id: user_family_rules
+  prompt_fragment: 共用长描只写系列共性；具体变体参数写进对应的 content_overrides.description，并为解析后的完整描述写 claims。
+- id: description_format
+  type: editorial
+  source_id: skill_editorial_v2
+  prompt_fragment: 默认纯文本段落。用户明确要求 HTML 时，先核验目标字段和类目支持的标记再生成。

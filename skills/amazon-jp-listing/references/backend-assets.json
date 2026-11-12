@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/chenqinglin2019-tech/Laochen-Amazon-project",
+  "revision": "87dead1472eb4ddfd28f99fd47a9593b5c3f7771",
+  "skill_path": "skills/lc_amazon_listing",
+  "sha256": {
+    "laochen-cli-v2-darwin-amd64": "53a2681ec15cd5db1e351e0a100f46b3d2590714c0e0fc54ddb7918705dc38d6",
+    "laochen-cli-v2-darwin-arm64": "66e8655301275f7ddad4570e9b870ae8128bea33018e0d5d51698031c4644739",
+    "laochen-cli-v2-linux-amd64": "6da814b9a49b678cb461872da491df36f71a282a4ee2b2fe159e9f724605a8fa",
+    "laochen-cli-v2-windows-amd64.exe": "d0a688a243dba9de55336a5a8ef8c6c27642d1b657ca65fb93d57f092cf0ae09"
+  }
+}

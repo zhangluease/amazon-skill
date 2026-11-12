@@ -1,0 +1,29 @@
+version: '2.2'
+domain: search_terms
+contract_ref: ../data_contract.md
+policy_ref: ../quality_policy.json
+sources_ref: ../sources.json
+rules:
+- id: search_terms_budget
+  type: editorial
+  source_id: skill_editorial_v2
+  prompt_fragment: 按 UTF-8 字节计数（含空格），日本站默认预算 499 字节，配置取 quality_policy.sites.JP。核对具体类目要求后再调整，优先使用有效且自然的可用词，不为用满预算凑词。
+  limit_ref: default_limits.search_terms_max_bytes
+- id: search_terms_no_repeat
+  type: required
+  source_id: amazon_search_terms_2026
+  prompt_fragment: Amazon 员工指引：不重复标题和品牌中已有的词，全小写，用空格分隔，不加标点，不写竞品品牌或 ASIN。本栏不重复自身，单复数只写一种，不写冠词和介词，不写 new、best 一类临时或主观词。重复标题词会给出
+    warning 和可省字节数。
+- id: search_terms_selection
+  type: required
+  source_id: user_product_identity
+  prompt_fragment: 只从 eligible 原词和有依据的本品补充词中选，优先选前台未覆盖的同义词、别称、缩写和长尾（参考 coverage 的 top_uncovered）。deferred/excluded
+    词不得改写后放进来；要改分类须先补依据并写 resolution。不自造缩写。
+- id: search_terms_format
+  type: editorial
+  source_id: skill_editorial_v2
+  prompt_fragment: 以目标站点实际用语为准；其他语言遵循自然分词。不为省字节截断单词或拆散必要语义。
+- id: search_terms_scope
+  type: required
+  source_id: user_family_rules
+  prompt_fragment: 共享搜索词必须适用于全部子体；子体独有的词放入对应的 content_overrides.search_terms。

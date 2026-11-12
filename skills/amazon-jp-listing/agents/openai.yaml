@@ -1,0 +1,4 @@
+interface:
+  display_name: "日本亚马逊 Listing 生成"
+  short_description: "根据关键词表格和本品事实生成日文 Listing、图片与 A+ 策划，并交付覆盖检查和验收报告"
+  default_prompt: "请使用 $amazon-jp-listing，根据我提供的关键词文件和本品资料，完成意图筛词、日文 Listing、主附图与 A+ 策划，并交付文案、结构化数据和中文验收报告。"

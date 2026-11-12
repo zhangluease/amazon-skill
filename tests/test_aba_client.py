@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 import urllib.error
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "skills/amazon-jp-listing-asin/scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "skills/amazon-jp-keywords/scripts"
 sys.path.insert(0, str(SCRIPTS))
 SPEC = importlib.util.spec_from_file_location("aba_client_under_test", SCRIPTS / "aba_client.py")
 MODULE = importlib.util.module_from_spec(SPEC)
