@@ -25,8 +25,8 @@ SPEC.loader.exec_module(quality)
 SITES = ("JP",)
 FILENAME_SITES = ("US", "UK", "CA", "IN", "JP", "DE", "FR", "IT", "ES")
 ALIASES = {
-    "keyword": ("日文关键词", "关键词", "搜索词", "搜索关键词", "关键词原文", "keyword", "keywords", "search term", "search terms"),
-    "monthly_searches": ("易逊月搜索量", "月搜索量", "月搜索次数", "搜索量", "monthly searches", "monthly search volume", "search volume", "searches", "monthly_searches"),
+    "keyword": ("キーワード", "検索キーワード", "検索語句", "検索ワード", "日文关键词", "关键词", "搜索词", "搜索关键词", "关键词原文", "keyword", "keywords", "search term", "search terms"),
+    "monthly_searches": ("月間検索数", "月間検索ボリューム", "検索ボリューム", "易逊月搜索量", "月搜索量", "月搜索次数", "搜索量", "monthly searches", "monthly search volume", "search volume", "searches", "monthly_searches"),
     "keyword_translation": ("关键词翻译", "关键词中文翻译", "中文翻译", "关键词(中文)", "翻译", "keyword translation", "keyword_translation", "translation"),
     "traffic_percentage": ("易逊流量占比", "流量占比", "流量占比(%)", "流量百分比", "traffic percentage", "traffic share", "traffic_percentage"),
     "flow_type": ("流量词类型", "流量类型", "词类型", "flow type", "flow_type", "traffic type"),

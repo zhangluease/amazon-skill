@@ -24,8 +24,8 @@ rules:
 - id: title_localization
   type: required
   source_id: user_unit_localization
-  prompt_fragment: 遵循目标语言的大小写、标点和语序；英语用自然 Title Case。尺寸使用规范化后的 display_text，并保持维度对应。型号和真实品牌保持原样。
+  prompt_fragment: 遵循自然日语的标点和语序。尺寸使用规范化后的 display_text，并保持维度对应。型号和真实品牌保持原样。
 - id: title_verified_claims
   type: required
   source_id: skill_editorial_v2
-  prompt_fragment: 只写有来源的本品事实，不写未经证实的兼容性、健康效果或第三方品牌。场景词只在有助于识别和购买判断时使用。
+  prompt_fragment: 只写有来源的本品事实，给定词中明确的兼容关系按用户依据使用，兼容品牌只描述适配对象，不冒称本品品牌、原装或授权；输入未表达的健康效果等不推导。场景词只在有助于识别和购买判断时使用。

@@ -19,11 +19,11 @@ rules:
 - id: bullets_decision_order
   type: editorial
   source_id: user_mobile_layout_20261112
-  prompt_fragment: 每条开头优先相关流量词，再接真实卖点或购买问题。替换滤网等适配型耗材以完整机型清单优先，通常占 2–3 条，短名单可占 1 条，允许同一适配主题按系列分多条；开头结合相关词与対応機種①／②／③，不强求五种不同卖点。其余条目容纳材质、尺寸、包装和保养。非机型清单条目继续避免无意义重复、通用空标签及虚构用途。
+  prompt_fragment: 每条开头优先相关流量词，再接真实卖点或购买问题。按对象型号选购的耗材以完整机型清单优先，通常占 2–3 条，短名单可占 1 条，允许同一适配主题按系列分多条；开头结合相关词与対応機種①／②／③，不强求五种不同卖点。其余条目容纳材质、尺寸、包装和保养。非机型清单条目继续避免无意义重复、通用空标签及虚构用途。
 - id: bullets_complete_compatibility
   type: required
   source_id: user_compatibility_lists_20261112
-  prompt_fragment: 有适配资料的配件／耗材须按 references/compatibility-lists.md 在五点完整列出所有已确认 compatible_models。每个型号保持完整，含 E3／E4 等后缀；按系列／来源组分配 2–3 条，不用シリーズなど、省略号、范围或仅热门型号替代，不把完整名单只放长描或图片。型号是事实枚举，不须逐个具有关键词流量。核对本品清单的缺失、额外机型、来源和范围，五点 claims 引用对应机型事实。
+  prompt_fragment: 有适配资料的配件／耗材须按 references/compatibility-lists.md 在五点完整列出所有已确认 compatible_models。每个型号保持完整，含所有实际后缀；按系列／来源组分配 2–3 条，不用シリーズなど、省略号、范围或仅热门型号替代，不把完整名单只放长描或图片。型号是事实枚举，不须逐个具有关键词流量。核对本品清单的缺失、额外机型、来源和范围，五点 claims 引用对应机型事实。
 - id: bullets_intent_relations
   type: editorial
   source_id: cosmo_paper

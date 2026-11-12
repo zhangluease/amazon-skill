@@ -1,8 +1,12 @@
-version: '1.2'
+version: '1.3'
 domain: keyword_filter
 contract_ref: ../data_contract.md
 sources_ref: ../sources.json
 rules:
+- id: trust_provided_keywords
+  type: required
+  source_id: user_trusted_keywords_20261112
+  prompt_fragment: 用户给定keywords默认正确且与本品相关，不重新做真伪或相关性核验，不要求官网／说明书再次证明。按含义分组、标角色并安排字段；语义明确的适配对象标识直接成为confirmed适配事实。用户资料中的具体冲突、明确否定和无法解析须指出原文位置，不能把缺少独立外部证明当作暂缓理由。
 - id: unified_keyword_ledger
   type: required
   source_id: user_keyword_audit_v11
@@ -14,15 +18,15 @@ rules:
 - id: complete_intent_before_decision
   type: required
   source_id: user_keyword_audit_v11
-  prompt_fragment: 先识别完整搜索对象和修饰关系，再与本品比较。door、sign、cat door 只是线索；要区分本体、图案、配件和适用对象；bathroom 不是 bat，lightweight 不是 light。
+  prompt_fragment: 在信任原词正确的前提下理解完整搜索对象与修饰关系，区分角色和投放位置。编号、数量和容量只是线索，要结合本品身份、完整修饰关系与字段标签区分本品、适配对象、规格及用途，不按前缀或词片段判断。
 - id: three_pools
   type: required
   source_id: user_keyword_audit_v11
-  prompt_fragment: eligible 是有依据的可用候选；deferred 是有歧义或事实未知的暂缓词，须写晋级条件，不得进入正文、后台、图片文案或 QA 请求；excluded 要写具体剔除理由。没有流量不是无关的证据。竞品品牌词和第三方商标词即使意图相关，也不进入本品文案和后台（按 product_mismatch 剔除并在理由中写明是品牌词）。
+  prompt_fragment: 给定原词默认 eligible，用户输入本身是依据；deferred 仅用于无法解析或具体输入冲突，须写具体问题及处理条件，不得进入正文、后台、图片文案或 QA 请求；excluded 要写具体剔除理由。没有流量不是无关的证据。给定词含兼容品牌时只按兼容语义安排，不冒称自有品牌、原装或授权；后台字段的品牌限制单独处理，不因此删掉整行中的适配型号。
 - id: unknown_not_conflicting
   type: required
   source_id: user_keyword_audit_v11
-  prompt_fragment: 只确认 metal 不等于确认 iron；未提供户外用途不等于已证实不适合户外。未知或部分匹配进入 deferred，只有明确反证才能按事实冲突剔除。暂缓词的晋级条件会汇总为"补充事实可解锁的流量"。
+  prompt_fragment: 给定词若明确表达材质、用途或适配对象标识，可按用户资料直接采用，不要求产品说明书重复确认。只有泛词没有表达的具体性能／等级不得推导；无法解析或与用户其他资料有具体冲突时记录问题，不能因缺外部资料重做可信词审核。
 - id: lexical_normalization_boundary
   type: required
   source_id: user_keyword_audit_v11

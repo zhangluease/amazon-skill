@@ -31,7 +31,7 @@ rules:
 - id: competitor_boundary
   type: required
   source_id: user_product_identity
-  prompt_fragment: 竞品关键词（云端扩词或用户表格）和问答只帮助理解搜索需求，不能证明本品的材质、尺寸、认证、性能或适配。不要求本品文案覆盖竞品的共性；竞品品牌词不进入本品文案。
+  prompt_fragment: 用户给定词表按可信输入使用，包括其来源为竞品反查、官网或Amazon联想的行；其中语义明确的对象适配和属性不需二次核验。未作为本轮给定资料提供的网页、QA或示例不自动证明本品事实，泛词不推出未给定的参数与承诺。不要求本品文案覆盖竞品的共性；给定词中的兼容品牌不冒充本品品牌；不将字段投放限制变成适配型号的二次真实性审查。
 - id: geo_specificity
   type: editorial
   source_id: geo_paper
@@ -39,7 +39,7 @@ rules:
 - id: qa_relevance_gate
   type: required
   source_id: skill_ai_answerability
-  prompt_fragment: 06_qa.raw.json 保存 US 原始响应；06_qa.json 逐题写 question_reviews。irrelevant 或 uncertain 的问题不写答案；相关但缺事实的写 unsupported；自拟问题标 local_editorial，不冒充后端结果。
+  prompt_fragment: 日本站 06_qa.json 保存 skipped/rufus_us_only。根据本轮给定资料整理本品买家问题，来源标 local_editorial；资料未表达的答案记未声明，不冒充后端采集。
 - id: visual_boundary
   type: editorial
   source_id: amazon_visual_search

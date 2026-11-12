@@ -1,4 +1,4 @@
-version: '2.2'
+version: '2.7'
 policy_ref: quality_policy.json
 contract_ref: data_contract.md
 sources_ref: sources.json
@@ -11,11 +11,11 @@ rules:
 - id: site_language
   type: required
   source_id: skill_tool_scope
-  prompt_fragment: 按 quality_policy.json.sites 决定默认语言；CA 仅在用户明确要求加拿大法语时使用 French/fr，并在产品资料记录该要求。前台文本、后台搜索词和上图文案使用同一目标语言；品牌、型号和真实技术词不硬翻译。
+  prompt_fragment: 固定日本站 Japanese/ja。前台文案、后台搜索词、上图文字与 A+ 原生文字使用自然日语；中文用于解释和策划。品牌、型号与真实技术词不硬翻译。
 - id: site_units
   type: required
   source_id: user_unit_localization
-  prompt_fragment: US 由 normalize 把公制换成 in/ft、oz/lb、fl oz/gal 并全字段复用（规则见 product_facts_rules.us_units）。非 US 保留来源单位。后台词字节预算按站点取 quality_policy.sites（IN 199、JP 499、其他 249）。
+  prompt_fragment: 保留来源单位，使用 normalize 的 display_text 全字段复用，不进行美国站单位换算。日本站后台词字节预算读取 quality_policy.json.sites.JP。
 - id: site_keywords
   type: editorial
   source_id: skill_editorial_v2

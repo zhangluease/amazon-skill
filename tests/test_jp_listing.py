@@ -150,6 +150,238 @@ class JapaneseListingTests(unittest.TestCase):
                                {"keyword": "文具収納", "target_field": "search_terms", "applies_to": ["all"], "reason": "相关别称"}]})
         write(self.run, "07_listing.json", self.listing)
 
+    def import_device_keywords(self):
+        self.csv.write_text("日文关键词,全部来源\nHD-500A フィルター,官网\n"
+                            "hd-rx520e8 交換用,Amazon联想\nH060518 H011500 フィルター,竞品反查\n"
+                            "HD-500A,官网\nAHD-D9K-W,官网\nHD-900A 非対応,官网\n"
+                            "HD-RXT521E9,Amazon联想\n", encoding="utf-8-sig")
+        result = self.invoke("import_keywords.py", "--files", self.csv, "--run-dir", self.run)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        raw = json.loads((self.run / "02_kw_raw.json").read_text())
+        # Semantic fixture assignments, never a production prefix classifier.
+        assignments = keywords.identifier_template(self.profile, raw, json.loads(quality.POLICY_PATH.read_text()))
+        roles = {"HD-500A": "compatible_model", "HD-RX520E8": "compatible_model",
+                 "H060518": "product_part", "H011500": "product_part", "AHD-D9K-W": "compatible_model",
+                 "HD-900A": "other", "HD-RXT521E9": "compatible_model"}
+        for record in assignments["records"]:
+            record.update(role=roles[record["identifier"]], reason="synthetic-test: given row identifies this role")
+        write(self.run, "02_identifier_roles.json", assignments)
+        return raw
+
+    def test_given_keywords_register_device_models_without_external_confirmation(self):
+        raw = self.import_device_keywords()
+        raw_before = (self.run / "02_kw_raw.json").read_bytes()
+        profile = copy.deepcopy(self.profile)
+        profile["facts"].append({"fact_id": "pending-fit", "field": "compatible_models", "value": [],
+                                  "status": "unknown", "source_ref": "缺少单独的说明书"})
+        write(self.run, "01_product_profile.json", profile)
+        decisions = keywords.prepare(self.run)
+        updated = json.loads((self.run / "01_product_profile.json").read_text())
+        fact = next(f for f in updated["facts"] if f["fact_id"] == "trusted-keyword-models")
+        self.assertEqual(fact["value"], ["HD-500A", "HD-RX520E8", "AHD-D9K-W", "HD-RXT521E9"])
+        self.assertEqual(fact["confirmation_basis"], "user_provided_keywords")
+        self.assertEqual(fact["keyword_source_positions"]["HD-500A"], [0, 3])
+        self.assertEqual(raw["keywords"][3]["source"]["row"], 5)
+        self.assertEqual(next(f for f in updated["facts"] if f["fact_id"] == "pending-fit")["status"], "confirmed")
+        self.assertEqual((self.run / "02_kw_raw.json").read_bytes(), raw_before)
+        records = {r["keyword"]: r for r in decisions["records"]}
+        self.assertEqual(records["hd-rx520e8 交換用"]["decision"], "eligible")
+        self.assertEqual(records["H060518 H011500 フィルター"]["decision"], None)
+        self.assertEqual(records["HD-900A 非対応"]["decision"], None)
+
+    def test_given_models_cannot_disappear_by_omitting_profile_compatibility_field(self):
+        raw = self.import_device_keywords()
+        keywords.prepare(self.run)
+        profile = json.loads((self.run / "01_product_profile.json").read_text())
+        profile["facts"] = [f for f in profile["facts"] if f["field"] != "compatible_models"]
+        write(self.run, "01_product_profile.json", profile)
+        result = keywords.check_run(self.run, require_exports=False, downstream=False)
+        self.assertIn("trusted_keyword_model_missing", {i["code"] for i in result["issues"]})
+        issues = [i for i in result["issues"] if i["code"] == "trusted_keyword_model_missing"]
+        self.assertEqual(len(issues), 4)
+
+    def test_given_models_are_required_in_bullets_and_complete_when_listed(self):
+        self.import_device_keywords()
+        keywords.prepare(self.run)
+        profile = json.loads((self.run / "01_product_profile.json").read_text())
+        self.assertIn("compatibility_model_missing", {i["code"] for i in quality.check_local(profile, self.listing)})
+        self.listing["bullets"][0] = "【対応機種①】HD-500A、AHD-D9K-W。"
+        self.listing["bullets"][1] = "【対応機種②】HD-RX520E8、HD-RXT521E9。"
+        for claim in self.listing["claims"]:
+            if claim["field"] in ("bullets[0]", "bullets[1]"):
+                claim["fact_ids"].append("trusted-keyword-models")
+        self.assertFalse([i for i in quality.check_local(profile, self.listing) if i["severity"] == "error"])
+
+    def test_register_models_repairs_old_deferrals_and_preserves_initial_history(self):
+        raw = self.import_device_keywords()
+        records = [keywords.draft(r, "raw") for r in keywords.source_records(raw)]
+        for record in records:
+            record.update(initial_decision="deferred", decision="deferred", reason_code="unknown_fact", reason="旧结论：缺官网核验")
+        bound = keywords.fingerprints(self.run, (keywords.PROFILE, keywords.RAW))
+        write(self.run, "03_keyword_decisions.json", {"keyword_schema_version": "1.1", "source_fingerprints": bound,
+              "bound_facts": keywords.fact_snapshot(self.profile), "records": records, "supplemental_terms": []})
+        execution = self.invoke("keyword_quality.py", "register-models", "--run-dir", self.run)
+        self.assertEqual(execution.returncode, 0, execution.stderr)
+        result = json.loads(execution.stdout)
+        current = json.loads((self.run / "03_keyword_decisions.json").read_text())
+        repaired = current["records"][0]
+        self.assertTrue(result["exports_need_refresh"])
+        self.assertEqual((repaired["initial_decision"], repaired["decision"]), ("deferred", "eligible"))
+        self.assertTrue(repaired["resolution"])
+        self.assertEqual(repaired["initial_reason"], "旧结论：缺官网核验")
+        self.assertEqual(current["source_fingerprints"], keywords.fingerprints(self.run, (keywords.PROFILE, keywords.RAW)))
+        before = (self.run / "01_product_profile.json").read_bytes()
+        self.assertFalse(keywords.register_models(self.run)["profile_changed"])
+        self.assertEqual((self.run / "01_product_profile.json").read_bytes(), before)
+
+    def test_trusted_models_cannot_be_parked_pending_for_missing_website_proof(self):
+        raw = self.import_device_keywords()
+        decisions = keywords.prepare(self.run)
+        profile = json.loads((self.run / "01_product_profile.json").read_text())
+        decisions["records"][0].update(decision="deferred", reason_code="unknown_fact", reason="没有官网二次核验",
+                                       promotion_condition="找到说明书", resolution="错误地要求额外证明")
+        result = keywords.check_decisions(profile, raw, decisions, keywords.fingerprints(self.run, (keywords.PROFILE, keywords.RAW)),
+                                          json.loads((self.run / "02_identifier_roles.json").read_text()))
+        self.assertIn("trusted_model_quarantined", {i["code"] for i in result["issues"]})
+
+    def test_supplied_attribute_words_do_not_need_duplicate_product_documents(self):
+        self.import_and_classify()
+        decisions = json.loads((self.run / "03_keyword_decisions.json").read_text())
+        record = decisions["records"][1]
+        record.update(role="attribute", reason_code="attribute", identity_basis=False, fact_ids=[], measurement_ids=[])
+        result = keywords.check_decisions(self.profile, json.loads((self.run / "02_kw_raw.json").read_text()), decisions,
+                                          keywords.fingerprints(self.run, (keywords.PROFILE, keywords.RAW)))
+        self.assertNotIn("keyword_attribute_evidence", {i["code"] for i in result["issues"]})
+        self.assertNotIn("keyword_evidence", {i["code"] for i in result["issues"]})
+
+    def test_identifier_roles_depend_on_context_not_prefix_or_digit_shape(self):
+        raw = {"source_kind": "user_spreadsheets", "keywords": [
+            {"keyword": "PX-21 交換インク"}, {"keyword": "PX-22 対応 紙パック"},
+            {"keyword": "7100 対応 替刃"}, {"keyword": "30m 2巻"},
+            {"keyword": "ケアボトル 対応 詰め替え"}, {"keyword": "Maker Pro 500 対応 消耗品"}]}
+        policy = json.loads(quality.POLICY_PATH.read_text())
+        annotations = keywords.identifier_template(self.profile, raw, policy)
+        self.assertTrue(all(r["role"] == "pending" for r in annotations["records"]))
+        self.assertEqual(keywords.collect_models(self.profile, raw, policy)["models"], [])
+        roles = {"PX-21": "product_part", "PX-22": "compatible_model", "7100": "compatible_model",
+                 "30M": "other", "2": "other"}
+        annotations["records"] = [dict(r, role=roles[r["identifier"]], reason="fixture: semantic role")
+                                  for r in annotations["records"] if r["identifier"] != "500"]
+        annotations["records"] += [
+            {"identifier": "ケアボトル", "role": "compatible_model", "source_positions": [4], "reason": "fixture: container name"},
+            {"identifier": "Maker Pro 500", "role": "compatible_model", "source_positions": [5], "reason": "fixture: complete named target"}]
+        found = keywords.collect_models(self.profile, raw, policy, annotations)
+        self.assertFalse(found["issues"], found["issues"])
+        self.assertEqual(found["models"], ["PX-22", "7100", "ケアボトル", "MAKER PRO 500"])
+        self.assertEqual(found["part_numbers"], ["PX-21"])
+
+    def test_explicit_product_fields_support_named_and_numeric_model_roles(self):
+        raw = {"source_kind": "user_spreadsheets", "keywords": [{"keyword": "1234 交換用"}, {"keyword": "ケアボトル 対応"}]}
+        profile = copy.deepcopy(self.profile)
+        profile["facts"] += [{"field": "part_number", "value": "1234"},
+                             {"field": "compatible_models", "value": ["ケアボトル"]}]
+        found = keywords.collect_models(profile, raw, json.loads(quality.POLICY_PATH.read_text()))
+        self.assertEqual(found["part_numbers"], ["1234"])
+        self.assertEqual(found["models"], ["ケアボトル"])
+        self.assertFalse(found["issues"])
+        annotations = keywords.identifier_template(profile, raw, json.loads(quality.POLICY_PATH.read_text()))
+        profile["facts"][-1]["field"] = "product_model"
+        changed = keywords.collect_models(profile, raw, json.loads(quality.POLICY_PATH.read_text()), annotations)
+        self.assertIn("identifier_roles_stale", {i["code"] for i in changed["issues"]})
+
+    def test_pending_roles_block_registration_without_guessing_or_mutating_facts(self):
+        self.csv.write_text("キーワード\nPX-21 対応 紙パック\n", encoding="utf-8")
+        raw = imports.build_import([self.csv], "JP")
+        write(self.run, "02_kw_raw.json", raw)
+        before = (self.run / "01_product_profile.json").read_bytes()
+        decisions = keywords.prepare(self.run)
+        self.assertIsNone(decisions["records"][0]["decision"])
+        self.assertEqual((self.run / "01_product_profile.json").read_bytes(), before)
+        result = self.invoke("keyword_quality.py", "register-models", "--run-dir", self.run)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("identifier_role_pending", {i["code"] for i in json.loads(result.stdout)["issues"]})
+        roles = json.loads((self.run / "02_identifier_roles.json").read_text())
+        roles["records"][0].update(role="compatible_model", reason="原词明确指适配设备")
+        write(self.run, "02_identifier_roles.json", roles)
+        self.assertEqual(keywords.register_models(self.run)["status"], "passed")
+        profile = json.loads((self.run / "01_product_profile.json").read_text())
+        self.assertEqual(profile["facts"][-1]["value"], ["PX-21"])
+
+    def test_missing_stale_or_invented_identifier_records_are_reported(self):
+        raw = self.import_device_keywords()
+        roles = json.loads((self.run / "02_identifier_roles.json").read_text())
+        policy = json.loads(quality.POLICY_PATH.read_text())
+        roles["records"].pop(0)
+        self.assertIn("identifier_role_missing", {i["code"] for i in keywords.collect_models(self.profile, raw, policy, roles)["issues"]})
+        roles["records"].append({"identifier": "INVENTED-123", "role": "compatible_model", "source_positions": [0], "reason": "fixture"})
+        self.assertIn("identifier_not_in_source", {i["code"] for i in keywords.collect_models(self.profile, raw, policy, roles)["issues"]})
+        raw["keywords"][0]["keyword"] += "変更"
+        self.assertIn("identifier_roles_stale", {i["code"] for i in keywords.collect_models(self.profile, raw, policy, roles)["issues"]})
+
+    def test_deleting_bound_roles_cannot_bypass_named_target_registration(self):
+        self.csv.write_text("キーワード\nケアボトル 対応 詰め替え\n", encoding="utf-8")
+        raw = imports.build_import([self.csv], "JP")
+        write(self.run, "02_kw_raw.json", raw)
+        keywords.prepare(self.run)
+        roles = json.loads((self.run / "02_identifier_roles.json").read_text())
+        roles["records"] = [{"identifier": "ケアボトル", "role": "compatible_model", "source_positions": [0], "reason": "fixture: supplied container name"}]
+        write(self.run, "02_identifier_roles.json", roles)
+        keywords.register_models(self.run)
+        (self.run / "02_identifier_roles.json").unlink()
+        self.assertIn("identifier_roles_missing", {i["code"] for i in keywords.check_run(self.run, False, False)["issues"]})
+
+    def test_nonstandard_identifier_forms_are_required_intact_in_bullets(self):
+        for model in ("7100", "Maker Pro 500", "ケアボトル", "X.2/Pro+"):
+            with self.subTest(model=model):
+                profile = copy.deepcopy(self.profile)
+                profile["facts"].append({"fact_id": "fit", "field": "compatible_models", "value": [model],
+                                         "status": "confirmed", "source_ref": "synthetic-test:user-keywords"})
+                listing = copy.deepcopy(self.listing)
+                self.assertIn("compatibility_model_missing", {i["code"] for i in quality.check_local(profile, listing)})
+                listing["bullets"][0] = "【対応対象】" + model + "。"
+                for claim in listing["claims"]:
+                    if claim["field"] == "bullets[0]":
+                        claim["fact_ids"].append("fit")
+                self.assertFalse([i for i in quality.check_local(profile, listing) if i["severity"] == "error"])
+
+    def test_role_changes_remove_stale_derived_models_and_reopen_affected_terms(self):
+        self.import_device_keywords()
+        keywords.prepare(self.run)
+        roles = json.loads((self.run / "02_identifier_roles.json").read_text())
+        for record in roles["records"]:
+            if record["identifier"] == "HD-500A":
+                record.update(role="product_part", reason="fixture: context corrected to own part")
+        write(self.run, "02_identifier_roles.json", roles)
+        self.assertIn("identifier_roles_unbound", {i["code"] for i in keywords.check_run(self.run, False, False)["issues"]})
+        keywords.register_models(self.run)
+        profile = json.loads((self.run / "01_product_profile.json").read_text())
+        self.assertNotIn("HD-500A", profile["facts"][-1]["value"])
+        records = json.loads((self.run / "03_keyword_decisions.json").read_text())["records"]
+        self.assertIsNone(records[0]["decision"])
+        self.assertEqual(records[0]["initial_decision"], "eligible")
+
+    def test_specification_and_general_consumables_do_not_require_model_lists(self):
+        for basis in ("specification", "none", "model"):
+            with self.subTest(basis=basis):
+                profile = dict(self.profile, compatibility_basis=basis, compatibility_reason="synthetic-test: product selection context")
+                codes = {i["code"] for i in quality.check_local(profile, self.listing)}
+                if basis == "model":
+                    self.assertIn("compatibility_unconfirmed", codes)
+                else:
+                    self.assertNotIn("compatibility_unconfirmed", codes)
+                    self.assertFalse([i for i in quality.check_local(profile, self.listing) if i["severity"] == "error"])
+
+    def test_import_uses_headers_with_arbitrary_filenames(self):
+        filenames = ["客户随手命名-2026.csv", "any consumables export.csv"]
+        imported = []
+        for filename in filenames:
+            path = self.root / filename
+            path.write_text("検索キーワード,月間検索数\n掃除クロス,500\n", encoding="utf-8")
+            data = imports.build_import([path], "JP")
+            imported.append([(r["keyword"], r["monthly_searches"]) for r in data["keywords"]])
+            self.assertEqual(data["source_files"][0]["filename"], filename)
+        self.assertEqual(imported, [[("掃除クロス", 500)]] * 2)
+
     def test_initialization_is_jp_offline_and_refuses_overwrite(self):
         qa = json.loads((self.run / "06_qa.json").read_text())
         self.assertEqual((qa["site"], qa["status"], qa["reason_code"]), ("JP", "skipped", "rufus_us_only"))

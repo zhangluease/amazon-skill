@@ -14,12 +14,12 @@ import os
 import re
 import sys
 import tempfile
-import unicodedata
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from pathlib import Path
 
 from listing_scope import require_single_product
+from model_ids import normalize_model, model_pattern, valid_model_list
 
 _BACKEND_SPEC = importlib.util.spec_from_file_location("listing_backend_cli", Path(__file__).with_name("backend_cli.py"))
 backend_cli = importlib.util.module_from_spec(_BACKEND_SPEC)
@@ -28,7 +28,7 @@ _BACKEND_SPEC.loader.exec_module(backend_cli)
 POLICY_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "quality_policy.json"
 TEXT_FIELDS = ("title", "item_highlight", "description", "search_terms")
 FRONT_FIELDS = ("title", "item_highlight") + tuple("bullets[%d]" % i for i in range(5)) + ("description",)
-KEYWORD_REVIEW_CHECKS = ("keyword_usage", "field_layout")
+KEYWORD_REVIEW_CHECKS = ("keyword_usage", "field_layout", "compatibility_models")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 LENGTH_UNITS = {"mm", "cm", "m", "in", "ft"}
 UNIT_ALIASES = {"inch": "in", "inches": "in", '"': "in", "centimeter": "cm",
@@ -93,41 +93,6 @@ def _contains(text, phrase):
     if phrase and phrase[0].isdigit():
         return re.search(r"(?<![A-Za-z0-9_])" + re.escape(phrase) + r"(?![A-Za-z0-9_])", _norm(text)) is not None
     return bool(phrase) and re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", _norm(text)) is not None
-
-
-MODEL_DASHES = "-‐‑‒–—−－"
-MODEL_BOUNDARY = r"A-Za-z0-9Ａ-Ｚａ-ｚ０-９_.+＿．＋\-‐‑‒–—−－"
-
-
-def normalize_model(value):
-    return unicodedata.normalize("NFKC", value).translate(str.maketrans({c: "-" for c in MODEL_DASHES})).upper()
-
-
-def model_pattern(models):
-    """Match intact model IDs, accepting width/case/dash variants, never prefixes.
-
-    Match original text so editorial length checks do not normalize or rewrite prose.
-    """
-    alternatives = []
-    for model in sorted(set(models), key=len, reverse=True):
-        characters = []
-        for char in normalize_model(model):
-            if char == "-":
-                characters.append("[" + re.escape(MODEL_DASHES) + "]")
-            elif "!" <= char <= "~":
-                characters.append("[" + re.escape(char + chr(ord(char) + 0xFEE0)) + "]")
-            else:
-                characters.append(re.escape(char))
-        alternatives.append("".join(characters))
-    return re.compile(r"(?<![" + MODEL_BOUNDARY + r"])(?:" + "|".join(alternatives)
-                      + r")(?![" + MODEL_BOUNDARY + r"])", re.I) if alternatives else None
-
-
-def valid_model_list(value):
-    return (isinstance(value, list) and bool(value)
-            and all(isinstance(model, str)
-                    and re.fullmatch(r"(?=[A-Z0-9._+-]*[A-Z])(?=[A-Z0-9._+-]*[0-9])[A-Z0-9][A-Z0-9._+-]*",
-                                     normalize_model(model)) for model in value))
 
 
 INTENT_RELATIONS = ("function", "capability", "activity", "audience", "location", "season", "body_part",
@@ -334,6 +299,14 @@ def _check_local(profile, listing, qa=None):
         return issues
     if profile.get("schema_version") != "2.1" or listing.get("schema_version") != "2.1":
         add("legacy_schema", "$", "Legacy content remains readable; regenerate and review under the current delivery contract before acceptance", "incomplete")
+    basis = profile.get("compatibility_basis")
+    if basis is not None:
+        if basis not in ("model", "specification", "none"):
+            add("compatibility_basis", "profile.compatibility_basis", "Use model, specification or none according to the supplied product context")
+        if not nonempty(profile.get("compatibility_reason")):
+            add("compatibility_reason", "profile.compatibility_reason", "Explain how buyers select this consumable from the supplied information", "incomplete")
+        if basis == "model" and not any(isinstance(f, dict) and f.get("field") == "compatible_models" for f in _list(profile.get("facts"))):
+            add("compatibility_unconfirmed", "profile.facts", "Model-dependent consumables need supplied fit identifiers; record the actual missing input", "incomplete")
     if "a_plus_plan" in listing and "aplus_plan" in listing and listing["a_plus_plan"] != listing["aplus_plan"]:
         add("aplus_alias_conflict", "listing.a_plus_plan", "a_plus_plan and legacy aplus_plan contain conflicting content")
     a_plus_key = "a_plus_plan" if "a_plus_plan" in listing else "aplus_plan"
@@ -928,7 +901,7 @@ def make_review_template(profile_path, listing_path, qa_path=None, previous=None
 
 def keyword_review_fingerprints(run_dir):
     return {name: hashlib.sha256((Path(run_dir) / name).read_bytes()).hexdigest() if (Path(run_dir) / name).exists() else None
-            for name in ("02_kw_raw.json", "03_keyword_decisions.json", "05_title_keywords.json")}
+            for name in ("02_kw_raw.json", "02_identifier_roles.json", "03_keyword_decisions.json", "05_title_keywords.json")}
 
 
 def current_keyword_stage(run_dir):
@@ -967,7 +940,7 @@ def validate_bundle(profile, listing, qa=None, review=None, backend=None, finger
         elif fingerprints is None or review.get("fingerprints") != fingerprints:
             add("review_stale", "semantic.fingerprints", "Review is missing current source-file fingerprints", "incomplete")
         if keywords is not None and keywords.get("status") == "passed":
-            keyword_bound = {name: keywords.get("fingerprints", {}).get(name) for name in ("02_kw_raw.json", "03_keyword_decisions.json", "05_title_keywords.json")}
+            keyword_bound = {name: keywords.get("fingerprints", {}).get(name) for name in ("02_kw_raw.json", "02_identifier_roles.json", "03_keyword_decisions.json", "05_title_keywords.json")}
             recorded_keywords = review.get("keyword_fingerprints")
             if not isinstance(recorded_keywords, dict) or any(name not in recorded_keywords or recorded_keywords[name] != value for name, value in keyword_bound.items()):
                 add("review_keywords_stale", "semantic.keyword_fingerprints", "Keyword-usage and field-layout reviews are not bound to current keyword decisions and placements", "incomplete")

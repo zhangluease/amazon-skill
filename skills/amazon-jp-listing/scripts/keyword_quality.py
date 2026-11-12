@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from listing_scope import require_single_product
+from trusted_keywords import FACT_ID, trusted_input, collect_models, bind_models, registration_issues, identifier_template, fingerprint
 import re
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from datetime import datetime, timezone
 VERSION = "1.1"
 PROFILE = "01_product_profile.json"
 RAW = "02_kw_raw.json"
+IDENTIFIERS = "02_identifier_roles.json"
 DECISIONS = "03_keyword_decisions.json"
 VALIDATION = "03_keyword_validation.json"
 POOLS = {"eligible": "03_kw_filtered.json", "deferred": "03_kw_pending.json", "excluded": "03_kw_removed.json"}
@@ -120,12 +122,77 @@ def draft(record, origin):
                 reviewer="", resolution="", group_difference="", promotion_condition="", restrictions="")
 
 
+def accept_model_records(records, inventory, profile):
+    positions = {position for rows in inventory["source_positions"].values() for position in rows}
+    for record in records:
+        if not positions.intersection(record.get("source_positions", [])):
+            continue
+        if any(contains_phrase(record["keyword"], term) for term in profile.get("forbidden_terms", []) if nonempty(term)):
+            continue  # An explicit user restriction is a real input conflict, not missing external proof.
+        previous = record.get("decision")
+        if record.get("initial_decision") is None:
+            record["initial_decision"] = "eligible"
+        elif previous != "eligible":
+            record["initial_reason"] = record.get("reason", "")
+            record["resolution"] = "按用户默认信任给定关键词的约定，根据语义角色采用适配关系，不再等待官网二次核验"
+        record.update(decision="eligible", reason_code="attribute", role="attribute", label="relevant",
+                      reason="用户给定关键词视为正确，该行适配对象标识直接登记为本品适配信息",
+                      query_intent=record["keyword"], intent_group="provided-compatible-models",
+                      evidence="02_kw_raw.json 原始关键词行；以用户给定输入为依据，无外部核验声明",
+                      fact_ids=[FACT_ID], measurement_ids=[], identity_basis=False, applies_to=["all"],
+                      reviewer="keyword_quality.py:trusted_input", promotion_condition="")
+
+
+def register_models(run):
+    """Register semantically assigned fit IDs, never infer their role from prefixes."""
+    before = fingerprints(run, (PROFILE, RAW))
+    profile, raw = read_json(run / PROFILE), read_json(run / RAW)
+    require_single_product(profile)
+    decisions = read_json(run / DECISIONS, required=False)
+    if decisions is not None and decisions.get("source_fingerprints") != before:
+        raise ValueError("Source files changed before registration; resolve/rebind those edits first (changed raw input requires a new run)")
+    policy = read_json(POLICY)
+    assignments = read_json(run / IDENTIFIERS, required=False)
+    if assignments is None:
+        assignments = identifier_template(profile, raw, policy)
+        atomic_write(run / IDENTIFIERS, assignments)
+    role_before = fingerprints(run, (IDENTIFIERS,))
+    inventory = collect_models(profile, raw, policy, assignments)
+    if inventory["issues"]:
+        return {"status": "incomplete", "identifier_roles": IDENTIFIERS, "issues": inventory["issues"],
+                "message": "根据已给定资料解释编号角色；无需外部核验。完成角色记录后重跑 register-models。"}
+    updated = bind_models(profile, inventory)
+    if before != fingerprints(run, (PROFILE, RAW)) or role_before != fingerprints(run, (IDENTIFIERS,)):
+        raise ValueError("Product, keywords or identifier roles changed during model registration")
+    if updated != profile:
+        atomic_write(run / PROFILE, updated)
+    if decisions is not None:
+        positions = {p for rows in inventory["source_positions"].values() for p in rows}
+        for record in decisions["records"]:
+            if FACT_ID in record.get("fact_ids", []) and not positions.intersection(record.get("source_positions", [])):
+                record.update(decision=None, fact_ids=[], resolution="编号角色变化，按当前语义重新安排该词", reviewer="")
+        accept_model_records(decisions["records"], inventory, updated)
+        decisions["identifier_roles_fingerprint"] = fingerprint(assignments)
+        decisions["source_fingerprints"] = fingerprints(run, (PROFILE, RAW))
+        decisions["bound_facts"] = fact_snapshot(updated)
+        atomic_write(run / DECISIONS, decisions)
+    return {"status": "passed", "model_count": len(inventory["models"]), "part_number_count": len(inventory["part_numbers"]),
+            "negative_rows": inventory["negative_rows"], "profile_changed": updated != profile,
+            "existing_decisions_updated": decisions is not None,
+            "exports_need_refresh": decisions is not None}
+
+
 def prepare(run):
     if (run / DECISIONS).exists():
         raise ValueError("Decision ledger exists; update it in place instead of overwriting review history")
+    register_models(run)
     bound = fingerprints(run, (PROFILE, RAW))
     profile, raw = read_json(run / PROFILE), read_json(run / RAW)
     records = [draft(record, "raw") for record in source_records(raw)]
+    assignments = read_json(run / IDENTIFIERS)
+    inventory = collect_models(profile, raw, read_json(POLICY), assignments)
+    if not inventory["issues"]:
+        accept_model_records(records, inventory, profile)
     existing = {item["normalized"] for item in records}
     identity = profile.get("product_identity", {})
     supplemental = []
@@ -137,6 +204,7 @@ def prepare(run):
                                    "normalized": key, "source_ref": "profile.product_identity"}, "product"))
         existing.add(key)
     result = {"keyword_schema_version": VERSION, "source_fingerprints": bound,
+              "identifier_roles_fingerprint": fingerprint(assignments),
               "bound_facts": fact_snapshot(profile),
               "records": records, "supplemental_terms": supplemental}
     if bound != fingerprints(run, (PROFILE, RAW)):
@@ -175,8 +243,7 @@ def rebind(run, reviewed=False):
         for record in records:
             refs = set(record.get("fact_ids") or []) | set(record.get("measurement_ids") or [])
             if (refs & changed or "__identity__" in changed and record.get("identity_basis")
-                    or "__forbidden__" in changed and record.get("reason_code") == "user_restriction"
-                    or "__variants__" in changed and record.get("applies_to") != ["all"]):
+                    or "__forbidden__" in changed and record.get("reason_code") == "user_restriction"):
                 affected.append(record["keyword"])
     if affected and not reviewed:
         return {"rebound": False, "affected": affected, "changed": sorted(changed) if changed is not None else None,
@@ -404,7 +471,7 @@ def status_result(issues, **extra):
     return dict(status=status, issues=issues, **extra)
 
 
-def check_decisions(profile, raw, decisions, source_fingerprints):
+def check_decisions(profile, raw, decisions, source_fingerprints, assignments=None):
     issues = []
     def add(code, path, message, severity="error"):
         issues.append(dict(code=code, path=path, message=message, severity=severity))
@@ -414,6 +481,10 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
         add("single_product_only", PROFILE, str(error))
         return status_result(issues)
     expected = source_records(raw)
+    policy = read_json(POLICY)
+    inventory = collect_models(profile, raw, policy, assignments)
+    model_positions = {position for rows in inventory["source_positions"].values() for position in rows}
+    issues.extend(registration_issues(profile, inventory))
     if decisions is None:
         add("keyword_audit_missing", DECISIONS, "缺少逐词审查；历史词表可读，但筛词尚未验收", "incomplete")
         return status_result(issues)
@@ -422,6 +493,8 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
         add("keyword_schema", DECISIONS, "关键词分类版本不受支持")
     if decisions.get("source_fingerprints") != source_fingerprints:
         add("keyword_source_stale", DECISIONS, "画像或原始词已变化，需重新核对分类与事实", "incomplete")
+    if assignments is not None and decisions.get("identifier_roles_fingerprint") != fingerprint(assignments):
+        add("identifier_roles_unbound", IDENTIFIERS, "编号角色变化后须执行 register-models，同步适配事实和逐词记录", "incomplete")
     actual_raw = decisions["records"]
     expected_projection = [{key: item[key] for key in ("keyword_id", "keyword", "normalized", "source_positions", "original_forms")} for item in expected]
     actual_projection = [{key: item.get(key) for key in ("keyword_id", "keyword", "normalized", "source_positions", "original_forms")} for item in actual_raw]
@@ -471,7 +544,8 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
         valid_scope = scope == ["all"]
         if not valid_scope:
             add("keyword_scope", path, "适用范围必须为本品"); scope = []
-        supported = item.get("identity_basis") is True
+        supplied = origin == "raw" and trusted_input(raw, policy)
+        supported = item.get("identity_basis") is True or supplied
         confirmed_refs = 0
         uncertain_refs = 0
         if type(item.get("identity_basis")) is not bool:
@@ -492,7 +566,7 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
                     add("keyword_unknown_fact", path, "未知或冲突事实不能支持可用词")
         if final == "eligible" and not supported:
             add("keyword_evidence", path, "可用词需要已确认事实、规格或本品身份依据")
-        if final == "eligible" and item.get("role") == "attribute" and not confirmed_refs:
+        if final == "eligible" and item.get("role") == "attribute" and not confirmed_refs and not supplied:
             add("keyword_attribute_evidence", path, "属性词不能仅凭产品名称确认，必须引用已确认事实或规格")
         if final == "excluded":
             if final_code == "fact_conflict" and (not confirmed_refs or uncertain_refs):
@@ -503,6 +577,10 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
                 add("keyword_unusable_query", path, "含有效文字或数字的查询不能仅按乱码剔除；先修复或暂缓语义评估")
         if final == "deferred" and not nonempty(item.get("promotion_condition")):
             add("keyword_promotion", path, "暂缓词需要说明疑点及晋级条件", "incomplete")
+        if model_positions.intersection(item.get("source_positions", [])) and final != "eligible":
+            explicit_conflict = final_code in ("user_restriction", "fact_conflict", "identity_conflict")
+            if not explicit_conflict:
+                add("trusted_model_quarantined", path, "给定整机型号无需二次核验；须作为适配事实保留，不能只因缺官网证明而暂缓或剔除")
         if initial != final and not nonempty(item.get("resolution")):
             add("keyword_resolution", path, "改变分类必须解释修正依据", "incomplete")
         if key in {norm(term) for term in protected} and final != "eligible":
@@ -800,13 +878,15 @@ def coverage(run, write_placement=False):
 
 def check_run(run, require_exports=True, downstream=True):
     """Recompute evidence from source files; never trust a cached 'passed' flag."""
-    names = (PROFILE, RAW, DECISIONS) + tuple(POOLS.values()) + ("04_kw_tagged.json",) + DOWNSTREAM
+    names = (PROFILE, RAW, IDENTIFIERS, DECISIONS) + tuple(POOLS.values()) + ("04_kw_tagged.json",) + DOWNSTREAM
     before = fingerprints(run, names)
     if before[RAW] is None or before[DECISIONS] is None:
         return status_result([dict(code="keyword_audit_missing", path=DECISIONS, message="缺少新版筛词审查，历史结果仅兼容展示", severity="incomplete")], fingerprints=before)
     try:
         profile, raw, decisions = [read_json(run / name) for name in (PROFILE, RAW, DECISIONS)]
-        result = check_decisions(profile, raw, decisions, {name: before[name] for name in (PROFILE, RAW)})
+        result = check_decisions(profile, raw, decisions, {name: before[name] for name in (PROFILE, RAW)}, read_json(run / IDENTIFIERS, required=False))
+        if before[IDENTIFIERS] is None and decisions.get("identifier_roles_fingerprint"):
+            result["issues"].append(dict(code="identifier_roles_missing", path=IDENTIFIERS, message="缺少已绑定的编号语义记录，不能删除记录绕过适配登记", severity="incomplete"))
         if result["status"] == "passed":
             if require_exports:
                 for name, expected in project_pools(decisions, raw).items():
@@ -827,7 +907,7 @@ def check_run(run, require_exports=True, downstream=True):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "view", "apply", "check", "export", "rebind", "coverage"))
+    parser.add_argument("command", choices=("prepare", "register-models", "view", "apply", "check", "export", "rebind", "coverage"))
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--groups", type=Path, help="apply: intent-group judgement file")
     parser.add_argument("--reviewed", action="store_true", help="rebind: affected keywords were rechecked")
@@ -835,10 +915,14 @@ def main(argv=None):
     parser.add_argument("--clusters", action="store_true", help="view: also write lexical candidate groups (03_keyword_clusters.json) for @cluster references")
     args = parser.parse_args(argv)
     try:
+        if args.command == "register-models":
+            result = register_models(args.run_dir)
+            print(json.dumps(result, ensure_ascii=False)); return 0 if result["status"] == "passed" else 1
         if args.command == "prepare":
             value = prepare(args.run_dir)
             view = write_view(args.run_dir)
-            print(json.dumps({"prepared": True, "records": len(value["records"]), "view": view["file"]}, ensure_ascii=False)); return 0
+            print(json.dumps({"prepared": True, "records": len(value["records"]), "view": view["file"],
+                              "identifier_roles": IDENTIFIERS, "next": "解释尚未分配的编号角色，再运行 register-models；无需外部核验"}, ensure_ascii=False)); return 0
         if args.command == "view":
             print(json.dumps(write_view(args.run_dir, clusters=args.clusters), ensure_ascii=False)); return 0
         if args.command == "apply":

@@ -1,4 +1,4 @@
-version: '2.4'
+version: '2.6'
 domain: product_facts
 contract_ref: ../data_contract.md
 policy_ref: ../quality_policy.json
@@ -7,7 +7,7 @@ rules:
 - id: facts_source
   type: required
   source_id: user_product_identity
-  prompt_fragment: product_identity 保留原始名称、目标语言名称和完整必保短语。facts 记录 fact_id、field、value、source_ref 以及 confirmed/unknown/conflict
+  prompt_fragment: product_identity 保留原始名称、目标语言名称和完整必保短语。用户给定关键词中明确表达的事实可直接采用并标注用户来源；不要求独立外部证明。facts 记录 fact_id、field、value、source_ref 以及 confirmed/unknown/conflict
     状态。图中能看清的外观可以作为证据，但不能据此补造材质牌号、规格、性能或认证。
 - id: measurements_source
   type: required
@@ -16,8 +16,8 @@ rules:
 - id: compatibility_models_source
   type: required
   source_id: user_compatibility_lists_20261112
-  prompt_fragment: 适配型耗材将完整机型逐项保存为 facts 的 compatible_models 字符串数组，可按来源或系列分多条事实，附 group_label、source_ref 和 confirmed／unknown／conflict。原图／表格先逐项核对，保留后缀和来源，不从共同型号、外观或尺寸推出整系列通用，不照搬竞品名单。本品之外的适配信息不混入。未知项留待核实，不补造；所有已确认项须在本品五点完整出现并引用。
-- id: us_units
+  prompt_fragment: 按对象型号选购的耗材将完整适配标识逐项保存为 facts 的 compatible_models 字符串数组，可按来源或系列分多条事实，附 group_label、source_ref 和 confirmed／unknown／conflict。用户给定词表默认正确，其中适配对象标识直接作为confirmed适配关系；只核对提取文字与原行一致，保留后缀和来源，不访问官网二次核验，不从共同型号、外观或尺寸推出整系列通用，不照搬竞品名单。本品之外的适配信息不混入。仅原文无法解析、明确否定或具体资料冲突时记录问题；输入未表达的事实不补造；所有已确认项须在本品五点完整出现并引用。
+- id: jp_source_units
   type: required
   source_id: nist_length_conversion
   prompt_fragment: 本技能固定日本站，保留来源中的单位，由 normalize 统一计算展示值。原值、单位、参数对象和引用全程保留，不进行美国站单位换算。
@@ -38,3 +38,7 @@ rules:
   type: required
   source_id: user_product_identity
   prompt_fragment: 每个前台字段都要有 claims 记录：含规格的列 measurement_ids，其他可核查声明列 confirmed 且有来源的 fact_ids。引用为空的普通场景文字由语义复审说明。
+- id: consumable_selection_basis
+  type: required
+  source_id: user_consumables_generalization_20261112
+  prompt_fragment: 记录 compatibility_basis=model／specification／none 和 compatibility_reason，依据给定内容决定按适配对象型号、规格条件或通用用途组织五点。编号按语义区分 product_part／compatible_model／other，不限定编号形式，不按前缀分类。规格型及通用耗材不强制机型表；一次性耗材不套用清洗复用规则。输入文件名任意，按内容识别资料角色。
