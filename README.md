@@ -10,7 +10,9 @@
 请使用 $pod-huaban-materials，找“猫”的素材，风格要复古木刻、黑白单色，适合 T 恤，初筛 12 张。
 ```
 
-优先使用独立 Playwright 无头脚本，批量捕获网站 JSON 和图片响应；本次未登录搜索 38 张约 3.3 秒，相似图和画板扩展约 8 秒缓存 60 个候选。无障碍定位可与无头模式同时使用，Browser Use 作为备用。浏览器脚本需要 Node.js 18+、Chrome 和 Playwright；skill 目录执行 `npm install` 准备依赖。附 Python 3.9+ 工具用于响应校验、去重和 HTML 图集输出。接口、登录处理和命令见[访问说明](skills/pod-huaban-materials/references/huaban-access.md)；初筛素材的 POD 授权仍需核实。
+将整个 `skills/pod-huaban-materials/` 文件夹交给所用 Agent，说明“请安装这个 skill”即可。环境检查和依赖准备由 skill 在查询时自动处理，首次与后续使用的提示词相同。
+
+优先使用独立 Playwright 无头脚本，批量捕获网站 JSON 和图片响应；本次未登录搜索 38 张约 3.3 秒，相似图和画板扩展约 8 秒缓存 60 个候选。无障碍定位可与无头模式同时使用，Browser Use 作为备用。首次使用自动校验 Node.js 18+、Python 3.9+、Playwright、浏览器启动和输出权限，按需准备私有运行库与 Chromium；也可用 `environment.cjs check/prepare/smoke` 分别检查本地环境、准备依赖及测试花瓣连接。详见[环境自检与试用提示词](skills/pod-huaban-materials/references/environment.md)和[访问说明](skills/pod-huaban-materials/references/huaban-access.md)；初筛素材的 POD 授权仍需核实。
 
 ## 日本站关键词查找
 

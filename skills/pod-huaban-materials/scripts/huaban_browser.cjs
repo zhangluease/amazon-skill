@@ -3,13 +3,14 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { ensureEnvironment } = require('./environment.cjs');
 
 function argumentsFor(argv) {
   const result = { similar: [], board: [], limit: 40, headed: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     if (key === 'headed') result.headed = true;
-    else if (['query', 'out', 'state', 'limit', 'similar', 'board', 'source-file-id'].includes(key)) {
+    else if (['query', 'out', 'state', 'limit', 'similar', 'board', 'source-file-id', 'browser'].includes(key)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw Error('参数缺少值');
       if (key === 'similar' || key === 'board') result[key].push(value);
@@ -17,6 +18,7 @@ function argumentsFor(argv) {
     } else throw Error('未知参数');
   }
   result.limit = Number(result.limit);
+  if (result.browser && !['auto', 'chrome', 'chromium'].includes(result.browser)) throw Error('不支持的浏览器');
   if (!result.out || (!result.query && !result.similar.length && !result.board.length))
     throw Error('需要 --out 与 --query、--similar 或 --board');
   if (!Number.isInteger(result.limit) || result.limit < 1 || result.limit > 60)
@@ -50,15 +52,16 @@ function isDataForSource(urlPath, source) {
 }
 
 async function collect(options) {
-  let chromium;
-  try { ({ chromium } = require('playwright')); }
-  catch { throw Error('缺少 playwright；先安装 Node.js 和 playwright 包及 Chrome'); }
   const output = path.resolve(options.out);
-  await fs.mkdir(path.join(output, 'browser-assets'), { recursive: true });
   const started = Date.now();
-  const browser = await chromium.launch({ channel: 'chrome', headless: !options.headed });
+  const environment = await ensureEnvironment({ out: output, prepare: true, keepBrowser: true,
+    headless: !options.headed, browserPreference: options.browser || 'auto' });
+  if (!environment.report.ready) throw Object.assign(Error('环境未就绪'), {
+    code: 'ENVIRONMENT_NOT_READY', report: environment.report });
+  const browser = environment.browser;
   let page;
   try {
+    await fs.mkdir(path.join(output, 'browser-assets'), { recursive: true });
     // Preserve the installed Chrome version and normal Chrome UA in both modes.
     // No stealth package, webdriver patches, browser profile or credential DB access.
     const probe = await browser.newPage();
@@ -165,13 +168,14 @@ async function collect(options) {
       }
     }
     const summary = { headless: !options.headed, supplied_state: Boolean(options.state),
+      browser_engine: environment.report.checks.browser.engine,
       normal_chrome_ua: true, elapsed_ms: Date.now() - started,
       candidates: documents.reduce((sum, d) => sum + d.pins.length, 0), cached, events };
     await fs.writeFile(path.join(output, 'browser-candidates.json'), JSON.stringify({ documents, summary }, null, 2));
     await fs.writeFile(path.join(output, 'response.json'), JSON.stringify({ pins: documents.flatMap(d => d.pins) }, null, 2));
     await fs.writeFile(path.join(output, 'timing.json'), JSON.stringify(summary, null, 2));
     if (!summary.candidates) throw Error('没有取得候选；请查看截图，区分登录要求、空结果和访问限制');
-    console.log(JSON.stringify(summary));
+    if (!options.quiet) console.log(JSON.stringify(summary));
     return summary;
   } catch (error) {
     if (page) await page.screenshot({ path: path.join(output, 'failure.jpg') }).catch(() => {});
@@ -184,7 +188,12 @@ async function collect(options) {
   } finally { await browser.close(); }
 }
 
-if (require.main === module) Promise.resolve().then(() => collect(argumentsFor(process.argv.slice(2)))).catch(() => {
+if (require.main === module) Promise.resolve().then(() => collect(argumentsFor(process.argv.slice(2)))).catch(error => {
+  if (error.code === 'ENVIRONMENT_NOT_READY') {
+    console.error(JSON.stringify({ error: error.code, ...error.report }));
+    process.exitCode = 2;
+    return;
+  }
   // Do not echo server content, storageState, cookies, or credentials on failures.
   console.error('浏览器采集未成功；检查依赖、参数和输出截图。不会自动重试或尝试登录。');
   process.exitCode = 2;

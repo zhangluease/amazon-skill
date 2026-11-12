@@ -42,7 +42,7 @@ API 站点前缀为 `https://huaban.com/v3`，页面为 `https://huaban.com`。
 
 `scripts/huaban_browser.cjs` 使用完整 Playwright，默认不导入用户 Cookie，不读取日常 Chrome 的账号或配置。先访问发现页，再导航到关键词搜索、相似页或已知画板；通过 `response.json()` 和图片响应的 `response.body()` 得到数据、缓存图片。不需要逐张 Browser Use，也不需要额外向 CDN 重放下载请求。
 
-运行环境：Node.js 18+、本机 Chrome、Playwright 1.61.0（本次实测版本）。在 skill 目录执行 `npm install` 准备依赖，再运行：
+运行环境：Node.js 18+、Python 3.9+、Chrome 或管理版 Chromium、Playwright 1.61.0（本次实测版本）。采集脚本自动校验环境并按需将运行库安装到用户缓存，无需用户在提示词中指定。独立排障命令详见[环境自检](environment.md)。采集命令：
 
 ```sh
 node scripts/huaban_browser.cjs --query '狗 动漫' --limit 40 --out /absolute/output/search

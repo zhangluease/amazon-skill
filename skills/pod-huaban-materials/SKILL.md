@@ -7,6 +7,14 @@ description: 根据关键词和图片风格，在花瓣网搜索 POD 素材参�
 
 将用户的主题和风格变成可比较、可追溯的图片候选。搜索入口为 <https://huaban.com/discovery>；具体取数方式见 [花瓣访问与接口](references/huaban-access.md)。先读取该参考，再选择当前环境确实支持的浏览器或 HTTP 能力。
 
+## 运行环境（自动处理）
+
+环境校验和依赖准备是 skill 的内部流程，用户只需提供关键词、风格等业务条件，无需声明首次使用或在提示词中要求自检。正常任务直接运行采集入口，它会自动检查 Node.js 18+、Python 3.9+、npm、锁定版本 Playwright、可写输出目录，实际启动浏览器，并按需准备依赖后继续采集；复用已验证启动的浏览器，无需额外先跑一轮独立检查。
+
+使用当前 Agent 能调用的 Node 和 Python。缺少运行库时安装到用户私有缓存，优先复用 Chrome，缺少可用浏览器时准备 Playwright 管理的 Chromium。成功时直接继续；只在缺 Node/Python、依赖准备失败、缺系统运行库或需要用户接管登录时说明具体问题。单项准备失败不循环安装，不修改全局 npm、日常 Chrome 配置，不把环境失败当成没搜到图片。
+
+独立排障可使用 `scripts/environment.cjs check`、`prepare`；用户要求联网验收时使用 `smoke`，普通查询直接以真实采集验证网站连接。`environment.json` 只记录本地环境，不能代替联网成功。脚本与输出路径由 Agent 换成实际绝对路径，输出放在用户当前项目。详细命令、排障与试用方式见[环境自检与首次试用](references/environment.md)。
+
 ## 明确筛选目标
 
 必需输入只有关键词、希望的图片风格；缺一项时一次问清。风格可以是自然语言或参考图，例如“猫，复古木刻，黑白单色，适合 T 恤”。若已有上下文则直接使用。
@@ -66,6 +74,6 @@ python3 scripts/huaban_tools.py normalize response.json --via keyword --query '�
 python3 scripts/huaban_tools.py gallery candidates.json --download --output gallery.html
 ```
 
-以上命令在 skill 目录执行；从其他目录运行时使用脚本绝对路径。独立浏览器脚本需要 Node.js 18+、Chrome 与 Playwright；依赖缺失时在 skill 目录执行 `npm install`，不要修改用户日常 Chrome 配置。它输出 `response.json`、带来源的完整记录、预览缓存、截图与耗时；`--similar <pin_id>`、`--board <board_id>` 可多次提供，用于看图选种子后的扩展。`api-url` 只输出 URL，不发请求。看图后补充判断字段再渲染正式初筛图集。
+以上命令在 skill 目录执行；从其他目录运行时使用脚本绝对路径。依赖准备按前述环境校验执行；浏览器可以是 Chrome 或 Playwright 管理的 Chromium。采集输出 `response.json`、带来源的完整记录、预览缓存、截图与耗时；`--similar <pin_id>`、`--board <board_id>` 可多次提供，用于看图选种子后的扩展。`api-url` 只输出 URL，不发请求。看图后补充判断字段再渲染正式初筛图集。
 
 接口与验证码不可用时交付已有结果和明确缺口。不要用 HTTP 200、登录页、校验脚本或空响应证明成功；不要把“浏览器内成功”写成“Cookie 在独立 HTTP 客户端中已验证成功”。
