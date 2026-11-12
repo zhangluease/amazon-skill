@@ -2,6 +2,16 @@
 
 面向日本亚马逊运营的轻量技能库。
 
+## POD 花瓣素材初筛
+
+[pod-huaban-materials](skills/pod-huaban-materials/SKILL.md) 接收关键词与图片风格，搜索花瓣，结合右键找相似和推荐画板扩展，实际看图后去重，交付带图片、来源、筛选理由和授权状态的候选图集。默认 12 张，可补充产品、配色、比例、连续纹样和排除项。
+
+```text
+请使用 $pod-huaban-materials，找“猫”的素材，风格要复古木刻、黑白单色，适合 T 恤，初筛 12 张。
+```
+
+优先使用已登录浏览器；已验证搜索、相似图与推荐画板可在浏览器会话中返回 JSON。独立 HTTP 客户端支持从本地文件读取 Cookie/请求头，但本次尚未验证 Cookie 单独重放成功。接口状态、工具能力边界和命令见[访问说明](skills/pod-huaban-materials/references/huaban-access.md)。附 Python 3.9+ 工具用于 URL 生成、响应校验、去重和 HTML 图集输出；不会把搜索结果当作已获 POD 商用授权。
+
 ## 日本站关键词查找
 
 [amazon-jp-keywords](skills/amazon-jp-keywords/SKILL.md)（原 `amazon-jp-listing-asin`，中文名「日本亚马逊关键词调研」）支持两种找词方式，负责关键词与广告候选词采集。
