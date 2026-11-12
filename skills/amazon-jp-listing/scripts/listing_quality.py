@@ -1332,7 +1332,7 @@ def main(argv=None):
         if name == "backend":
             command.add_argument("--no-reuse", action="store_true", help="Re-validate every child even when its payload and passing result are unchanged")
             command.add_argument("--cli", help="Optional CLI path; defaults to the bundled platform executable")
-            command.add_argument("--config", help="Optional config path; defaults to this Skill's config.json")
+            command.add_argument("--config", help="Optional config path; defaults to ~/.amazon-skill/config.json")
             command.add_argument("--timeout", type=float, default=120)
         if name == "prepare":
             command.add_argument("--output-dir", required=True)

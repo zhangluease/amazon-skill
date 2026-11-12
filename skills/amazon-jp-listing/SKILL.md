@@ -32,7 +32,7 @@ description: 根据用户提供的关键词表格、真实商品资料和图片�
 
 本地脚本仅需 Python 3.9+ 标准库，导入、筛词和渲染不需要后端 token。后端只调用日文 Listing 的 `validate`，通过随附 `backend_cli.py` 自动准备并校验固定版本 CLI；无需注册 MCP。来源版本与适配范围见[上游来源](references/upstream.md)。
 
-默认复用关键词技能既有的 `~/.amazon-jp-listing-asin/config.json`，保留该历史存储位置以继续使用已有凭据。使用 `listing_environment.py config-status` 查看脱敏状态。用户明确提供本服务 token 时，用 `listing_environment.py configure` 从标准输入合并更新 `backend_token`，保留 ABA 和其他字段；不回显、不放入命令参数、报告或 Git。缺凭据时继续本地流程，后端状态标为未验证。
+统一读取项目公共配置 `~/.amazon-skill/config.json`，与关键词技能共用 `backend_url/backend_token`；同一用户配置一次即可供各安装目录使用，不再读取各技能的独立配置。使用 `listing_environment.py config-status` 查看脱敏状态。用户明确提供本服务 token 时，用 `listing_environment.py configure` 从标准输入合并更新 `backend_token`，保留 ABA 和其他字段；不回显、不放入命令参数、报告或 Git。缺凭据时继续本地流程，后端状态标为未验证。
 
 后端响应须同时满足退出码为 0、`ok=true`、`errors=[]` 才能通过。单个子体失败不能写成整组完成。缓存只复用内容和指纹未变的已通过子体；鉴权、限流、超时和网络失败保留实际状态，不盲目重提未知请求。
 

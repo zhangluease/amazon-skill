@@ -1,0 +1,8 @@
+{
+  "backend_url": "https://mcp.yixunkuajing.com",
+  "backend_token": "",
+  "aba_mcp": {
+    "url": "https://spapi-mcp.bamboost.info/mcp",
+    "access_token": ""
+  }
+}

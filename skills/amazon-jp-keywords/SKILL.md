@@ -5,7 +5,7 @@ description: 查找日本亚马逊关键词。按竞品 ASIN 或 amazon.co.jp �
 
 # 日本亚马逊关键词调研
 
-原名 `amazon-jp-listing-asin`。本技能承担关键词调研与广告候选词采集，Listing 文案生成由 `amazon-jp-listing` 承担；历史凭据和缓存目录继续沿用。
+原名 `amazon-jp-listing-asin`。本技能承担关键词调研与广告候选词采集，Listing 文案生成由 `amazon-jp-listing` 承担。服务凭据统一读取项目公共配置。
 
 本技能负责找词、官网词洗词、去重和记录来源。官网原词和官网组合词经目标商品相关性筛选后进入 Excel 主表，完整官网候选及筛选原因留在来源明细。Amazon 搜索框联想（关联词）不洗词，易逊与 ABA 候选也按原有规则保留。任务在交付关键词表后结束。标题、五点、后台搜索词、图片和 A+ 属于后续 Listing 工作。
 
@@ -19,11 +19,11 @@ description: 查找日本亚马逊关键词。按竞品 ASIN 或 amazon.co.jp �
 - 使用当前 Agent 可调用的 Python 3.9+ 运行随附脚本。脚本按需准备运行环境，安装和复用成功时直接继续查询或导出。只在缺少 Python、依赖准备失败或需要用户补充凭据时说明具体问题。
 - 两种找词方式都必须交付 Excel（`.xlsx`）。ASIN 反查交付 `keywords.xlsx`，以词找词交付 `seed-keywords.xlsx`。同一任务执行两种方式时，分别交付两份主表。
 
-## 本地配置
+## 公共配置
 
-易逊和 ABA MCP 共用 `~/.amazon-jp-listing-asin/config.json`：易逊使用 `backend_token`，ABA 客户端使用 `aba_mcp.url` 和 `aba_mcp.access_token`。ABA 字段保存的是我们 MCP 服务的 Bearer Token，不是亚马逊临时 access token。配置结构、写入和客户端读取方式见 [统一客户端配置](references/client-config.md)。
+易逊和 ABA MCP 共用 `~/.amazon-skill/config.json`：易逊使用 `backend_token`，ABA 客户端使用 `aba_mcp.url` 和 `aba_mcp.access_token`。ABA 字段保存的是我们 MCP 服务的 Bearer Token，不是亚马逊临时 access token。配置结构、写入和客户端读取方式见 [统一客户端配置](references/client-config.md)。
 
-用 `python3 "SKILL/scripts/environment.py" config-status` 检查保存位置和凭据是否存在，输出不含 token。兼容已有的 `spapi_mcp.access_token`，无需重新提供；`environment.py normalize-config` 可将它归一为 `aba_mcp.access_token`。配置或轮换时，通过 `environment.py configure` 的标准输入更新相应字段；脚本保留另一渠道与其他已有字段。优先复用统一配置，凭据不进入工具业务参数、日志或报告。
+用 `python3 "SKILL/scripts/environment.py" config-status` 检查公共配置中的凭据状态，输出不含 token。配置或轮换时，通过 `environment.py configure` 的标准输入更新相应字段；脚本保留另一渠道与其他已有字段。在任一相关技能配置一次，同一用户安装的其他技能即可读取。只读取公共配置，不搜索技能目录或旧用户目录；ABA 字段统一为 `aba_mcp.access_token`。
 
 ### ABA CLI 调用入口
 
@@ -48,7 +48,7 @@ python3 "SKILL/scripts/aba_client.py" status
      --asins "ASIN1,ASIN2" --output "RUN/02_kw_raw.json"
    ```
 
-2. 优先复用本技能或本机已配置的易逊凭据。命令提示缺少凭据时，只请用户配置易逊 token。通过 `python3 "SKILL/scripts/environment.py" configure` 的标准输入传递含 `backend_token` 的 JSON，保存到用户目录 `~/.amazon-jp-listing-asin/config.json`。凭据只通过安全的标准输入或本机配置传递，避免出现在命令参数、日志和报告中。
+2. 优先复用本技能或本机已配置的易逊凭据。命令提示缺少凭据时，只请用户配置易逊 token。通过 `python3 "SKILL/scripts/environment.py" configure` 的标准输入传递含 `backend_token` 的 JSON，保存到用户目录 `~/.amazon-skill/config.json`。凭据只通过安全的标准输入或本机配置传递，避免出现在命令参数、日志和报告中。
 3. 默认复用同一报告根目录下、相同 ASIN 集合且同为日本站的 7 天内成功结果。写入和读取缓存时都检查业务状态和响应结构。失败、未完成或损坏的结果仅供排查。用户要求刷新时用 `--reuse-days 0`。记录站点、请求 ASIN、实际查询或缓存来源，以及响应明确提供的数据日期。查询日期与数据日期分开记录。
 4. 同时检查命令摘要和 `02_kw_raw.json`。缓存命中时仍检查业务状态和错误字段。区分环境准备、鉴权、额度、网络、部分结果和后端明确返回的无数据。响应缺失、结构异常或失败时，按实际状态交付已有有效词，避免把失败当作零匹配。超时或提交状态未知时，先核对请求状态。
 5. 按 [ABA 全站搜索词补充](references/aba-search-terms.md) 查询相同的竞品 ASIN，筛选 `clickedAsin` 命中的词，保留来源、统计周期和商品明细。易逊无数据或失败时仍执行 ABA。两渠道候选合并进 `keywords.xlsx`；ABA-only 候选的月搜索量和易逊流量占比留空，ABA 指标单列。ABA 未命中不代表竞品没有该词流量。

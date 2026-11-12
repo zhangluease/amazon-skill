@@ -14,11 +14,11 @@ from tempfile import TemporaryDirectory
 import time
 from urllib.request import urlopen
 
-from skill_config import configure as configure_credentials, config_status, normalize_config
+from skill_config import STATE, configure as configure_credentials, config_status
 
 
 SKILL = Path(__file__).resolve().parents[1]
-STATE = Path.home() / ".amazon-jp-listing-asin"
+CACHE = STATE / "cache" / "keywords"
 UPSTREAM = "lc-amazon-listing-asin"
 REVISION = "87dead1472eb4ddfd28f99fd47a9593b5c3f7771"
 SOURCE = f"https://raw.githubusercontent.com/chenqinglin2019-tech/Laochen-Amazon-project/{REVISION}/skills/{UPSTREAM}"
@@ -61,7 +61,7 @@ def prepare_excel():
         if error.name != "openpyxl":
             raise SetupError("The current Python has an incomplete openpyxl installation.") from None
 
-    packages = STATE / "python" / EXCEL_DEPENDENCY.replace("==", "-")
+    packages = CACHE / "python" / EXCEL_DEPENDENCY.replace("==", "-")
     if not packages.is_dir():
         packages.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with TemporaryDirectory(prefix=".excel-", dir=packages.parent) as directory:
@@ -87,7 +87,7 @@ def upstream_locations():
 
 
 def ensure_asset(relative_path):
-    destination = STATE / "laochen" / REVISION / relative_path
+    destination = CACHE / "laochen" / REVISION / relative_path
     expected = CHECKSUMS[relative_path]
     if destination.is_file() and sha256(destination.read_bytes()).hexdigest() == expected:
         return destination
@@ -118,11 +118,7 @@ def ensure_asset(relative_path):
 
 
 def config_path():
-    config = STATE / "config.json"
-    if config.exists():
-        return config
-    return next((path for location in upstream_locations()
-                 if (path := location / "config.json").is_file()), config)
+    return STATE / "config.json"
 
 
 def cacheable_expand(response):
@@ -185,7 +181,7 @@ def expand(args):
     output = Path(args.output).resolve()
     config = config_path().resolve()
     cli_asset = f"tools/bin/laochen-cli-{suffix}"
-    asset_root = STATE / "laochen" / REVISION
+    asset_root = CACHE / "laochen" / REVISION
     if output in (config, (asset_root / BACKEND).resolve(), (asset_root / cli_asset).resolve()):
         raise SetupError("Output must not overwrite the config or an ASIN lookup dependency.")
     meta_path = output.with_name(output.name + EXPAND_META_SUFFIX)
@@ -235,7 +231,6 @@ def main():
     lookup.add_argument("--reuse-days", type=float, default=7)
     commands.add_parser("configure", help="Merge backend_token and/or aba_mcp credentials from JSON on stdin")
     commands.add_parser("config-status", help="Show credential presence and the local config path without token values")
-    commands.add_parser("normalize-config", help="Normalize a saved spapi_mcp token to aba_mcp without re-entering it")
     args = parser.parse_args()
     try:
         if args.command == "expand":
@@ -243,11 +238,7 @@ def main():
         if args.command == "config-status":
             print(json.dumps(config_status(STATE), ensure_ascii=False))
             return 0
-        legacy_paths = [location / "config.json" for location in upstream_locations()]
-        if args.command == "normalize-config":
-            result = normalize_config(STATE, legacy_paths)
-        else:
-            result = configure_credentials(STATE, json.load(sys.stdin), legacy_paths=legacy_paths)
+        result = configure_credentials(STATE, json.load(sys.stdin))
     except SetupError as error:
         print(json.dumps({"status": "failed", "error_code": "setup_failed", "message": str(error)}))
         return 1

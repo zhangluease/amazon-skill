@@ -31,7 +31,6 @@ class SetupError(Exception):
 
 
 def config_path():
-    # Preserve the shared credential location used before the keyword skill rename.
     return STATE / "config.json"
 
 
@@ -43,7 +42,7 @@ def prepare_backend_cli():
     name = "laochen-cli-v2-" + suffix
     expected = manifest["sha256"][name]
     revision = manifest["revision"]
-    destination = Path.home() / ".amazon-jp-listing" / "laochen" / revision / name
+    destination = STATE / "cache" / "listing" / "laochen" / revision / name
     if destination.is_file() and sha256(destination.read_bytes()).hexdigest() == expected:
         return destination
     url = ("https://raw.githubusercontent.com/chenqinglin2019-tech/Laochen-Amazon-project/"

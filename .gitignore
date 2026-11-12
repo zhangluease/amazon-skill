@@ -6,4 +6,5 @@ __pycache__/
 .env.*
 !.env.example
 reports/
+config.json
 skills/pod-huaban-materials/node_modules/

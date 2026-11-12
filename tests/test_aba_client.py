@@ -73,13 +73,13 @@ class AbaClientTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.config = self.root / "config.json"
-        self.config.write_text(json.dumps({"spapi_mcp": {"access_token": TOKEN}}))
+        self.config.write_text(json.dumps({"aba_mcp": {"access_token": TOKEN}}))
 
-    def test_direct_http_handshake_works_with_screenshot_field_and_no_agent_mcp(self):
+    def test_direct_http_handshake_works_with_shared_config_and_no_agent_mcp(self):
         transport = Transport(lambda request, body: Transport.tool_reply(body["id"], {"検索語": "加湿器"}))
         client = MODULE.AbaClient(self.config, opener=transport)
         self.assertEqual(client.call("aba_status"), {"検索語": "加湿器"})
-        self.assertEqual(client.config_source, "spapi_mcp")
+        self.assertEqual(client.config_source, "aba_mcp")
         self.assertEqual([body["method"] for _request, body in transport.requests],
                          ["initialize", "notifications/initialized", "tools/call"])
         request, body = transport.requests[-1]
@@ -87,14 +87,13 @@ class AbaClientTests(unittest.TestCase):
         self.assertEqual(request.get_header("Mcp-session-id"), "fixture-session")
         self.assertNotIn(TOKEN, json.dumps(body))
 
-    def test_missing_or_conflicting_credentials_prevent_network_requests(self):
+    def test_missing_or_invalid_service_configuration_prevents_network_requests(self):
         transport = Transport()
         self.config.write_text('{}')
         with self.assertRaisesRegex(MODULE.ClientError, "ABA_MCP_ACCESS_TOKEN_MISSING"):
             MODULE.AbaClient(self.config, opener=transport)
-        self.config.write_text(json.dumps({"aba_mcp": {"access_token": TOKEN},
-                                           "spapi_mcp": {"access_token": "different"}}))
-        with self.assertRaisesRegex(MODULE.ClientError, "ABA_MCP_CONFIG_CONFLICT"):
+        self.config.write_text(json.dumps({"aba_mcp": {"access_token": TOKEN, "url": "https://different.invalid"}}))
+        with self.assertRaisesRegex(MODULE.ClientError, "ABA_MCP_URL_INVALID"):
             MODULE.AbaClient(self.config, opener=transport)
         self.assertEqual(transport.requests, [])
 
@@ -147,7 +146,7 @@ class AbaClientTests(unittest.TestCase):
                 result = MODULE.main(["--config", str(self.config), *argv])
             self.assertEqual(result, 1)
             self.assertNotIn(TOKEN, output.getvalue())
-        self.assertEqual(json.loads(self.config.read_text())["spapi_mcp"]["access_token"], TOKEN)
+        self.assertEqual(json.loads(self.config.read_text())["aba_mcp"]["access_token"], TOKEN)
 
     def test_cli_status_and_output_file_work_without_native_tools(self):
         target = self.root / "status.json"

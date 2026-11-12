@@ -98,7 +98,7 @@ class AbaClient:
             raise ClientError("CLIENT_CONFIG_MISSING") from None
         except ValueError as error:
             code = str(error)
-            if code not in {"ABA_MCP_CONFIG_CONFLICT", "ABA_MCP_CONFIG_INVALID", "ABA_MCP_URL_INVALID",
+            if code not in {"ABA_MCP_CONFIG_INVALID", "ABA_MCP_URL_INVALID",
                             "CONFIG_SYMLINK_REFUSED", "CONFIG_OBJECT_REQUIRED", "INVALID_TOKEN"}:
                 code = "CLIENT_CONFIG_INVALID"
             raise ClientError(code) from None

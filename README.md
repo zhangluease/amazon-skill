@@ -2,6 +2,36 @@
 
 面向日本亚马逊运营的轻量技能库。
 
+## 公共配置
+
+使用同一易逊服务的技能共享 `~/.amazon-skill/config.json`。`amazon-jp-keywords` 的 ASIN 反查与 `amazon-jp-listing` 的后端校验共同读取 `backend_url/backend_token`，配置一次后在同一系统用户的各 Agent 和各安装目录生效。ABA 使用独立的 `aba_mcp.access_token`，也保存在该文件中。
+
+仓库提供无凭据的 [config.example.json](config.example.json)。初始化公共文件并查看脱敏状态：
+
+```sh
+python3 scripts/configure.py init
+python3 scripts/configure.py status
+```
+
+公共文件结构：
+
+```json
+{
+  "backend_url": "https://mcp.yixunkuajing.com",
+  "backend_token": "",
+  "aba_mcp": {
+    "url": "https://spapi-mcp.bamboost.info/mcp",
+    "access_token": ""
+  }
+}
+```
+
+填写一次相应服务的 token 即可。Agent 接收用户提供的凭据后，通过 `scripts/configure.py configure` 的标准输入合并写入，不回显、不写入命令参数或报告。独立安装某个技能时，可继续用它自己的 `environment.py configure` 或 `listing_environment.py configure`，写入的也是同一个公共文件。更新一个服务不会清空另一个服务的配置；显式写入空字符串可清除该服务的凭据。更换后端地址时同时配置对应 token。
+
+公共文件保存在当前操作系统用户的主目录，macOS/Linux 为 `~/.amazon-skill/config.json`，Windows 为 `%USERPROFILE%\.amazon-skill\config.json`。这里只使用新配置，不迁移或搜索旧技能配置；每个新系统用户需配置一次。J-PlatPat、花瓣的专属访问方式见各自技能说明。
+
+公共读取逻辑维护在 `shared/amazon_config.py`，两个相关技能随包包含同版本副本，因此单独安装一个技能也能使用公共文件。修改公共逻辑后运行 `python3 scripts/sync_shared_config.py`；`--check` 检查发布副本是否同步。
+
 ## POD 花瓣素材初筛
 
 [pod-huaban-materials](skills/pod-huaban-materials/SKILL.md) 接收关键词与图片风格，搜索花瓣，结合右键找相似和推荐画板扩展，实际看图后去重，交付带图片、来源、筛选理由和授权状态的候选图集。默认 12 张，可补充产品、配色、比例、连续纹样和排除项。
@@ -23,7 +53,7 @@
 
 官网原词和官网组合词在采集后按目标商品及购买意图洗词：泛功能描述、与整机目标不符的零部件词及缺少型号依据的词不直接进入主表，完整候选、结论和原因保存在官网明细。Amazon 搜索框联想（关联词）不洗词，易逊与 ABA 候选也按原有规则保留。多来源同词不会因官网筛选被误删，详见[官网词相关性筛选](skills/amazon-jp-keywords/references/keyword-cleaning.md)。
 
-将整个 `skills/amazon-jp-keywords/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖。易逊 `backend_token` 与 ABA MCP 客户端 `aba_mcp.access_token` 统一保存在 `~/.amazon-jp-listing-asin/config.json`；兼容其他 Agent 已写入的 `spapi_mcp.access_token`。用 `environment.py configure` 从标准输入合并更新，用 `environment.py config-status` 查看脱敏状态，`environment.py normalize-config` 可归一旧字段。
+将整个 `skills/amazon-jp-keywords/` 文件夹放入所用 Agent 的技能目录。脚本在首次使用时按需准备依赖，易逊与 ABA 凭据统一读取下述公共配置。用 `environment.py configure` 从标准输入合并更新，用 `environment.py config-status` 查看脱敏状态。
 
 ABA 默认通过随附 `aba_client.py` CLI 直连服务，无需 Agent 注册 MCP，也无需安装 MCP SDK；只需 Python 3.9+。运行 `python3 skills/amazon-jp-keywords/scripts/aba_client.py status` 实测连接，`call` 执行工具，`collect-query` 完整采集并支持分页中断续取。选择原生 MCP 时也可通过 `aba_mcp_headers.py` 读取同一配置，详见[客户端配置](skills/amazon-jp-keywords/references/client-config.md)。
 
@@ -50,13 +80,13 @@ python3 skills/amazon-jp-keywords/scripts/amazon_jp_autocomplete.py \
 
 流程：产品画像 → 完整导入词表 → 可用／暂缓／剔除三类词池 → 卖点与关键词布局 → 日文文案及图片策划 → 覆盖检查 → 本地／后端／独立语义验收。采集时保留的 Amazon 联想词在生成 Listing 时仍须按本品事实审核。
 
-基于[老陈用户表格版](https://github.com/chenqinglin2019-tech/Laochen-Amazon-project/tree/87dead1472eb4ddfd28f99fd47a9593b5c3f7771/skills/lc_amazon_listing)的固定版本实现，只面向日本站。本地导入、筛词和渲染只需 Python 3.9+ 标准库；后端校验自动准备并核对 CLI，不需要注册 MCP，复用既有 `~/.amazon-jp-listing-asin/config.json` 的 `backend_token`。日本站明确跳过仅支持美国站的 QA 采集，仍整理买家问题覆盖。缺少后端或独立复审证据时，报告保留未完成状态。
+基于[老陈用户表格版](https://github.com/chenqinglin2019-tech/Laochen-Amazon-project/tree/87dead1472eb4ddfd28f99fd47a9593b5c3f7771/skills/lc_amazon_listing)的固定版本实现，只面向日本站。本地导入、筛词和渲染只需 Python 3.9+ 标准库；后端校验自动准备并核对 CLI，不需要注册 MCP，读取公共 `~/.amazon-skill/config.json` 的 `backend_token`。日本站明确跳过仅支持美国站的 QA 采集，仍整理买家问题覆盖。缺少后端或独立复审证据时，报告保留未完成状态。
 
 ```text
 请使用 $amazon-jp-listing，根据我提供的 seed-keywords.xlsx 和商品图片、规格及包装清单，为日本站生成完整日文 Listing，完成意图筛词、主附图与 A+ 策划，并交付文案和验收报告。
 ```
 
-关键词调研沿用历史配置与缓存路径，无需因技能改名重新配置 token。两个技能的职责、来源与执行命令分别见各自 `SKILL.md`。
+关键词与 Listing 技能共享同一个公共配置文件；分别安装到 Trae、Codex 或不同项目目录时，同一系统用户配置一次即可使用。两个技能的职责、来源与执行命令分别见各自 `SKILL.md`。
 
 ## 日本站知识产权初筛
 

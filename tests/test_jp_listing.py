@@ -303,7 +303,7 @@ class JapaneseListingTests(unittest.TestCase):
         manifest = self.root / "manifest.json"
         manifest.write_text(json.dumps({"revision": "test-revision", "skill_path": "skills/lc_amazon_listing",
                                         "sha256": {"laochen-cli-v2-linux-amd64": sha256(fixture).hexdigest()}}))
-        with patch.object(environment, "MANIFEST", manifest), patch.object(environment.Path, "home", return_value=self.root), \
+        with patch.object(environment, "MANIFEST", manifest), patch.object(environment, "STATE", self.root), \
              patch.object(environment.platform, "system", return_value="Linux"), \
              patch.object(environment.platform, "machine", return_value="x86_64"):
             with patch.object(environment, "urlopen", return_value=io.BytesIO(b"tampered")):

@@ -1,6 +1,6 @@
 # ABA 全站搜索词补充
 
-用于 ASIN 反查和以词找词。MCP 地址为 `https://spapi-mcp.bamboost.info/mcp`，固定日本站 `A1VC38T7YXB528`。默认通过随附 `scripts/aba_client.py` CLI 调用，无需 Agent 注册 MCP。客户端 token 保存到 `~/.amazon-jp-listing-asin/config.json` 的 `aba_mcp.access_token`，兼容 `spapi_mcp.access_token`；配置及轮换见 [统一客户端配置](client-config.md)。亚马逊授权由服务器管理，凭据不写入技能源码、工具业务参数或报告。默认只使用 `GET_BRAND_ANALYTICS_SEARCH_TERMS_REPORT`；无需自有 ASIN，不调用需要自有品牌 ASIN 的 SQP。
+用于 ASIN 反查和以词找词。MCP 地址为 `https://spapi-mcp.bamboost.info/mcp`，固定日本站 `A1VC38T7YXB528`。默认通过随附 `scripts/aba_client.py` CLI 调用，无需 Agent 注册 MCP。客户端 token 保存到公共 `~/.amazon-skill/config.json` 的 `aba_mcp.access_token`；配置及轮换见 [统一客户端配置](client-config.md)。亚马逊授权由服务器管理，凭据不写入技能源码、工具业务参数或报告。默认只使用 `GET_BRAND_ANALYTICS_SEARCH_TERMS_REPORT`；无需自有 ASIN，不调用需要自有品牌 ASIN 的 SQP。
 
 ## CLI 调用方式
 
@@ -35,7 +35,7 @@ python3 "SKILL/scripts/aba_client.py" collect-query \
 
 ## 创建与续查
 
-1. 用 CLI `status` 调用 `aba_status`，检查服务器端凭据与 `searchTermsQuery.supported`。客户端认证失败时先用 `environment.py config-status` 检查统一配置，兼容的旧字段无需重新填写；只在缺少有效客户端 token 时请用户配置 `aba_mcp.access_token`。服务器实际不可达、服务器端凭据未配置或旧版未提供筛选工具时，记录具体状态，继续其他渠道。不要为取得 ABA 而要求用户提供自有 ASIN。
+1. 用 CLI `status` 调用 `aba_status`，检查服务器端凭据与 `searchTermsQuery.supported`。客户端认证失败时先用 `environment.py config-status` 检查公共配置，只在缺少有效客户端 token 时请用户配置 `aba_mcp.access_token`。服务器实际不可达、服务器端凭据未配置或旧版未提供筛选工具时，记录具体状态，继续其他渠道。不要为取得 ABA 而要求用户提供自有 ASIN。
 2. 默认目标范围为查询日前 7 个日期，即 `[查询日−7天, 查询日−1天]`，不含查询当天。查询日默认按北京时间，用户明确提供日期时优先采用。每个日期单独请求一份 `DAY` 报表；例如 2026-11-11 查询，目标范围为 11-04 至 11-10，共 7 份日报。不能把这段任意日期范围作为一份 `WEEK` 或跨日 `DAY` 请求。用户明确指定日、周、月或季度时遵从指定周期，单份周报仍须星期日至星期六。保存统计日期与本次查询时间及其时区。
 3. 在报告根目录已有记录中，逐日按站点、报表类型、周期和日期查找可复用的 `reportId`。已提交的报表用 `aba_get_report` 续查，不重复创建。默认按 `plan-window` 的每个 `reports[].request` 创建；以目标范围第一天为例：
 
