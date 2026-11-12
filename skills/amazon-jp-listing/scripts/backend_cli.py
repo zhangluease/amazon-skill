@@ -18,6 +18,7 @@ import tempfile
 from urllib.parse import quote, quote_plus, urlsplit
 
 from listing_environment import SetupError, config_path as shared_config_path, prepare_backend_cli
+from listing_scope import require_single_product
 
 ROOT = Path(__file__).resolve().parents[1]
 SITES = ("JP",)
@@ -188,13 +189,24 @@ def run_cli(command, *, site, keywords_file=None, listing_file=None,
         environment = os.environ.copy()
         secrets = list(credentials.values()) + [environment.get(key) for key in ENV_KEYS]
         environment.update(zip(ENV_KEYS, (credentials["backend_url"], credentials["backend_token"])))
-        executable = Path(cli).resolve() if cli is not None else select_cli()
-        arguments = [str(executable), command, "--site", site]
         source = keywords_file if command == "qa" else listing_file
         if source is None or not Path(source).is_file():
             raise BackendError("input_missing", "The required keywords/listing JSON file does not exist.")
         input_path = Path(source).resolve()
-        if input_path in (config_path, executable):
+        if input_path == config_path:
+            raise BackendError("invalid_arguments", "A credential file cannot be used as product input.")
+        if command == "validate":
+            try:
+                product = json.loads(input_path.read_text(encoding="utf-8-sig"), parse_constant=_reject_constant)
+            except (OSError, ValueError):
+                raise BackendError("input_invalid", "The Listing file is not valid JSON.") from None
+            try:
+                require_single_product(product)
+            except ValueError:
+                raise BackendError("single_product_only", "Only one product is supported per run; split products into separate tasks.") from None
+        executable = Path(cli).resolve() if cli is not None else select_cli()
+        arguments = [str(executable), command, "--site", site]
+        if input_path == executable:
             raise BackendError("invalid_arguments", "A credential file or executable cannot be used as product input.")
         arguments += ["--keywords-file" if command == "qa" else "--listing-file", str(input_path)]
         output_path = Path(output).resolve() if output is not None else None

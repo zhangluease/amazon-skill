@@ -1,33 +1,24 @@
-# 本地数据契约 v2.2（Listing schema_version 仍为 "2.1"）
+# 本地数据契约 v2.5（Listing schema_version 仍为 "2.1"）
 
 本地版本只执行 JP/Japanese/ja；其他站点的字段说明保留上游契约兼容语义，不表示本技能支持其他站点。
 
-本文是新增字段的唯一结构定义。已有单品字段继续有效；新生成内容使用 `schema_version: "2.1"`。历史文件缺少 `listing_mode` 时按 `single` 读取，但不能因兼容读取被宣布已通过新版验收。所有 JSON 使用 UTF-8。
+本文是新增字段的唯一结构定义。已有单品字段继续有效；新生成内容使用 `schema_version: "2.1"`。每次只生成一个商品，多个商品使用独立任务目录；旧内容不能因可读取而被宣布通过当前验收。所有 JSON 使用 UTF-8。
 
 ## 产品画像：01_product_profile.json
 
 保留 `site/listing_language/listing_language_code/category/audience/materials/functions/scenes/specs/limitations/pain_points`。新增：
 
-- `listing_mode`: `single` 或 `family`。
 - `brand`: 用户品牌字符串或 null；不造品牌。
 - `product_identity`: `{original_name, canonical_name, protected_terms: [目标语言完整核心短语]}`。至少一个必保短语；比较只规范大小写、空白与连字符，不允许拆散名词短语。
-- `facts`: `[{fact_id, field, value, source_ref, status}]`。`status` 为 `confirmed/unknown/conflict`；根级 facts 是明确适用于全部子体的共性，单品则是本品事实。只有 confirmed 且有来源的事实能支持声明。
+- `facts`: `[{fact_id, field, value, source_ref, status}]`。`status` 为 `confirmed/unknown/conflict`；facts 仅记录本品事实。只有 confirmed 且有来源的事实能支持声明。
+- 适配机型用 `facts.field=compatible_models`，value 为完整机型字符串数组，每个字符串一个型号，不能用系列名、范围、通配符或省略号。可按系列／来源分多条事实，另加可选 `group_label`；保留 source_ref 和 confirmed/unknown/conflict。事实只能支持本品。confirmed 必须有非空完整数组与来源，未知／冲突使适配验收未完成。按[清单规则](../references/compatibility-lists.md)在可售商品五点列全确认型号，每条 claims 引用对应 fact_id；完整匹配允许大小写、全半角和连字符字形差异，不允许丢后缀。机器检查缺项／未引用，不证明兼容关系，也不能替代对照原件检查多写与漏录。
 - 购买数量事实使用 field=quantity/package_quantity/unit_count/pack_count/number_of_items，value 为正整数或正整数字符串，必须与配件数量分开。首版机器核对英文 2-Pack、2 count、2 pieces、Pack of 2、Set of 2、Quantity: 2 等表达的数值、范围及事实引用；图片数量声明须在 body_refs 正文引用同一数量事实。其他语言表达和画面实物数量仍需语义复审。随附配件数量用 field=accessory_count/included_quantity/component_count（confirmed 正整数），`4 pcs felt pads` 这类写法据此核对，且不能满足购买数量；`N pieces of <物品>` 视为配件描述，不按购买数量扫描。
 - `measurements`: `[{measurement_id, kind, subject, label, value, unit, source_ref, display_value?, display_unit?, display_text?, approximate?}]`。value 是原始十进制数字字符串；kind 为 `length/weight/volume/nominal/size`；subject 为 `product/package/fit`。label 标明 height/width/length/diameter 等。普通长度单位支持 mm/cm/m/in/ft。US：公制长度 <120 in 显示 in，否则 ft；公制重量 <1 lb 显示 oz，否则 lb；公制容量 <1 gal 显示 fl oz，否则 gal；来源已是英制时保留原单位（统一四舍五入到两位小数）。可选 `preferred_unit`（仅 US；长度 in/ft、重量 oz/lb、容量 fl oz/gal）强制展示单位。其他站点保留来源单位。公称规格和尺码不换算；禁止质量 oz 与容量 fl oz 混用。US 正文可写 `display_text (原值 原单位)`，括号内的原单位不视为泄漏。缺失值或单位不补造；需要表达的未知参数先补充资料。
-- `images`: `[{image_id, source, applies_to: ["all"] 或 [variant_id, ...]}]`。source 是用户素材路径/URL/附件定位；不能把单一子体素材标成全系列通用。
+- `images`: `[{image_id, source, applies_to: ["all"]}]`。source 是用户素材路径/URL/附件定位；只引用本品实际素材。
 - `forbidden_terms`: 用户禁用词数组，可为空。
 - `intent_map`: `[{relation, expression, fact_ids?, measurement_ids?, applies_to?}]`。relation 取 function/capability/activity/audience/location/season/body_part/companion/product_type/interest（COSMO 关系的精简映射）；expression 是目标语言的自然表达；引用必须 confirmed 且范围匹配（结构错误为 error）。表达未出现在任何可索引字段时给 warning `intent_unexpressed`；缺少 intent_map 给 warning。
 
-`family` 另加：
-
-- `parent_sku`: 字符串或 null。
-- `variation_dimensions`: 有序属性名数组，例如 `["color", "size"]`；用户给定顺序优先。
-- `variation_theme`: `{name, source_ref, status}`，status 为 `confirmed/unverified/conflict`。主题与类目支持情况及主题外差异仍需语义复审，不由代码枚举推断平台许可。
-- `appearance_assessment`: `{status: same/different/unknown, differences_only_size_or_quantity: boolean, source_ref}`。仅 status=same、differences_only_size_or_quantity=true 且来源非空，允许仅主图独立；缺少此证据按完整逐子体方案处理。不能用“只有一个颜色维度”代替视觉/资料证据。
-- `variants`: 按输入顺序排列的数组，每项 `{variant_id, sku, asin, attributes, facts, measurements, image_ids}`。variant_id 必须稳定且文件名安全（字母、数字、下划线、短横线）；缺 SKU/ASIN 用 null；不得生成未提供组合。
-- `attributes`: 属性名到 `{value, display, title_value, measurement_id?}` 的映射。value 保留原值，display 是用户可读的目标语言值，title_value 是标题插槽文本。尺寸属性可引用 measurement_id；经 normalize 后其 display/title_value 使用同一 display_text，不能复制首个子体的值。
-
-fact_id、measurement_id 和 image_id 在画像中全局唯一。子体有效事实及参数＝根级共性＋本子体记录；不允许引用其他子体的事实。未明确适用于全部子体的信息不能提升到根级。
+fact_id、measurement_id 和 image_id 在本品画像中唯一。所有 applies_to 固定为 `["all"]`，只表示本品；不得混用其他商品事实或素材。
 
 ## 关键词与问题：02—06
 
@@ -36,13 +27,14 @@ fact_id、measurement_id 和 image_id 在画像中全局唯一。子体有效事
 - `03_kw_filtered.json` 是原始词中 eligible 的字符串数组；`03_kw_removed.json` 是 excluded 的 `{keyword, reason, reason_code, keyword_id, applies_to}` 数组；新增 `03_kw_pending.json` 保存 deferred 并增加 `promotion_condition`。三者只由统一工具导出，补充词不混入原始词统计。
 - `03_keyword_validation.json` 保存当前检查结果；总验收与报告重算数据，不信任此文件的缓存 passed。
 - `04_kw_tagged.json` 保留原 keyword/label/reason；增加 `role`（identity/attribute/intent/synonym）、`intent_group`、`source`、`traffic_percentage`（未知为 null）、`applies_to`。旧 high/relevant 标签用于兼容，不决定核心品名优先级。该数组由统一工具导出，仅含 eligible 原始词及补充词，另有 keyword_id、origin=raw/product、searches、restrictions；未知流量为 null，0 保持真实的 0。
-- `05_title_keywords.json` 保留 `title_keywords: {high: [], relevant: []}` 供原 CLI；增加 `protected_terms`、`placement_plan: [{keyword, target_field, applies_to, reason}]`。这些是候选与实际投放安排，不是全部进标题的配额。title_keywords 同时是 QA 请求词，high+relevant 去重后 ≤ quality_policy.qa_max_keywords（8），超出时 backend_cli 本地拒绝且不发请求。最终 placement_plan 由 `keyword_quality.py coverage --write-placement` 按最终文案的完整短语位置生成（字段如 title、bullets[2]、shared_content.description、variants.<id>.title）。high/relevant 数组必须存在，placement_plan 非空并逐项填写 keyword/target_field/applies_to/reason；protected_terms 至少覆盖画像中的全部必保词。
+- `05_title_keywords.json` 保留 `title_keywords: {high: [], relevant: []}` 供原 CLI；增加 `protected_terms`、`placement_plan: [{keyword, target_field, applies_to, reason}]`。这些是候选与实际投放安排，不是全部进标题的配额。title_keywords 同时是 QA 请求词，high+relevant 去重后 ≤ quality_policy.qa_max_keywords（8），超出时 backend_cli 本地拒绝且不发请求。最终 placement_plan 由 `keyword_quality.py coverage --write-placement` 按最终文案的完整短语位置生成（字段如 title、bullets[2]、description）。high/relevant 数组必须存在，placement_plan 非空并逐项填写 keyword/target_field/applies_to/reason；protected_terms 至少覆盖画像中的全部必保词。
+- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录实际标题词、指标来源与选择／取舍；item_highlight 说明包装数量及事实依据，未知时说明缺口；bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
 - `06_qa.json` 保留 status/site/qa_pairs。US 原始响应先存 `06_qa.raw.json`，再补充 `requested_keywords`、`question_reviews: [{question, keyword, relevance: relevant/irrelevant/uncertain, fact_ids, applies_to, disposition: answered/unsupported/excluded}]`。保留原问题，不把自行整理的问题混充后端返回；不相关或无本品证据的问题不用于声称功能。非 US 用 status=skipped、reason_code=rufus_us_only、qa_pairs=[]。
 - US 本次未采集时用 `status=unavailable` 和明确 `reason`，上述三个数组均为空；验收为 incomplete，不把未采集标成已完成，也不伪造请求关键词。实际请求失败时另外保留原始错误和请求记录，不能用此状态掩盖已返回的问题。
 
 ### 用户表格导入结构（import_schema_version: "1.0"）
 
-`00_product_input.json.keyword_files` 记录全部用户输入文件的绝对路径；先确认目标站点及表格的站点/日期含义。`01_product_profile.json` 不要求竞品 asins；子体 ASIN 保持可选。
+`00_product_input.json.keyword_files` 记录全部用户输入文件的绝对路径；先确认目标站点及表格的站点/日期含义。`01_product_profile.json` 不要求竞品 asins；本品 SKU／ASIN 按用户资料保留，可为空。
 
 命令：`python3 scripts/import_keywords.py --files FILE1.xlsx FILE2.csv --site SITE --run-dir RUN`。可选 `--sheet NAME`（可重复）、`--keyword-column LABEL`、`--searches-column LABEL` 和 CSV/TSV 的 `--encoding`。工具不使用凭据、不调用网络，也不执行 CLI parse-keywords。旧 XLS 需先转换为 XLSX。
 
@@ -80,15 +72,15 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 - `reason_code` 对应当前 `decision`：eligible 使用 identity/attribute/intent/synonym；deferred 使用 ambiguous_intent/unknown_fact/seasonal_unconfirmed/identity_conflict；excluded 使用 product_mismatch/fact_conflict/user_restriction/unusable_query。该代码不是机器自动分类结果。
 - `reason/query_intent/evidence/reviewer`：非空字符串，分别解释当前分类的具体理由、完整搜索意图、本品证据及真实执行者。不得只写“无关”“白名单外”或通用套话。
 - `role`：identity/attribute/intent/synonym；`label`：high/relevant；`intent_group`：同意图分组。组内不同分类时，每项补 `group_difference` 说明真实差异；不应以另建同义组掩盖冲突。
-- `fact_ids/measurement_ids`：无重复引用数组；仅限全系列共性和对应子体；`identity_basis` 为布尔值，仅在产品身份本身足以支持相关性时填写 true。eligible 引用的事实必须 confirmed 且有 source_ref，属性词必须引用已确认事实/规格，不能只用产品名称作证。
-- `applies_to`：["all"] 或已提供的子体编号数组；`restrictions`：使用限制字符串。包含子体专属事实的词不能扩大为全系列。
+- `fact_ids/measurement_ids`：无重复引用数组；仅限本品事实和规格；`identity_basis` 为布尔值，仅在产品身份本身足以支持相关性时填写 true。eligible 引用的事实必须 confirmed 且有 source_ref，属性词必须引用已确认事实/规格，不能只用产品名称作证。
+- `applies_to`：固定 `["all"]` 表示本品；`restrictions`：使用限制字符串。
 - `promotion_condition`：deferred 必填，说明疑点与晋级所需事实；已审查的 deferred 可以留档，不使审查阶段失败。核心品名明确冲突时用 identity_conflict 暂缓，并保持未完成，不能静默丢弃。
 - `resolution`：初次与当前分类不同时必填；保留原初次判断，且同步更新当前 reason_code/reason/evidence。可用 initial_reason 另行保存旧理由，不用旧理由导出当前词池。`matched_terms` 为可选的完整词/短语命中证据数组，只校验词边界，不决定相关性。
 
 意图组判定（新增，不替代逐词账本）：`keyword_quality.py apply --run-dir RUN --groups FILE`，FILE 为
 `{"reviewer": "...", "groups": {"组id": {decision, reason_code, reason, query_intent, evidence, role, label, fact_ids, measurement_ids?, identity_basis?, applies_to, promotion_condition?, restrictions?, keywords: [原词或 keyword_id]}}, "overrides": {"原词或 keyword_id": {要单独改写的字段, group_difference, resolution?}}}`。
 工具把组字段复制到每个成员（intent_group=组id、reviewer、initial_decision 为空时取 decision），未列出的词保持不变，可分批执行；未知词或一个词进入两个组时报错且不写入。之后 check 的全部逐词规则照常生效。`03_keyword_view.tsv` 是只读紧凑表（keyword/searches/traffic_pct/sources/purchase_rate/best_rank/decision/group/cluster/origin），按搜索量、覆盖竞品数、购买率排序，由 prepare/view/apply 生成；指标缺失时为空，只用于阅读和排序。`view --clusters` 另写 `03_keyword_clusters.json`（`{raw_sha256, clusters: [{cluster_id, head, keyword_ids, searches_total}]}`）：head 是被至少 3 个其他查询包含、且本身也是查询的短语（不超过 4 词），每个查询归入它包含的最长 head，没有 head 时按末词归组。这只是词面候选分组。groups 的 keywords 可以写 `"@c001"` 引用整组（要求 raw_sha256 与当前 02 一致），用 `except` 排除个别词；分类仍由逐组语义判断决定，全部逐词检查不变。
-画像在筛词后被修改时运行 `rebind`：原词变化则拒绝；否则列出引用了变化事实（或身份、禁用词、子体变化相关）的词，核对后 `rebind --reviewed` 重新绑定；无受影响词时直接绑定。
+画像在筛词后被修改时运行 `rebind`：原词变化则拒绝；否则列出引用了变化事实（或身份、禁用词变化相关）的词，核对后 `rebind --reviewed` 重新绑定；无受影响词时直接绑定。
 
 事实冲突不能引用 unknown/conflict 事实作为已证实反证。user_restriction 必须对应画像中用户明确提供的 forbidden_terms；不能自造禁词。unusable_query 只用于没有有效文字或数字的查询，有有效内容时先修复或暂缓判断。
 
@@ -96,85 +88,63 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 三个词池和 04 标注只从当前 decision、reason、reason_code 导出；改变分类时的初次判断与 resolution 保留追溯。自动统计：原始记录数＝唯一词数＋重复记录数；唯一词数＝eligible＋deferred＋excluded；补充词另计。完整任务的关键词阶段还校验导出一致性、05 候选/投放范围、QA 请求词和后台中的完整暂缓/剔除词组。较短歧义短语被有依据的完整词组覆盖时不按子串误伤。
 
-自然正文、图片和后台倒装表达的语义由最终 `keyword_usage` 复审负责，核对实际采用的词及相关同意图表达，不要求将全部未采用或剔除词再审一遍。该复审不通过词袋交集自动认定违规，也不能用程序检查代替语义复核。最终语义复审额外保存 `keyword_fingerprints`，绑定原词、分类和 05 投放计划；修改这些文件后须重新复审关键词使用。
+自然正文、图片和后台倒装表达的语义由最终 `keyword_usage` 复审负责，核对实际采用的词及相关同意图表达，不要求将全部未采用或剔除词再审一遍。field_layout 另按新版字段分工逐项复审词位、包装数量、五点开头和规格落点；该复审不通过词袋交集自动认定违规，也不能用程序检查代替语义复核。最终语义复审额外保存 `keyword_fingerprints`，绑定原词、分类和 05 投放计划；修改这些文件后须重新复审关键词使用与字段布局。
 
 ## 最终内容：07_listing.json
 
-公共字段：schema_version、listing_mode、site、listing_language、listing_language_code、brand_name（字符串或 null）、buyer_question_coverage（数组）、excluded_claims（字符串数组）、attribute_suggestions（数组）。
+公共字段：schema_version、site、listing_language、listing_language_code、brand_name（字符串或 null）、buyer_question_coverage（数组）、excluded_claims（字符串数组）、attribute_suggestions（数组）。
 
 `attribute_suggestions` 每项 `{attribute, value, fact_ids, measurement_ids?, applies_to?, note?}`：后台结构化属性建议（item type、material、target audience、intended use、special feature、included components、number of items 等），值必须引用 confirmed 事实或规格；缺字段给 warning。buyer_question_coverage 少于 6 项给 warning `question_matrix_thin`（5W1H + 品类常见问题）。
 
 `buyer_question_coverage` 每项 `{question, status, location, source?}`；status 使用 covered/partially_covered/not_claimed/not_applicable。location 用中文说明真实覆盖字段或未主张原因。自行整理的问题标 source=local_editorial，不包装成已采集问答。
 
-单品继续使用顶层 `title/item_highlight/bullets/description/search_terms`；item_highlight 永远是字符串，bullets 是 5 条 `【大写卖点标签】正文` 字符串，无大小写文字的语言不强行大写。另加 claims、image_plan、a_plus_plan、media_strategy、image_sets。
-
-系列结构：
-
-- `parent`: `{sku, title, item_highlight, claims}`；父体不制造五点来满足单品后端校验。
-- `title_template`: 一个目标语言模板，例如 `ACME Cotton T-Shirt, {color}, {size}`。每个变体维度恰有一个插槽，顺序同 variation_dimensions；普通共同文本保持一致。
-- `shared_content`: `{bullets, description, search_terms}`，只包含全系列成立的信息。
-- `variants`: 按输入顺序，每项 `{variant_id, sku, attributes, title, item_highlight, content_overrides, claims}`。这里 attributes 是属性名到目标语言 title_value 字符串的映射，必须与画像一致；content_overrides 只能覆盖 bullets/description/search_terms，数组整项替换。缺少覆盖项继承 shared_content。
-- `image_plan` 和 `a_plus_plan`: 根级完整图片/模块策划，分组及复用通过 image_sets 表达；不将完整图片数组塞入每个子体。
-
-子体 title 必须等于 title_template 按其 title_value 填入的结果；共同品名不得因子体不同而换词。父标题是无变体值的共同商品描述，不必机械复制某个子标题。父标题禁价格、库存和具体包装数量；父标题及 Highlight 不得泄漏具体变体值。数字材质如 304 不应被一概删除。
+单品继续使用顶层 `title/item_highlight/bullets/description/search_terms`；item_highlight 永远是字符串，bullets 是 5 条 `【相关搜索词／主题标签】正文` 字符串，开头自然承接相关可用词，正文展开事实，不强行大写。适配型耗材通常连续2–3条按系列列全已确认机型（短名单可1条），不强求五个不同主题。普通材质尺寸默认在其余五点正文，小标题优先真实数量与组成；标题／小标题分别 ≤75／125 字符，含空格。另加 claims、image_plan、a_plus_plan。
 
 ### 声明与图片引用
 
-每个单品、父体或子体的 `claims` 是数组：`{field, fact_ids: [], measurement_ids: []}`。field 支持 title、item_highlight、bullets[0] 至 bullets[4]、description、search_terms；子体引用的是继承后完整内容。每个前台文本字段至少有一个声明记录，允许无可核查数值的场景文字用空引用并由语义复审说明；非空引用必须属于对应子体且已确认。含规格的字段记录 measurement_ids 并复用 display_text，保持维度标签；后台搜索词不强制声明记录。
+本品 `claims` 是数组：`{field, fact_ids: [], measurement_ids: []}`。field 支持 title、item_highlight、bullets[0] 至 bullets[4]、description、search_terms。每个前台文本字段至少有一个声明记录，允许无可核查数值的场景文字用空引用并由语义复审说明；非空引用必须属于本品且已确认。含规格的字段记录 measurement_ids 并复用 display_text，保持维度标签；后台搜索词不强制声明记录。
 
-### 图片集合与复用
+### 图片和 A+ 策划
 
-新输出仅写 `a_plus_plan`；旧 `aplus_plan` 可读取。两字段同时存在且相同可兼容读取，不同时明确报错，不能默默择一。示例旧字段 image/direction/selling_point 及 module/direction 保留，新增证据字段不改变可读说明。
+新输出使用 `image_plan` 和 `a_plus_plan` 两个直接数组，不需要额外的方案分组或参数替换层。每个 plan_id 唯一，不能重复创意虚增数量。
 
-- `media_strategy`: single/per_variant_full/shared_secondary。
-- `image_sets`: `{shared: {main: plan_id, secondary: [6 个 plan_id], a_plus: [plan_id, ...]}, variants: [{variant_id, main: plan_id, secondary: [6 个 plan_id]}]}`。引用必须存在、角色匹配、无重复；所有根级创意必须归入对应方案，不能隐藏遗漏或额外方案。
-- single：shared 为唯一 1 主图＋6 附图＋至少 5 张 A+ 图片，variants=[]。
-- family：shared 始终包含完整 1＋6＋至少 5 张 A+ 图片，variants 与画像的实际子体顺序完全一致。per_variant_full 每个子体引用独立 1＋6；shared_secondary 每子体独立 main、secondary 逐项引用 shared.secondary。不存在子体 a_plus 字段，所有子体使用 shared.a_plus。
-- shared_secondary 需要画像中明确的 appearance_assessment 证据；颜色、图案、造型不同或不能确认外观相同，使用 per_variant_full。共用主图表达统一构图，不能把全系列不同商品画成同一个购买套装。
-- A+ 默认 5 张图片，有明确需要可以增加。asset_type=text 的 FAQ 等文字模块不计入 5 张图片。总数由唯一创意及分组引用计算，不将重复引用虚算为新的创意。
-
-每个 image_plan/a_plus_plan 项：
-
-`{plan_id, role, image? 或 module?, direction, applies_to, buyer_question, selling_point, visual_evidence, scene_intent, overlay_text, native_text?, fact_ids, measurement_ids, source_image_ids, body_refs, mobile_check, production_notes, status?, asset_type?, variant_bindings?}`。
-
-- role：main/secondary/aplus；applies_to 为 ["all"] 或明确 variant_id 列表，单品使用 ["all"]。
-- image_plan 各组 image 从“图1（主图）”到“图7（主题）”顺序编号；每组重新编号，plan_id 仍全局唯一。a_plus_plan 使用 module=“模块N：主题”和 asset_type=image/text；direction 是中文画面或模块组织说明，不能只写内部编号。
-- status 可为 ready/pending，默认 ready 仅表示策划已具备依据；pending 必须在 production_notes 说明缺少的事实或素材，并保持验收未完成。不能以 ready 覆盖缺素材或引用失败；未生成实图不能写成已验收成图。
-- overlay_text 是图片嵌字的目标站点语言字符串；native_text 是可选的 A+ 原生模块文字，缺省为空，避免为兼容字段把原生文字烧入图片。主图两种文案均为空；其他策划说明中文。A+ 参数可在 native_text 或 overlay_text 中准确表达。
-- body_refs 使用与 claims.field 相同的定位，指向该图适用子体解析后的正文。关键参数必须在对应正文中也有表达和引用。
-- 共同图本体只能引用根级共性及通用素材。子体图引用对应子体；需要图片但解析后 source_image_ids 为空时保留缺口并使验收 incomplete，production_notes 明确需要补拍什么。纯文字模块不要求实物图片素材。
-- 共用构图可添加 `variant_bindings: [{variant_id, fact_ids, measurement_ids, source_image_ids, body_refs, overlay_text, native_text?, direction?, visual_evidence?, production_notes?, status?}]`。一旦提供绑定，必须按画像输入顺序完整提供所有子体，不遗漏、重复或新增组合。每项以本子体字段替换模板对应字段，不把兄弟子体引用合并为共同事实。
-- 每个绑定必须显式填写 fact_ids/measurement_ids/source_image_ids/body_refs/overlay_text；引用限根级加本子体，尺寸和数量分别绑定自己的事实、单位及正文。可选文字字段未写时继承模板。模板采用绑定时允许本体素材留空，但逐绑定解析结果必须各自具备适用素材。
-- 复用方案不复制整套创意，仍完整展示 SKU/内部编号、真实属性和每张图的替换参数、素材及上图文案。关键尺寸/数量只进入对应子体图文；不能把单一容量写成全系列参数。
-- 移动端可读性、画面事实和场景合理性由语义复审检查。引用检查只验证范围与数值，不证明营销承诺成立。
+- `image_plan`：按顺序 1 张主图＋6 张附图，role=main/secondary，image 从“图1（主图）”到“图7（主题）”连续编号。
+- `a_plus_plan`：至少 5 张图片，可附文字 FAQ 等模块；role=aplus，asset_type=image/text，module 为“模块N：主题”，连续编号。纯文字模块不计入图片数量。
+- 各项结构：`{plan_id, role, image? 或 module?, direction, applies_to, buyer_question, selling_point, visual_evidence, scene_intent, overlay_text, native_text?, fact_ids, measurement_ids, source_image_ids, body_refs, mobile_check, production_notes, status?, asset_type?}`。
+- applies_to 固定 `["all"]`。direction、画面证据、制作说明等用中文；overlay_text 是日文嵌字，native_text 是可选日文 A+ 原生文案，缺省为空。主图两种文案均为空。
+- status 为 ready/pending；ready 只表示策划依据具备。缺事实或素材时用 pending 并在 production_notes 说明，验收保持 incomplete；不能宣称已验收不存在的成图。
+- fact_ids、measurement_ids 和 source_image_ids 只引用本品资料。需要实物图但 source_image_ids 为空时保留缺口并使验收 incomplete；纯文字模块不要求实物素材。
+- body_refs 定位本品的 title、item_highlight、bullets[0] 至 bullets[4]、description。图文参数复用 measurement.display_text，并在对应正文中表达和引用同一规格／数量事实。
+- mobile_check 写清手机阅读的文字量、字号层次、主体比例等要求。引用检查只验证已登记数值和范围，语言、画面、场景与兼容性事实仍需语义复审。
+- 旧 `aplus_plan` 别名仍可读取；与 a_plus_plan 同时存在但不一致时明确报错。
 
 ## 验收与后端适配
 
-- `08_semantic_review.json`: 复审记录。新版写 `target_fingerprints`（每个 target 与 media 依赖内容的规范 JSON SHA-256；重新格式化文件不失效）和 `carried_over`；review-template 遇到已有复审文件时保留内容未变 target 的结论（keyword_usage 还要求关键词指纹未变），只把变化的 target 置为 pending（--fresh 可全部重置）。旧版只有文件级 fingerprints 时按文件 SHA-256 绑定。目标为 single 或 parent＋各 variant_id，另含 media。每项 `{target, check, status: pass/fail/not_applicable/pending, evidence}`。文本检查 identity/readability/factual_support/language/variant_scope/qa_relevance/keyword_usage；media 检查 image_truth。not_applicable 需要原因；pending/fail 或缺项不能交付通过。不得为了过关机械填 pass。
-- `08_backend_validation.json`: `{records: [{target, payload_sha256, exit_code, response, reused}]}`；重跑 backend 时，payload 未变且已通过的子体沿用旧记录（reused=true），--no-reuse 强制全部请求。target 为 single 或具体 variant_id；response 保留后端 JSON，仅 `ok=true` 且 `errors=[]`、退出码为 0 才通过。父节点只本地检查。响应或 payload 指纹缺失/过期不通过。
+- `08_semantic_review.json`: 复审记录。新版写 `target_fingerprints`（每个 target 与 media 依赖内容的规范 JSON SHA-256；重新格式化文件不失效）和 `carried_over`；review-template 遇到已有复审文件时保留内容未变 target 的结论（keyword_usage、field_layout 还要求关键词指纹未变），只把变化的 target 置为 pending（--fresh 可全部重置）。旧版只有文件级 fingerprints 时按文件 SHA-256 绑定。目标仅 single 和 media。每项 `{target, check, status: pass/fail/not_applicable/pending, evidence}`。文本检查 identity/readability/factual_support/language/qa_relevance/keyword_usage/field_layout/compatibility_models；media 检查 image_truth。not_applicable 需要原因；pending/fail 或缺项不能交付通过。compatibility_models 按原始适配资料核对画像录入及五点的完整性、额外机型、后缀、分组、来源和本品一致性；无适配需求可说明原因记 not_applicable，待核实清单不能冒充不适用。不得为了过关机械填 pass。
+- `08_backend_validation.json`: `{records: [{target, payload_sha256, exit_code, response, reused}]}`；重跑 backend 时，本品 payload 未变且已通过时沿用旧记录（reused=true），--no-reuse 强制重新请求。target 固定为 single；response 保留后端 JSON，仅 `ok=true` 且 `errors=[]`、退出码为 0 才通过。响应或 payload 指纹缺失/过期不通过。
 - `08_validation.json`: 汇总本地、关键词审查、语义、后端检查（local/keywords/semantic/backend）；`status` 为 passed/failed/incomplete；fingerprints 绑定 profile/listing/qa 原文件 SHA-256，evidence_fingerprints 的 review_sha256/backend_sha256 绑定复审与后端文件的规范 JSON SHA-256，keywords_sha256 绑定重新计算的关键词阶段结果 SHA-256（UTF-8、ensure_ascii=False、sort_keys=True、separators=(',',':')）。报告核对原验收文件存在且指纹匹配；缺失、过期为 incomplete，不以生成了文件代替完成。
 
-`07_keyword_coverage.json`（`keyword_quality.py coverage` 生成，仅供优化参考，不参与验收）：每个可售 target 的可用词数、完整短语覆盖、词级覆盖（大小写与简单英文复数折叠）、按搜索量加权覆盖率、未覆盖高流量词、标题覆盖前 10 词、后台词字节/预算/与标题重复词、暂缓或剔除词的完整短语命中；intent_map 表达位置；按搜索量排序的 fact_unlocks（暂缓词晋级条件）与 unsupported 问题。
+`07_keyword_coverage.json`（`keyword_quality.py coverage` 生成，仅供优化参考，不参与验收）：本品 target=single 的可用词数、完整短语覆盖、词级覆盖（大小写与简单英文复数折叠）、按搜索量加权覆盖率、未覆盖高流量词、标题覆盖前 10 词、后台词字节/预算/与标题重复词、暂缓或剔除词的完整短语命中；field_layout 列出标题／小标题字符数、可用前十词的标题零基精确位置（缺失为 null）、每条五点前 80 字符及精确短语命中（不代表同义表达无效或算法权重）；intent_map 表达位置；按搜索量排序的 fact_unlocks（暂缓词晋级条件）与 unsupported 问题。
 
-本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing、question_matrix_thin。error：title_banned_character（品牌名中的除外）、search_bytes（按站点预算：IN 199、JP 499、其他 249）。
+本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing、question_matrix_thin、compatibility_list_length（已确认型号超普通预算，原文仍须过真实后端／类目检查）。compatibility_unconfirmed 为 incomplete。error：compatibility_model_missing、compatibility_unreferenced、compatible_models_shape、title_banned_character（品牌名中的除外）、search_bytes（按站点预算：IN 199、JP 499、其他 249）。
 
 本地工具命令统一使用 `python3 scripts/listing_quality.py`：
 
 1. `normalize --profile FILE --output FILE`：计算展示值并输出画像（允许原位原子替换）。
 2. `check --profile FILE --listing FILE [--qa FILE] [--review FILE] [--backend FILE] --output FILE`：只检查，不自动改文案；缺验收为 incomplete，退出非零。
-3. `prepare --profile FILE --listing FILE --output-dir DIR`：检查可确定的结构后，导出逐子体现有格式 payload 与 manifest；不向后端发送嵌套 family。
+3. `prepare --profile FILE --listing FILE --output-dir DIR`：检查可确定的结构后，导出 single.json 与 manifest.json，不发送请求。
 4. `review-template --profile FILE --listing FILE [--qa FILE] --output FILE`：生成绑定指纹的 pending 清单，供独立语义复审填写。
-5. `backend --profile FILE --listing FILE [--cli CLI_PATH] [--config FILE] [--timeout SECONDS] --output FILE`：逐个投影单品 payload，通过 backend_cli.py 统一读取配置并调用原 CLI validate；无需调用者设置环境变量。捕获脱敏业务 JSON 及原进程退出码；启动/配置错误的 exit_code 为 null，并附 error_code、failure_reason。默认超时 120 秒。配置和二进制内容不修改。
+5. `backend --profile FILE --listing FILE [--cli CLI_PATH] [--config FILE] [--timeout SECONDS] --output FILE`：生成本品单一 payload，通过 backend_cli.py 统一读取配置并调用原 CLI validate；无需调用者设置环境变量。捕获脱敏业务 JSON 及原进程退出码；启动/配置错误的 exit_code 为 null，并附 error_code、failure_reason。默认超时 120 秒。配置和二进制内容不修改。
 
 后端统一入口 `python3 scripts/backend_cli.py`：
 
 - `qa --keywords-file FILE --site US --output FILE`：仅从 CLI 的完整临时输出读取 JSON，脱敏后原子写入原有结构，不把终端摘要当作原始数据；title_keywords 超过 8 个时本地拒绝且不发请求。本表格版不提供 expand，原词用 import_keywords.py 导入。
-- `validate --listing-file FILE --site SITE [--output FILE]`：原 CLI 单品接口；无 output 时返回的安全摘要含 response。系列统一使用上述 listing_quality.py backend 完成逐子体投影。
+- `validate --listing-file FILE --site SITE [--output FILE]`：原 CLI 单品接口；无 output 时返回的安全摘要含 response。本品验收使用上述 listing_quality.py backend。
 - 两个命令均可选 --config、--cli、--timeout；凭据只能从配置文件读取，无环境变量回退或 token 命令行参数。默认配置相对 Skill 定位，不依赖工作目录；自动选择本 Skill tools/bin 中的 laochen-cli-v2 平台文件。
 - 非零进程退出、无有效 JSON、超时和显式业务失败均返回非零；validate 仍要求 ok=true 且 errors=[]。进程已执行时保留真实 exit_code，未执行/未正常返回时为 null。错误响应可留档，不代表验收通过；无新有效响应时旧文件不覆盖、不视为本次结果。原始进程日志不透传。
 
 报告工具 `python3 scripts/render_listing.py --run-dir DIR` 从同一 JSON 生成 07_listing.md 与 report.html。
 
-- Markdown 单品依次为 Title、Item Highlight、Bullet Points、Description、Search Terms、附图策划、A+ 整体策划、买家问题覆盖清单。系列先父体与全部子体标题/Highlight，再共用正文及差异；图片策划按共用方案、逐子体方案展开。只显示文案、中文创意说明和必要替换信息，不放 claims、画像、指纹、校验 JSON。
-- HTML 严格保持示例的报头、摘要漏斗、七个章节和白底 Listing 文档卡片；父子体、完整图片创意与复用关系用标题和自然段展开。禁止新增导航条、验收面板、原始 JSON 或逐图技术字段列表；图片保留画面说明、目标语言文案及必要的制作前待确认事项。技术引用和完整验收记录存入内嵌 JSON，摘要仅显示简短状态；缺失或旧版校验不能标通过。HTML 的简洁展示不删改结构化 JSON 或 Markdown 的内容。
+- Markdown 单品依次为 Title、Item Highlight、Bullet Points、Description、Search Terms、附图策划、A+ 整体策划、买家问题覆盖清单。只显示文案、中文创意说明和必要产品信息，不放 claims、画像、指纹、校验 JSON。
+- HTML 保持示例的报头、摘要漏斗、七个章节和白底 Listing 文档卡片；标题与灰字小标题在同一预览区域依次展示，下附各自字符计数，不将两段合并；完整图片创意用标题和自然段展开。禁止新增导航条、验收面板、原始 JSON 或逐图技术字段列表；图片保留画面说明、目标语言文案及必要的制作前待确认事项。技术引用和完整验收记录存入内嵌 JSON，摘要仅显示简短状态；缺失或旧版校验不能标通过。HTML 的简洁展示不删改结构化 JSON 或 Markdown 的内容。
 - 最终固定链接 07_listing.md、07_listing.json、report.html 三份文件；中间采集/校验文件保留追溯，不另建“文案预览”。

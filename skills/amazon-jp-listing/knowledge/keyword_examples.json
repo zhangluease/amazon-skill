@@ -88,12 +88,6 @@
       "keyword": "halloween black cat decor",
       "expected": "eligible",
       "reason": "只在完整词匹配且有真实用途依据时晋级；不自动救回所有季节词。"
-    },
-    {
-      "change": "同系列有红色与蓝色子体",
-      "keyword": "blue cat door topper",
-      "expected": "eligible_for_blue_only",
-      "reason": "不能投放到父体、全系列共用正文或红色子体。"
     }
   ],
   "classification_correction_example": {

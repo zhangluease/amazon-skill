@@ -12,12 +12,14 @@ import importlib.util
 import json
 import os
 import re
-import string
 import sys
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from pathlib import Path
+
+from listing_scope import require_single_product
 
 _BACKEND_SPEC = importlib.util.spec_from_file_location("listing_backend_cli", Path(__file__).with_name("backend_cli.py"))
 backend_cli = importlib.util.module_from_spec(_BACKEND_SPEC)
@@ -25,8 +27,8 @@ _BACKEND_SPEC.loader.exec_module(backend_cli)
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "quality_policy.json"
 TEXT_FIELDS = ("title", "item_highlight", "description", "search_terms")
-CONTENT_FIELDS = ("bullets", "description", "search_terms")
 FRONT_FIELDS = ("title", "item_highlight") + tuple("bullets[%d]" % i for i in range(5)) + ("description",)
+KEYWORD_REVIEW_CHECKS = ("keyword_usage", "field_layout")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 LENGTH_UNITS = {"mm", "cm", "m", "in", "ft"}
 UNIT_ALIASES = {"inch": "in", "inches": "in", '"': "in", "centimeter": "cm",
@@ -93,6 +95,41 @@ def _contains(text, phrase):
     return bool(phrase) and re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", _norm(text)) is not None
 
 
+MODEL_DASHES = "-‐‑‒–—−－"
+MODEL_BOUNDARY = r"A-Za-z0-9Ａ-Ｚａ-ｚ０-９_.+＿．＋\-‐‑‒–—−－"
+
+
+def normalize_model(value):
+    return unicodedata.normalize("NFKC", value).translate(str.maketrans({c: "-" for c in MODEL_DASHES})).upper()
+
+
+def model_pattern(models):
+    """Match intact model IDs, accepting width/case/dash variants, never prefixes.
+
+    Match original text so editorial length checks do not normalize or rewrite prose.
+    """
+    alternatives = []
+    for model in sorted(set(models), key=len, reverse=True):
+        characters = []
+        for char in normalize_model(model):
+            if char == "-":
+                characters.append("[" + re.escape(MODEL_DASHES) + "]")
+            elif "!" <= char <= "~":
+                characters.append("[" + re.escape(char + chr(ord(char) + 0xFEE0)) + "]")
+            else:
+                characters.append(re.escape(char))
+        alternatives.append("".join(characters))
+    return re.compile(r"(?<![" + MODEL_BOUNDARY + r"])(?:" + "|".join(alternatives)
+                      + r")(?![" + MODEL_BOUNDARY + r"])", re.I) if alternatives else None
+
+
+def valid_model_list(value):
+    return (isinstance(value, list) and bool(value)
+            and all(isinstance(model, str)
+                    and re.fullmatch(r"(?=[A-Z0-9._+-]*[A-Z])(?=[A-Z0-9._+-]*[0-9])[A-Z0-9][A-Z0-9._+-]*",
+                                     normalize_model(model)) for model in value))
+
+
 INTENT_RELATIONS = ("function", "capability", "activity", "audience", "location", "season", "body_part",
                     "companion", "product_type", "interest")
 TITLE_REPEAT_EXEMPT = {
@@ -112,17 +149,6 @@ def _words(text):
 def _has_lowercase(text):
     # German ß (and similar letters) has no single-character capital in Python; it is allowed.
     return any(ch != ch.upper() and len(ch.upper()) == 1 for ch in text)
-
-
-def _strip_phrases(text, phrases):
-    """Blank out intact protected phrases so their words are not read as variant values."""
-    result = _norm(text)
-    for phrase in sorted((_norm(p) for p in phrases if isinstance(p, str) and p.strip()), key=len, reverse=True):
-        if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", phrase):
-            result = result.replace(phrase, " | ")
-        else:
-            result = re.sub(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", " | ", result)
-    return result
 
 
 def _decimal_text(value):
@@ -196,74 +222,29 @@ def _measurement_display(record, site):
 
 
 def normalize_profile(profile):
-    """Return a copy with stable missing IDs and deterministic measurement displays.
-
-    Invalid/missing units raise ValueError, leaving the source untouched. Original
-    values and units are retained; no product facts or variant combinations added.
-    """
-    if not isinstance(profile, dict):
-        raise ValueError("profile must be an object")
+    """Copy one product and calculate sourced measurement display values."""
+    require_single_product(profile)
     result = copy.deepcopy(profile)
-    result.setdefault("listing_mode", "single")
-    if result["listing_mode"] not in ("single", "family"):
-        raise ValueError("profile.listing_mode must be single or family")
+    result.pop("listing_mode", None)
     site = result.get("site")
     if site not in load_json(POLICY_PATH)["sites"]:
         raise ValueError("profile.site must name a supported site")
-    variants = _list(result.get("variants")) if result["listing_mode"] == "family" else []
-    used_ids = {v.get("variant_id") for v in variants if isinstance(v, dict) and isinstance(v.get("variant_id"), str)}
-    for index, variant in enumerate(variants):
-        if not isinstance(variant, dict):
-            raise ValueError("variant must be an object")
-        if not variant.get("variant_id"):
-            number = index + 1
-            candidate = "child-%02d" % number
-            while candidate in used_ids:
-                number += 1
-                candidate = "child-%02d" % number
-            variant["variant_id"] = candidate
-            used_ids.add(candidate)
-        variant.setdefault("sku", None)
-        variant.setdefault("asin", None)
-    global_measurements = {}
-    for owner in [result] + variants:
-        for measurement in _list(owner.get("measurements")):
-            if not isinstance(measurement, dict):
-                raise ValueError("measurement must be an object")
-            mid = measurement.get("measurement_id")
-            if not isinstance(mid, str) or not mid or mid in global_measurements:
-                raise ValueError("measurement_id must be present and globally unique")
-            measurement.update(_measurement_display(measurement, site))
-            global_measurements[mid] = measurement
-    root_ids = {m.get("measurement_id") for m in _list(result.get("measurements"))}
-    for variant in variants:
-        allowed = root_ids | {m.get("measurement_id") for m in _list(variant.get("measurements"))}
-        for attribute in _dict(variant.get("attributes")).values():
-            if not isinstance(attribute, dict):
-                raise ValueError("profile attributes must be objects")
-            if attribute.get("measurement_id"):
-                mid = attribute["measurement_id"]
-                if mid not in allowed:
-                    raise ValueError("attribute references a missing or another child's measurement")
-                attribute["display"] = global_measurements[mid]["display_text"]
-                attribute["title_value"] = global_measurements[mid]["display_text"]
+    seen = set()
+    for measurement in _list(result.get("measurements")):
+        if not isinstance(measurement, dict):
+            raise ValueError("measurement must be an object")
+        mid = measurement.get("measurement_id")
+        if not isinstance(mid, str) or not mid or mid in seen:
+            raise ValueError("measurement_id must be present and unique")
+        measurement.update(_measurement_display(measurement, site))
+        seen.add(mid)
     return result
 
 
 def resolved_listings(profile, listing):
-    """Return [(target, complete_single_content)] in input order (never Cartesian)."""
-    if profile.get("listing_mode", "single") != "family":
-        return [("single", copy.deepcopy(listing))]
-    result = []
-    for variant in _list(listing.get("variants")):
-        if not isinstance(variant, dict):
-            continue
-        content = {key: listing.get(key, profile.get(key)) for key in ("site", "listing_language", "listing_language_code")}
-        content.update(copy.deepcopy(_dict(listing.get("shared_content"))))
-        content.update({key: copy.deepcopy(value) for key, value in _dict(variant.get("content_overrides")).items() if key in CONTENT_FIELDS})
-        content.update({key: copy.deepcopy(variant.get(key)) for key in ("title", "item_highlight", "claims")})
-        result.append((variant.get("variant_id"), content))
-    return result
+    """One complete Listing; never merge content from other products."""
+    require_single_product(profile, listing)
+    return [("single", copy.deepcopy(listing))]
 
 
 def build_payloads(profile, listing):
@@ -290,93 +271,28 @@ def _field(content, field):
     return None
 
 
-def check_media_sets(profile, listing, plans, add):
-    """Check creative ownership/counts separately from each resolved image's facts."""
-    mode = profile.get("listing_mode", "single")
-    ids = [v.get("variant_id") for v in _list(profile.get("variants")) if isinstance(v, dict)] if mode == "family" else []
-    strategy = listing.get("media_strategy")
-    allowed = ("single",) if mode == "single" else ("per_variant_full", "shared_secondary")
-    if strategy not in allowed:
-        add("media_strategy", "listing.media_strategy", "Select single, per_variant_full, or confirmed shared_secondary for this product mode")
-    if strategy == "shared_secondary":
-        assessment = _dict(profile.get("appearance_assessment"))
-        if (assessment.get("status") != "same" or assessment.get("differences_only_size_or_quantity") is not True
-                or not isinstance(assessment.get("source_ref"), str) or not assessment["source_ref"].strip()):
-            add("media_reuse_evidence", "profile.appearance_assessment", "Sharing secondary creatives requires sourced confirmation of identical appearance with only size/quantity differences")
-    sets = listing.get("image_sets")
-    if not isinstance(sets, dict):
-        add("image_sets", "listing.image_sets", "Explicit shared and per-child image sets are required for new acceptance")
-        return
-    if set(sets) != {"shared", "variants"}:
-        add("image_sets", "listing.image_sets", "Image sets contain shared and variants only")
-    used = set()
-    image_counts = load_json(POLICY_PATH)["media_limits"]
-
-    def use(pid, role, target, path, number=None):
-        plan = plans.get(pid) if isinstance(pid, str) else None
-        if plan is None or plan.get("role") != role:
-            add("image_set_reference", path, "Plan reference is missing or has the wrong image role")
-            return
-        used.add(pid)
-        if plan.get("applies_to") != [target]:
-            add("image_set_scope", path, "Shared plans use ['all']; a child's independent creative uses only that child ID")
-        label = plan.get("image") if role != "aplus" else plan.get("module")
-        if role != "aplus" and (not isinstance(label, str) or not re.match(r"^图%d（[^）]+）$" % number, label)):
-            add("image_number", path, "Number each main/secondary set as 图1（主图） through 图7（主题）")
-        if role == "main" and label != "图1（主图）":
+def check_media_plans(listing, add):
+    """Validate the product's ordered image and A+ arrays directly."""
+    limits = load_json(POLICY_PATH)["media_limits"]
+    images = [plan for plan in _list(listing.get("image_plan")) if isinstance(plan, dict)]
+    for role, key in (("main", "main_count"), ("secondary", "secondary_count")):
+        if sum(plan.get("role") == role for plan in images) != limits[key]:
+            add("image_count", "listing.image_plan", "Expected %d %s image plans" % (limits[key], role))
+    for number, plan in enumerate(images, 1):
+        path = "listing.image_plan[%d]" % (number - 1)
+        role = "main" if number == 1 else "secondary"
+        label = plan.get("image")
+        if plan.get("role") != role or not isinstance(label, str) or not re.fullmatch(r"图%d（[^）]+）" % number, label):
+            add("image_number", path, "Number the main image first, then secondary images in order")
+        elif number == 1 and label != "图1（主图）":
             add("image_number", path, "The first image is 图1（主图）")
-        if role == "aplus" and (not isinstance(label, str) or not re.match(r"^模块%d[：:]\S" % number, label)):
-            add("aplus_number", path, "Number A+ modules consecutively as 模块N：主题 in their shared order")
-
-    def refs(value, path, count=None):
-        if not isinstance(value, list) or any(not isinstance(pid, str) or not pid for pid in value):
-            add("image_set_reference", path, "Image references must be an array of nonempty plan IDs")
-            return []
-        if len(set(value)) != len(value):
-            add("image_set_duplicate", path, "A plan cannot occupy two slots in the same set")
-        if count is not None and len(value) != count:
-            add("image_set_count", path, "Exactly %d references are required" % count)
-        return value
-
-    shared = _dict(sets.get("shared"))
-    if set(shared) != {"main", "secondary", "a_plus"}:
-        add("image_set_shape", "listing.image_sets.shared", "Shared set needs exactly main, secondary, and a_plus")
-    use(shared.get("main"), "main", "all", "listing.image_sets.shared.main", 1)
-    secondary = refs(shared.get("secondary"), "listing.image_sets.shared.secondary", image_counts["secondary_count"])
-    for number, pid in enumerate(secondary, 2):
-        use(pid, "secondary", "all", "listing.image_sets.shared.secondary[%d]" % (number - 2), number)
-    a_plus = refs(shared.get("a_plus"), "listing.image_sets.shared.a_plus")
-    for index, pid in enumerate(a_plus):
-        use(pid, "aplus", "all", "listing.image_sets.shared.a_plus[%d]" % index, index + 1)
-    unique_aplus_images = {pid for pid in a_plus if _dict(plans.get(pid)).get("role") == "aplus"
-                           and _dict(plans.get(pid)).get("asset_type") == "image"}
-    if len(unique_aplus_images) < image_counts["a_plus_min_images"]:
-        add("aplus_image_count", "listing.image_sets.shared.a_plus", "At least %d distinct A+ image creatives are required; text-only modules do not count" % image_counts["a_plus_min_images"])
-    children = sets.get("variants")
-    if not isinstance(children, list):
-        add("image_sets_variants", "listing.image_sets.variants", "Per-child sets must be an array (empty for a single product)")
-        children = []
-    if [c.get("variant_id") if isinstance(c, dict) else None for c in children] != ids:
-        add("image_sets_variants", "listing.image_sets.variants", "Image sets must exactly match supplied children and input order")
-    for index, child in enumerate(children):
-        path = "listing.image_sets.variants[%d]" % index
-        if not isinstance(child, dict):
-            add("image_set_shape", path, "Child set must be an object")
-            continue
-        if set(child) != {"variant_id", "main", "secondary"}:
-            add("image_set_shape", path, "Child set contains variant_id, main, secondary; A+ is shared only")
-        vid = child.get("variant_id")
-        if not isinstance(vid, str) or vid not in ids:
-            continue
-        use(child.get("main"), "main", vid, path + ".main", 1)
-        child_secondary = refs(child.get("secondary"), path + ".secondary", image_counts["secondary_count"])
-        if strategy == "shared_secondary" and child_secondary != secondary:
-            add("image_reuse_mismatch", path + ".secondary", "This mode must reuse the shared six secondary plans in order")
-        for number, pid in enumerate(child_secondary, 2):
-            use(pid, "secondary", "all" if strategy == "shared_secondary" else vid,
-                path + ".secondary[%d]" % (number - 2), number)
-    if used != set(plans):
-        add("image_set_orphan", "listing.image_sets", "Every creative must belong to the shared or corresponding child set; no extra or unassigned images")
+    aplus = [plan for plan in _list(listing.get("a_plus_plan", listing.get("aplus_plan"))) if isinstance(plan, dict)]
+    if sum(plan.get("role") == "aplus" and plan.get("asset_type") == "image" for plan in aplus) < limits["a_plus_min_images"]:
+        add("aplus_image_count", "listing.a_plus_plan", "At least %d A+ images are required; text modules do not count" % limits["a_plus_min_images"])
+    for number, plan in enumerate(aplus, 1):
+        label = plan.get("module")
+        if not isinstance(label, str) or not re.fullmatch(r"模块%d[：:]\S.*" % number, label):
+            add("aplus_number", "listing.a_plus_plan[%d]" % (number - 1), "Number A+ modules consecutively as 模块N：主题")
 
 
 def check_local(profile, listing, qa=None):
@@ -411,11 +327,11 @@ def _check_local(profile, listing, qa=None):
         return issues
     policy = load_json(POLICY_PATH)
     limits = policy["default_limits"]
-    mode = profile.get("listing_mode", "single")
-    if mode not in ("single", "family"):
-        add("listing_mode", "profile.listing_mode", "Use single or family")
-    if listing.get("listing_mode", "single") != mode:
-        add("mode_mismatch", "listing.listing_mode", "Profile and listing modes differ")
+    try:
+        require_single_product(profile, listing)
+    except ValueError as error:
+        add("single_product_only", "$", str(error))
+        return issues
     if profile.get("schema_version") != "2.1" or listing.get("schema_version") != "2.1":
         add("legacy_schema", "$", "Legacy content remains readable; regenerate and review under the current delivery contract before acceptance", "incomplete")
     if "a_plus_plan" in listing and "aplus_plan" in listing and listing["a_plus_plan"] != listing["aplus_plan"]:
@@ -453,59 +369,7 @@ def _check_local(profile, listing, qa=None):
     if not protected or any(not nonempty(term) for term in protected):
         add("protected_terms", "profile.product_identity.protected_terms", "At least one nonempty complete product phrase is required")
     forbidden = _list(profile.get("forbidden_terms"))
-    variants = array(profile, "variants", "profile") if mode == "family" else []
-    ids, sku_set, combos = [], set(), set()
-    dimensions = _list(profile.get("variation_dimensions")) if mode == "family" else []
-    if mode == "family":
-        if not variants:
-            add("variants_empty", "profile.variants", "A family requires supplied variants")
-        if not dimensions or any(not nonempty(d) for d in dimensions) or len({str(d) for d in dimensions}) != len(dimensions):
-            add("variation_dimensions", "profile.variation_dimensions", "Unique ordered variation dimensions are required")
-        theme = _dict(profile.get("variation_theme"))
-        if theme.get("status") != "confirmed" or not nonempty(theme.get("source_ref")) or not nonempty(theme.get("name")):
-            add("variation_theme", "profile.variation_theme", "Verify the actual site's category variation theme before completion")
-        parent_sku = profile.get("parent_sku")
-        if parent_sku is not None:
-            if not nonempty(parent_sku):
-                add("sku", "profile.parent_sku", "SKU must be a nonempty string or null")
-            else:
-                sku_set.add(parent_sku)
     owners = [("all", profile)]
-    for index, variant in enumerate(variants):
-        path = "profile.variants[%d]" % index
-        if not isinstance(variant, dict):
-            add("variant_object", path, "Variant must be an object")
-            continue
-        vid = variant.get("variant_id")
-        if not isinstance(vid, str) or not SAFE_ID.fullmatch(vid) or vid in ("all", "single", "parent", "media") or vid in ids:
-            add("variant_id", path + ".variant_id", "IDs must be unique, filename safe, and not reserved")
-        ids.append(vid if isinstance(vid, str) else "__invalid_%d" % index)
-        owners.append((ids[-1], variant))
-        sku = variant.get("sku")
-        if sku is not None:
-            if not nonempty(sku) or sku in sku_set:
-                add("sku", path + ".sku", "SKU must be null or a unique nonempty string, including parent")
-            else:
-                sku_set.add(sku)
-        attributes = _dict(variant.get("attributes"))
-        if set(attributes) != set(str(d) for d in dimensions):
-            add("attribute_dimensions", path + ".attributes", "Attributes must match exactly the supplied variation dimensions")
-        combo = []
-        for dim in dimensions:
-            if not isinstance(dim, str):
-                continue
-            attr = _dict(attributes.get(dim))
-            for key in ("value", "display", "title_value"):
-                if not nonempty(attr.get(key)):
-                    add("attribute_value", path + ".attributes." + dim + "." + key, "A real, nonempty attribute value is required")
-            value = attr.get("value", "")
-            combo.append(str(value))
-            if "color" in dim.casefold() and any(re.fullmatch(r"[A-Za-z ]+\s+\d+", str(attr.get(k, ""))) for k in ("display", "title_value")):
-                add("ambiguous_color", path + ".attributes." + dim, "Numbered placeholder colors need the actual color name")
-        combo = tuple(combo)
-        if combo in combos:
-            add("duplicate_combination", path + ".attributes", "Duplicate supplied variant combination")
-        combos.add(combo)
 
     facts, measurements, images = {}, {}, {}
     for owner_id, owner in owners:
@@ -525,6 +389,11 @@ def _check_local(profile, listing, qa=None):
                         add("fact_shape", path, "Fact requires a field and confirmed/unknown/conflict status")
                     if record.get("status") == "confirmed" and (not nonempty(record.get("source_ref")) or record.get("value") is None or record.get("value") == ""):
                         add("fact_source", path, "Confirmed facts require an explicit value and source")
+                    if record.get("field") == "compatible_models":
+                        if record.get("status") == "confirmed" and not valid_model_list(record.get("value")):
+                            add("compatible_models_shape", path, "Confirmed compatibility requires an array of complete model IDs, one ID per string; no ranges or abbreviations")
+                        elif record.get("status") != "confirmed":
+                            add("compatibility_unconfirmed", path, "Compatibility evidence is unknown or conflicting; do not invent or imply a complete confirmed list", "incomplete")
                 else:
                     if record.get("subject") not in ("product", "package", "fit") or not nonempty(record.get("label")) or not nonempty(record.get("source_ref")):
                         add("measurement_metadata", path, "Measurement requires subject, dimension label, and source")
@@ -534,17 +403,6 @@ def _check_local(profile, listing, qa=None):
                             add("measurement_display", path, "Display differs from deterministic conversion; run normalize")
                     except (ValueError, InvalidOperation) as error:
                         add("measurement_invalid", path, str(error))
-    for owner_id, owner in owners[1:]:
-        for dim, attribute in _dict(owner.get("attributes")).items():
-            attr = _dict(attribute)
-            mid = attr.get("measurement_id")
-            if mid:
-                source = measurements.get(mid) if isinstance(mid, str) else None
-                if not source or source[0] not in ("all", owner_id):
-                    add("attribute_measurement_scope", "profile." + owner_id + "." + dim, "Attribute cannot reference another child's measurement")
-                elif any(attr.get(k) != source[1].get("display_text") for k in ("display", "title_value")):
-                    add("attribute_measurement_display", "profile." + owner_id + "." + dim, "Attribute must reuse its own localized display_text")
-
     length_token = re.compile(r'(?<![A-Za-z0-9_.])(\d+(?:\.\d+)?)\s*[-‐‑]?\s*(centimeters?|millimeters?|meters?|inches|inch|in|cm|mm|m|feet|foot|ft|")(?![A-Za-z])', re.I)
 
     def _dual_source_display(text, match, number, unit, allowed_owners):
@@ -591,10 +449,7 @@ def _check_local(profile, listing, qa=None):
             if site == "US" and unit in ("mm", "cm", "m") and not nominal:
                 add("source_unit_leak", path, "Ordinary US lengths must use normalized inches, including compact or reformatted numeric units")
             elif not own:
-                if matches:
-                    add("measurement_wrong_variant", path, "Registered size belongs to another child: " + match[0])
-                else:
-                    add("measurement_unregistered", path, "Numeric length has no matching registered measurement for this product: " + match[0])
+                add("measurement_unregistered", path, "Numeric length has no matching registered measurement for this product: " + match[0])
             if own:
                 matching_groups.append(set(own))
         return matching_groups
@@ -623,20 +478,16 @@ def _check_local(profile, listing, qa=None):
                     owner_id in allowed_owners and value == number for owner_id, value in accessory_counts.values()):
                 continue  # A confirmed included-accessory count, e.g. "4 pcs felt pads".
             if not own:
-                code = "quantity_wrong_variant" if any(value == number for _, value in quantities.values()) else "quantity_unregistered"
-                add(code, path, "Package count must match a registered quantity fact for this child: " + match[0])
+                add("quantity_unregistered", path, "Package count must match a registered quantity fact for this product: " + match[0])
             if own:
                 matching_groups.append(own)
         return matching_groups
 
     def scope(value, path):
-        if not isinstance(value, list) or not value or any(not isinstance(v, str) for v in value):
-            add("scope", path, "applies_to must be ['all'] or explicit variant IDs")
+        if value != ["all"]:
+            add("scope", path, "applies_to must be ['all'] for this product")
             return set()
-        if len(set(value)) != len(value) or ("all" in value and value != ["all"]) or (value != ["all"] and any(v not in ids for v in value)):
-            add("scope", path, "Invalid, mixed, duplicate or unknown applies_to IDs")
-            return set()
-        return {"single"} if mode == "single" else (set(ids) if value == ["all"] else set(value))
+        return {"single"}
 
     for index, record in enumerate(array(profile, "images", "profile")):
         path = "profile.images[%d]" % index
@@ -651,12 +502,6 @@ def _check_local(profile, listing, qa=None):
         if not nonempty(record.get("source")):
             add("image_source", path, "Image needs its actual source")
         images[image_id] = (image_scope, record)
-    for owner_id, owner in owners[1:]:
-        for image_id in array(owner, "image_ids", "profile." + owner_id):
-            source = images.get(image_id) if isinstance(image_id, str) else None
-            if not source or owner_id not in source[0]:
-                add("variant_image_scope", "profile." + owner_id + ".image_ids", "Image does not belong to this child")
-
     site_policy = policy["sites"].get(site, {}) if isinstance(policy["sites"].get(site), dict) else {}
     search_bytes_limit = site_policy.get("search_terms_max_bytes", limits["search_terms_max_bytes"])
     title_policy = policy.get("title_compliance", {})
@@ -697,9 +542,9 @@ def _check_local(profile, listing, qa=None):
         if value != value.lower() or re.search(r"[,;|/!?.]", value):
             add("search_terms_format", path, "Use lowercase words separated by spaces; punctuation is unnecessary", "warning")
 
-    def check_text(target, content, parent=False):
+    def check_text(target, content):
         path = "listing." + target
-        fields = ("title", "item_highlight") if parent else TEXT_FIELDS
+        fields = TEXT_FIELDS
         for field in fields:
             value = content.get(field)
             # Empty search terms are legitimate after deduplication.
@@ -718,21 +563,40 @@ def _check_local(profile, listing, qa=None):
         for term in protected:
             if isinstance(term, str) and term and not _contains(content.get("title", ""), term):
                 add("identity_dropped", path + ".title", "Missing intact protected product phrase: " + term)
-        if not parent:
-            bullets = content.get("bullets")
-            if not isinstance(bullets, list) or len(bullets) != limits["bullets_count"] or any(not nonempty(b) for b in _list(bullets)):
-                add("bullets_shape", path + ".bullets", "Exactly five nonempty bullet strings are required")
-            valid_bullets = [b for b in _list(bullets) if isinstance(b, str)]
+        bullets = content.get("bullets")
+        if not isinstance(bullets, list) or len(bullets) != limits["bullets_count"] or any(not nonempty(b) for b in _list(bullets)):
+            add("bullets_shape", path + ".bullets", "Exactly five nonempty bullet strings are required")
+        valid_bullets = [b for b in _list(bullets) if isinstance(b, str)]
+        for index, bullet in enumerate(valid_bullets):
+            label = re.fullmatch(r"【([^】]+)】\s*\S[\s\S]*", bullet)
+            if not label or not label[1].strip() or (spaced_language and _has_lowercase(label[1])):
+                add("bullet_format", path + ".bullets[%d]" % index,
+                    "Use 【search phrase/topic label】 followed by natural target-language copy; preserve Japanese keyword and model spelling")
+        editorial_bullets = list(valid_bullets)
+        if policy.get("compatibility_lists", {}).get("exclude_verified_model_tokens_from_editorial_budget"):
+            allowed = {"all"}
             for index, bullet in enumerate(valid_bullets):
-                label = re.fullmatch(r"【([^】]+)】\s*\S[\s\S]*", bullet)
-                if not label or not label[1].strip() or _has_lowercase(label[1]):
-                    add("bullet_format", path + ".bullets[%d]" % index, "Use 【UPPERCASE BENEFIT LABEL】 followed by natural target-language copy; uncased scripts are allowed")
-            if any(len(b) > limits["bullet_max_chars"] for b in valid_bullets) or sum(map(len, valid_bullets)) > limits["bullets_total_max_chars"]:
-                add("bullets_length", path + ".bullets", "Bullet or combined editorial budget exceeded")
-            for index, bullet in enumerate(valid_bullets):
-                if PROHIBITED_BULLET_SYMBOLS.search(bullet):
-                    add("bullet_prohibited_symbol", path + ".bullets[%d]" % index, "Amazon bullet guidelines disallow ™ ® © and emoji", "warning")
-        for field in (("title", "item_highlight") if parent else FRONT_FIELDS + ("search_terms",)):
+                referenced = {fid for claim in _list(content.get("claims")) if isinstance(claim, dict)
+                              and claim.get("field") == "bullets[%d]" % index
+                              for fid in _list(claim.get("fact_ids")) if isinstance(fid, str)}
+                models = [model for fid, (owner, fact) in facts.items() if fid in referenced and owner in allowed
+                          and fact.get("field") == "compatible_models" and fact.get("status") == "confirmed"
+                          and nonempty(fact.get("source_ref")) and valid_model_list(fact.get("value"))
+                          for model in fact["value"]]
+                pattern = model_pattern(models)
+                if pattern:
+                    editorial_bullets[index] = re.sub(pattern.pattern + r"[\s、,，;；/／・|]*", "", bullet, flags=re.I)
+            if (editorial_bullets != valid_bullets and (any(len(b) > limits["bullet_max_chars"] for b in valid_bullets)
+                    or sum(map(len, valid_bullets)) > limits["bullets_total_max_chars"])):
+                add("compatibility_list_length", path + ".bullets",
+                    "Verified model IDs are excluded only from local editorial budgets; full bullets remain unchanged for backend/category validation (raw %d chars, prose %d chars)"
+                    % (sum(map(len, valid_bullets)), sum(map(len, editorial_bullets))), "warning")
+        if any(len(b) > limits["bullet_max_chars"] for b in editorial_bullets) or sum(map(len, editorial_bullets)) > limits["bullets_total_max_chars"]:
+            add("bullets_length", path + ".bullets", "Bullet or combined editorial budget exceeded")
+        for index, bullet in enumerate(valid_bullets):
+            if PROHIBITED_BULLET_SYMBOLS.search(bullet):
+                add("bullet_prohibited_symbol", path + ".bullets[%d]" % index, "Amazon bullet guidelines disallow ™ ® © and emoji", "warning")
+        for field in FRONT_FIELDS + ("search_terms",):
             value = _field(content, field)
             if isinstance(value, str):
                 for term in forbidden:
@@ -740,82 +604,6 @@ def _check_local(profile, listing, qa=None):
                         add("forbidden_term", path + "." + field, "Contains a user-forbidden phrase: " + term)
 
     resolved = dict(resolved_listings(profile, listing))
-    profile_variants = {owner_id: owner for owner_id, owner in owners[1:]}
-    if mode == "family":
-        listing_variants = array(listing, "variants", "listing")
-        listing_ids = [v.get("variant_id") if isinstance(v, dict) else None for v in listing_variants]
-        if listing_ids != ids:
-            add("variant_set_order", "listing.variants", "Output must exactly match supplied IDs and order, with no omission, duplication or extra combination")
-        shared = _dict(listing.get("shared_content"))
-        if not isinstance(listing.get("shared_content"), dict) or any(key not in CONTENT_FIELDS for key in shared):
-            add("shared_content", "listing.shared_content", "Shared content only contains bullets, description and search_terms")
-        for field in CONTENT_FIELDS:
-            value = shared.get(field)
-            if field == "bullets":
-                if not isinstance(value, list) or len(value) != limits["bullets_count"] or any(not nonempty(b) for b in _list(value)):
-                    add("shared_content", "listing.shared_content.bullets", "Shared bullets must contain five complete strings")
-                for index, bullet in enumerate(_list(value)):
-                    scan_measurements(bullet, {"all"}, "listing.shared_content.bullets[%d]" % index)
-                    scan_quantities(bullet, {"all"}, "listing.shared_content.bullets[%d]" % index)
-            else:
-                if not isinstance(value, str) or (field == "description" and not value.strip()):
-                    add("shared_content", "listing.shared_content." + field, "Shared content requires complete string fields")
-                if field == "description":
-                    scan_measurements(value, {"all"}, "listing.shared_content.description")
-                scan_quantities(value, {"all"}, "listing.shared_content." + field)
-        parent = _dict(listing.get("parent"))
-        if not isinstance(listing.get("parent"), dict):
-            add("parent_missing", "listing.parent", "Family parent title and highlight are required")
-        if parent.get("sku") != profile.get("parent_sku"):
-            add("parent_sku", "listing.parent.sku", "Parent SKU must match input, including null")
-        check_text("parent", parent, parent=True)
-        for field in ("title", "item_highlight"):
-            value = parent.get(field, "")
-            # Words inside the protected product phrase (e.g. "Clear" in "Clear Glass Bud Vase")
-            # are identity, not a leaked variant value.
-            unprotected = _strip_phrases(value, protected) if isinstance(value, str) else value
-            for _, variant in owners[1:]:
-                for attr in _dict(variant.get("attributes")).values():
-                    for phrase in (_dict(attr).get("display"), _dict(attr).get("title_value")):
-                        if isinstance(phrase, str) and _contains(unprotected, phrase):
-                            add("parent_variant_leak", "listing.parent." + field, "Contains a specific variant value: " + phrase)
-            if field == "title" and isinstance(value, str) and re.search(r"(?:[$€£¥]\s*\d|\b\d+(?:\.\d+)?\s*(?:USD|EUR|GBP|dollars|pack|packs|pcs|pieces|count)\b|\b(?:pack\s+of|stock|inventory)\s*\d)", value, re.I):
-                add("parent_price_quantity", "listing.parent.title", "Parent title cannot contain price, inventory or concrete pack quantity")
-        template = listing.get("title_template")
-        slots = []
-        try:
-            if not isinstance(template, str):
-                raise ValueError("A title template is required")
-            parsed = list(string.Formatter().parse(template))
-            slots = [name for _, name, _, _ in parsed if name is not None]
-            if slots != dimensions or any(spec or conv or any(c in name for c in ".[]") for _, name, spec, conv in parsed if name is not None):
-                raise ValueError("Template must contain every dimension once, in order, without formatting expressions")
-        except ValueError as error:
-            add("title_template", "listing.title_template", str(error))
-            template = None
-        for index, variant in enumerate(listing_variants):
-            if not isinstance(variant, dict):
-                continue
-            target = variant.get("variant_id")
-            source = profile_variants.get(target) if isinstance(target, str) else None
-            if source is None:
-                continue
-            path = "listing.variants[%d]" % index
-            attrs = {dim: _dict(_dict(source.get("attributes")).get(dim)).get("title_value") for dim in dimensions if isinstance(dim, str)}
-            if variant.get("attributes") != attrs:
-                add("listing_attribute_mapping", path + ".attributes", "Listing attributes must exactly match this child's normalized title values")
-            if variant.get("sku") != source.get("sku"):
-                add("listing_sku", path + ".sku", "Child SKU must match input, including null")
-            overrides = variant.get("content_overrides")
-            if not isinstance(overrides, dict) or set(overrides) - set(CONTENT_FIELDS):
-                add("content_overrides", path + ".content_overrides", "Only bullets/description/search_terms can be overridden")
-            if template is not None:
-                try:
-                    expected = template.format_map(attrs)
-                    if variant.get("title") != expected:
-                        add("title_template_mismatch", path + ".title", "Title differs from the common template filled with this child's values")
-                except (KeyError, ValueError, IndexError, AttributeError):
-                    add("title_template", path + ".title", "Template cannot be resolved safely")
     for target, content in resolved.items():
         check_text(str(target), content)
 
@@ -825,7 +613,7 @@ def _check_local(profile, listing, qa=None):
             for rid in array(record, key, path):
                 source = collection.get(rid) if isinstance(rid, str) else None
                 if source is None or source[0] not in allowed_owners:
-                    add("reference_scope", path + "." + key, "Reference is missing or belongs to another child: " + str(rid))
+                    add("reference_scope", path + "." + key, "Reference is missing or belongs to another product: " + str(rid))
                 elif key == "fact_ids" and (source[1].get("status") != "confirmed" or not nonempty(source[1].get("source_ref"))):
                     add("unconfirmed_fact", path + "." + key, "Only confirmed, sourced facts can support claims")
                 else:
@@ -834,10 +622,8 @@ def _check_local(profile, listing, qa=None):
 
     claim_refs, claim_fact_refs = {}, {}
     content_targets = dict(resolved)
-    if mode == "family":
-        content_targets["parent"] = _dict(listing.get("parent"))
     for target, content in content_targets.items():
-        allowed = {"all"} if target in ("single", "parent") else {"all", target}
+        allowed = {"all"}
         found_fields = set()
         for index, claim in enumerate(array(content, "claims", "listing." + str(target))):
             path = "listing.%s.claims[%d]" % (target, index)
@@ -845,7 +631,7 @@ def _check_local(profile, listing, qa=None):
                 add("claim_object", path, "Claim must be an object")
                 continue
             field = claim.get("field")
-            valid_fields = ("title", "item_highlight") if target == "parent" else FRONT_FIELDS + ("search_terms",)
+            valid_fields = FRONT_FIELDS + ("search_terms",)
             if field not in valid_fields:
                 add("claim_field", path, "Claim field does not locate an applicable text field")
                 continue
@@ -858,7 +644,7 @@ def _check_local(profile, listing, qa=None):
                 shown = measurements[mid][1].get("display_text")
                 if not isinstance(value, str) or not isinstance(shown, str) or not _contains(value, shown):
                     add("measurement_text", path, "Text must reuse registered localized display_text for " + mid)
-        required = ("title", "item_highlight") if target == "parent" else FRONT_FIELDS
+        required = FRONT_FIELDS
         for field in required:
             if field not in found_fields:
                 add("claim_missing", "listing." + str(target) + "." + field, "Front-end field requires an explicit evidence/semantic-review claim record")
@@ -878,13 +664,32 @@ def _check_local(profile, listing, qa=None):
                     same_value_ids = {rid for rid, (oid, rec) in measurements.items() if oid in allowed and rec.get("display_text") == shown}
                     if not same_value_ids & claim_refs.get((target, field), set()):
                         add("measurement_unreferenced", "listing." + str(target) + "." + field, "Registered specification is present without its measurement reference")
+        bullet_fields = [("bullets[%d]" % index, text) for index, text in enumerate(_list(content.get("bullets"))) if isinstance(text, str)]
+        expected_models = {}
+        for fid, (owner, fact) in facts.items():
+            if (owner not in allowed or fact.get("field") != "compatible_models"
+                    or fact.get("status") != "confirmed" or not nonempty(fact.get("source_ref"))
+                    or not valid_model_list(fact.get("value"))):
+                continue
+            for model in dict.fromkeys(fact["value"]):
+                entry = expected_models.setdefault(normalize_model(model), {"model": model, "fact_ids": set()})
+                entry["fact_ids"].add(fid)
+        for entry in expected_models.values():
+            model = entry["model"]
+            pattern = model_pattern([model])
+            locations = [field for field, text in bullet_fields if pattern.search(text)]
+            if not locations:
+                add("compatibility_model_missing", "listing." + str(target) + ".bullets",
+                    "Keep this confirmed model intact in the bullet lists; a series summary, description-only mention or prefix is insufficient: " + model)
+            elif not any(entry["fact_ids"] & claim_fact_refs.get((target, field), set()) for field in locations):
+                add("compatibility_unreferenced", "listing." + str(target) + ".bullets",
+                    "Model requires an applicable compatibility fact reference in the containing bullet: " + model)
 
     plan_ids, main_coverage = {}, set()
 
-    def check_media_record(plan, path, template=False):
+    def check_media_record(plan, path):
         applicable = scope(plan.get("applies_to"), path + ".applies_to")
-        common = plan.get("applies_to") == ["all"]
-        allowed = {"all"} if common or mode == "single" else ({"all"} | applicable if len(applicable) == 1 else {"all"})
+        allowed = {"all"}
         refs = check_refs(plan, allowed, path)
         for key in ("buyer_question", "selling_point", "direction", "visual_evidence", "scene_intent", "mobile_check", "production_notes"):
             if not nonempty(plan.get(key)):
@@ -911,18 +716,18 @@ def _check_local(profile, listing, qa=None):
             quantity_groups = scan_quantities(value, allowed, path + "." + key)
             if any(not group & set(refs["fact_ids"]) for group in quantity_groups):
                 add("quantity_unreferenced", path + "." + key, "Image count needs a corresponding quantity fact reference")
-            if not template and re.search(r"\{[^{}]+\}", value):
-                add("unresolved_media_text", path + "." + key, "Resolved copy must contain actual child parameters, not template placeholders")
+            if re.search(r"\{[^{}]+\}", value):
+                add("unresolved_media_text", path + "." + key, "Resolved copy must contain actual product values, not template placeholders")
             for term in forbidden:
                 if isinstance(term, str) and _contains(value, term):
                     add("forbidden_term", path + "." + key, "Contains a user-forbidden phrase: " + term)
         source_ids = array(plan, "source_image_ids", path)
-        if not source_ids and not template and plan.get("asset_type", "image") == "image":
+        if not source_ids and plan.get("asset_type", "image") == "image":
             add("plan_material_pending", path + ".source_image_ids", "Image source is missing; identify required material in production_notes", "incomplete")
         for image_id in source_ids:
             source = images.get(image_id) if isinstance(image_id, str) else None
-            if source is None or not applicable <= source[0] or (common and source[1].get("applies_to") != ["all"]):
-                add("plan_image_scope", path + ".source_image_ids", "Cannot reuse another child's or non-common material")
+            if source is None or not applicable <= source[0]:
+                add("plan_image_scope", path + ".source_image_ids", "Cannot reuse another product's or non-common material")
         body_refs = array(plan, "body_refs", path)
         if not body_refs:
             add("body_refs_empty", path + ".body_refs", "Plan must map to corresponding Listing text")
@@ -930,7 +735,7 @@ def _check_local(profile, listing, qa=None):
             content = resolved.get(target, {})
             for field in body_refs:
                 if field not in FRONT_FIELDS or not isinstance(_field(content, field), str):
-                    add("body_ref", path + ".body_refs", "Body reference must locate existing front-end text for every applicable child")
+                    add("body_ref", path + ".body_refs", "Body reference must locate existing front-end text for this product")
             for mid in refs["measurement_ids"]:
                 shown = measurements[mid][1].get("display_text")
                 if not any(mid in claim_refs.get((target, field), set()) and isinstance(_field(content, field), str)
@@ -975,38 +780,11 @@ def _check_local(profile, listing, qa=None):
                     add("aplus_asset", path, "A+ needs its module label and explicit image/text asset_type")
             elif plan.get("asset_type", "image") != "image":
                 add("plan_asset", path, "Main/secondary slots must be image creatives")
-            bindings = plan.get("variant_bindings", [])
-            if not isinstance(bindings, list):
-                add("media_bindings", path + ".variant_bindings", "Bindings must be an array")
-                bindings = []
-            check_media_record(plan, path, template=bool(bindings))
-            if bindings:
-                if mode != "family" or plan.get("applies_to") != ["all"]:
-                    add("media_binding_scope", path, "Only a shared family template can have child bindings")
-                binding_ids = [b.get("variant_id") if isinstance(b, dict) else None for b in bindings]
-                if binding_ids != ids:
-                    add("media_binding_coverage", path + ".variant_bindings", "Bindings must cover exactly all input children in order")
-                fields = {"source_image_ids", "fact_ids", "measurement_ids", "body_refs", "overlay_text",
-                          "native_text", "direction", "visual_evidence", "production_notes", "status"}
-                required = {"source_image_ids", "fact_ids", "measurement_ids", "body_refs", "overlay_text"}
-                for binding_index, binding in enumerate(bindings):
-                    binding_path = path + ".variant_bindings[%d]" % binding_index
-                    if not isinstance(binding, dict):
-                        add("media_binding", binding_path, "Binding must be an object")
-                        continue
-                    if set(binding) - fields - {"variant_id"} or not required <= set(binding):
-                        add("media_binding", binding_path, "Provide source/fact/measurement/body references and final overlay text; do not change identity, role or scope")
-                    vid = binding.get("variant_id")
-                    if not isinstance(vid, str) or vid not in ids:
-                        continue
-                    bound = {key: value for key, value in plan.items() if key != "variant_bindings"}
-                    bound.update({key: value for key, value in binding.items() if key in fields})
-                    bound["applies_to"] = [vid]
-                    check_media_record(bound, binding_path)
+            check_media_record(plan, path)
 
-    if main_coverage != (set(ids) if mode == "family" else {"single"}):
-        add("main_image_coverage", "listing.image_plan", "Every supplied child needs an applicable main-image plan")
-    check_media_sets(profile, listing, plan_ids, add)
+    if main_coverage != {"single"}:
+        add("main_image_coverage", "listing.image_plan", "The product needs an applicable main-image plan")
+    check_media_plans(listing, add)
 
     # COSMO-style intent relations: structure and evidence are checked; expression is advisory.
     if "intent_map" in profile:
@@ -1018,7 +796,7 @@ def _check_local(profile, listing, qa=None):
                 add("intent_map_entry", path, "Each intent needs a relation (%s) and a target-language expression" % "/".join(INTENT_RELATIONS))
                 continue
             applicable = scope(entry.get("applies_to", ["all"]), path + ".applies_to")
-            allowed = {"all"} if entry.get("applies_to", ["all"]) == ["all"] or len(applicable) != 1 else {"all"} | applicable
+            allowed = {"all"}
             check_refs({"fact_ids": entry.get("fact_ids", []), "measurement_ids": entry.get("measurement_ids", [])}, allowed, path)
             missing = sorted(t for t in applicable if not _contains(resolved_texts.get(t, ""), entry["expression"]))
             if missing:
@@ -1035,7 +813,7 @@ def _check_local(profile, listing, qa=None):
                 add("attribute_suggestion", path, "Attribute suggestion needs an attribute name and a value")
                 continue
             applicable = scope(item.get("applies_to", ["all"]), path + ".applies_to")
-            allowed = {"all"} if item.get("applies_to", ["all"]) == ["all"] or len(applicable) != 1 else {"all"} | applicable
+            allowed = {"all"}
             refs = check_refs({"fact_ids": item.get("fact_ids", []), "measurement_ids": item.get("measurement_ids", [])}, allowed, path)
             if not refs["fact_ids"] and not refs["measurement_ids"] and not item.get("fact_ids") and not item.get("measurement_ids"):
                 add("attribute_unsupported", path, "Attribute values must cite confirmed facts or measurements")
@@ -1091,41 +869,24 @@ def _check_local(profile, listing, qa=None):
                 if disposition == "answered" and (relevance != "relevant" or not _list(review.get("fact_ids"))):
                     add("qa_unsupported_answer", path, "Only relevant questions with product evidence may be answered")
                 applicable = scope(review.get("applies_to"), path + ".applies_to")
-                allowed = {"all"} if review.get("applies_to") == ["all"] or len(applicable) != 1 else {"all"} | applicable
+                allowed = {"all"}
                 check_refs({"fact_ids": review.get("fact_ids"), "measurement_ids": []}, allowed, path)
             if reviewed_questions != questions:
                 add("qa_review_coverage", "qa.question_reviews", "Every captured question needs a relevance/disposition review")
     return issues
 
 
-MEDIA_KEYS = ("media_strategy", "image_plan", "a_plus_plan", "aplus_plan", "image_sets")
+MEDIA_KEYS = ("image_plan", "a_plus_plan", "aplus_plan")
 
 
 def target_fingerprints(profile, listing, qa=None):
-    """Hash only what each review target depends on, so one child's edit does not void the rest.
-
-    Canonical JSON is used, so re-saving a file with different formatting changes nothing.
-    """
-    profile, listing = _dict(profile), _dict(listing)
-    common = {key: value for key, value in profile.items() if key != "variants"}
-    variants = {v.get("variant_id"): v for v in _list(profile.get("variants")) if isinstance(v, dict)}
-    text = {key: value for key, value in listing.items() if key not in MEDIA_KEYS + ("variants", "parent", "shared_content", "title_template")}
-    result = {}
-    resolved = resolved_listings(profile, listing)
-    if profile.get("listing_mode", "single") != "family":
-        result["single"] = canonical_sha256({"profile": common, "listing": text, "qa": qa})
-    else:
-        result["parent"] = canonical_sha256({"profile": common, "parent": listing.get("parent"),
-                                             "values": [v.get("attributes") for v in variants.values()],
-                                             "listing": text, "qa": qa})
-        listed = {v.get("variant_id"): v for v in _list(listing.get("variants")) if isinstance(v, dict)}
-        for target, content in resolved:
-            result[str(target)] = canonical_sha256({"profile": common, "variant": variants.get(target),
-                                                    "listed": listed.get(target), "content": content,
-                                                    "listing": text, "qa": qa})
-    result["media"] = canonical_sha256({"profile": profile, "media": {k: listing.get(k) for k in MEDIA_KEYS},
-                                        "content": resolved})
-    return result
+    """Bind text and media review to the current product and complete copy."""
+    require_single_product(profile, listing)
+    text = {key: value for key, value in listing.items() if key not in MEDIA_KEYS}
+    return {
+        "single": canonical_sha256({"profile": profile, "listing": text, "qa": qa}),
+        "media": canonical_sha256({"profile": profile, "media": {key: listing.get(key) for key in MEDIA_KEYS}, "content": text}),
+    }
 
 
 def make_review_template(profile_path, listing_path, qa_path=None, previous=None):
@@ -1133,10 +894,12 @@ def make_review_template(profile_path, listing_path, qa_path=None, previous=None
     profile, listing = load_json(profile_path), load_json(listing_path)
     qa = load_json(qa_path) if qa_path else None
     policy = load_json(POLICY_PATH)
-    targets = ["single"] if profile.get("listing_mode", "single") != "family" else ["parent"] + [v["variant_id"] for v in profile["variants"]]
+    targets = ["single"]
     current = target_fingerprints(profile, listing, qa)
     keyword_fps = keyword_review_fingerprints(Path(listing_path).parent)
     kept = {}
+    required = {(target, check) for target in targets for check in policy["semantic_checks"]}
+    required |= {("media", check) for check in policy["media_checks"]}
     if isinstance(previous, dict) and isinstance(previous.get("target_fingerprints"), dict):
         old_fps = previous["target_fingerprints"]
         keywords_same = previous.get("keyword_fingerprints") == keyword_fps
@@ -1144,18 +907,23 @@ def make_review_template(profile_path, listing_path, qa_path=None, previous=None
             if not isinstance(record, dict) or record.get("status") not in ("pass", "fail", "not_applicable"):
                 continue
             target, check = str(record.get("target")), record.get("check")
-            if old_fps.get(target) == current.get(target) and (check != "keyword_usage" or keywords_same):
+            if ((target, check) in required and old_fps.get(target) == current.get(target)
+                    and (check not in KEYWORD_REVIEW_CHECKS or keywords_same)):
                 kept[(target, check)] = record
     records = [kept.get((target, check), {"target": target, "check": check, "status": "pending", "evidence": ""})
                for target in targets for check in policy["semantic_checks"]]
     records += [kept.get(("media", check), {"target": "media", "check": check, "status": "pending", "evidence": ""})
                 for check in policy["media_checks"]]
+    for record in records:
+        guidance = policy.get("semantic_guidance", {}).get(record["check"])
+        if guidance:
+            record["guidance"] = guidance
     return {"schema_version": "2.1", "fingerprints": file_fingerprints(profile_path, listing_path, qa_path),
             "target_fingerprints": current,
             "keyword_fingerprints": keyword_fps,
             "carried_over": len(kept),
             "records": records,
-            "limitations": "Review actual copy, facts, variants, images and keyword_usage against 03_keyword_decisions/05_title_keywords; do not mechanically mark pass. Review actual used keywords and related intents, not every unused or excluded term. Check full-intent use, paraphrases, backend word order and truthful negative mentions; references verify scope, not semantic truth."}
+            "limitations": "Review actual copy, facts, images, keyword_usage, field_layout and compatibility_models against 03_keyword_decisions/05_title_keywords; do not mechanically mark pass. Review actual used keywords and related intents, not every unused or excluded term. Check title traffic priority, pack quantity in highlights, all five bullet openings and material/size placement, as well as full-intent use, paraphrases and backend word order; references verify scope, not semantic truth."}
 
 
 def keyword_review_fingerprints(run_dir):
@@ -1181,7 +949,7 @@ def validate_bundle(profile, listing, qa=None, review=None, backend=None, finger
     if qa is None:
         add("qa_missing", "qa", "QA evidence or explicit non-US skipped file is missing", "incomplete")
     expected = load_json(POLICY_PATH)
-    targets = ["single"] if _dict(profile).get("listing_mode", "single") != "family" else ["parent"] + [v.get("variant_id") for v in _list(profile.get("variants")) if isinstance(v, dict)]
+    targets = ["single"]
     required = {(str(target), check) for target in targets for check in expected["semantic_checks"]}
     required |= {("media", check) for check in expected["media_checks"]}
     semantic_start = len(issues)
@@ -1202,7 +970,7 @@ def validate_bundle(profile, listing, qa=None, review=None, backend=None, finger
             keyword_bound = {name: keywords.get("fingerprints", {}).get(name) for name in ("02_kw_raw.json", "03_keyword_decisions.json", "05_title_keywords.json")}
             recorded_keywords = review.get("keyword_fingerprints")
             if not isinstance(recorded_keywords, dict) or any(name not in recorded_keywords or recorded_keywords[name] != value for name, value in keyword_bound.items()):
-                add("review_keywords_stale", "semantic.keyword_fingerprints", "Keyword-usage review is not bound to current keyword decisions and placements", "incomplete")
+                add("review_keywords_stale", "semantic.keyword_fingerprints", "Keyword-usage and field-layout reviews are not bound to current keyword decisions and placements", "incomplete")
         seen = set()
         for index, record in enumerate(_list(review.get("records"))):
             path = "semantic.records[%d]" % index
@@ -1245,7 +1013,7 @@ def validate_bundle(profile, listing, qa=None, review=None, backend=None, finger
                 continue
             target = record.get("target")
             if not isinstance(target, str) or target not in payloads or target in seen:
-                add("backend_target", path, "Unexpected or duplicate backend target; parent is never submitted")
+                add("backend_target", path, "Unexpected or duplicate backend target; only the current product is submitted")
                 continue
             seen.add(target)
             if record.get("payload_sha256") != payloads[target]["payload_sha256"]:
@@ -1289,10 +1057,10 @@ def _backend_passed(record):
 
 
 def run_backend(profile, listing, cli=None, timeout=120, config=None, previous=None):
-    """Call only CLI validate for each sellable payload; never print raw process IO.
+    """Call CLI validate for this product; never print raw process IO.
 
     A previous passing record whose payload fingerprint is unchanged is reused, so a
-    repair round only re-validates the children whose text actually changed.
+    unchanged product copy does not need another request.
     """
     issues = check_local(profile, listing)
     if any(issue["severity"] == "error" for issue in issues):
@@ -1330,7 +1098,7 @@ def main(argv=None):
         if name == "review-template":
             command.add_argument("--fresh", action="store_true", help="Ignore an existing review instead of keeping verdicts for unchanged targets")
         if name == "backend":
-            command.add_argument("--no-reuse", action="store_true", help="Re-validate every child even when its payload and passing result are unchanged")
+            command.add_argument("--no-reuse", action="store_true", help="Re-validate this product even when its payload and passing result are unchanged")
             command.add_argument("--cli", help="Optional CLI path; defaults to the bundled platform executable")
             command.add_argument("--config", help="Optional config path; defaults to ~/.amazon-skill/config.json")
             command.add_argument("--timeout", type=float, default=120)

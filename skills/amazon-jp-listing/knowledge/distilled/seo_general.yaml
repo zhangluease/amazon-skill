@@ -31,7 +31,7 @@ rules:
 - id: competitor_boundary
   type: required
   source_id: user_product_identity
-  prompt_fragment: 竞品关键词（云端扩词或用户表格）和问答只帮助理解搜索需求，不能证明本品的材质、尺寸、认证、性能、适配或变体组合。不要求本品文案覆盖竞品的共性；竞品品牌词不进入本品文案。
+  prompt_fragment: 竞品关键词（云端扩词或用户表格）和问答只帮助理解搜索需求，不能证明本品的材质、尺寸、认证、性能或适配。不要求本品文案覆盖竞品的共性；竞品品牌词不进入本品文案。
 - id: geo_specificity
   type: editorial
   source_id: geo_paper
@@ -47,4 +47,4 @@ rules:
 - id: semantic_review_required
   type: required
   source_id: skill_editorial_v2
-  prompt_fragment: 机器检查只能确认结构、数值和引用范围。生成后由独立复审检查身份、可读性、事实、语言、子体范围、问题相关性、关键词实际使用和画面真实性；文件生成不等于验收通过。
+  prompt_fragment: 机器检查只能确认结构、数值和引用范围。生成后由独立复审检查身份、可读性、事实、语言、问题相关性、关键词实际使用和画面真实性；文件生成不等于验收通过。

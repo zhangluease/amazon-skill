@@ -1,4 +1,4 @@
-version: '2.2'
+version: '2.3'
 domain: title
 contract_ref: ../data_contract.md
 policy_ref: ../quality_policy.json
@@ -9,9 +9,9 @@ rules:
   source_id: user_product_identity
   prompt_fragment: 标题必须完整保留 product_identity.protected_terms，即使核心名称没有出现在关键词来源（扩词结果或用户表格）中、或流量未知，也不得降级、拆散或换成后台类目枚举。配件必须保留配件身份，不能写成主机或套装。
 - id: title_budget
-  type: editorial
-  source_id: skill_editorial_v2
-  prompt_fragment: 本技能默认标题预算为 75 字符，先完整保留核心品名、必要规格和子体识别值。目标日本站类目有明确不同要求时核对并同步修改本轮 quality_policy 配置，不把默认预算解释为全类目统一平台规则。
+  type: required
+  source_id: amazon_title_2026
+  prompt_fragment: 仅生成新版日本站标题，非媒体类最多 75 字符，含空格，全角半角均按一个字符。保留完整核心品名及必要的品牌和型号；普通材质、尺寸放五点正文，不能以必要规格为由占满标题。
   limit_ref: default_limits.title_max_chars
 - id: title_compliance
   type: required
@@ -19,16 +19,12 @@ rules:
   prompt_fragment: 不使用 ! $ ? _ { } ^ ¬ ¦（品牌名自带的除外，机器检查为 error）；同一个词最多出现 2 次，介词、冠词、连词除外（warning）；不写促销语、价格或主观夸赞。
 - id: title_keyword_coverage
   type: editorial
-  source_id: amazon_search_terms_2026
-  prompt_fragment: 在自然语序前提下尽量用到 60–75 字符：品牌（已知时）+ 完整品名 + 最重要的差异或规格，把高流量 eligible 词的核心词放进标题。同义品名不堆叠；其他有效词放入 Highlight、五点或后台词。写完脱离词表重读，确认一眼能看懂卖的是什么。
+  source_id: user_mobile_layout_20261112
+  prompt_fragment: 先按完整购买意图确认 eligible，再按词表真实搜索量及来源指标选高相关流量词，尽量在标题前部自然表达；品牌已知时保留。普通材质尺寸不挤占流量词，不为凑满 75 字符添参数；未知指标不冒充高流量，核心品名无流量也保留。未选的重要词说明原因，其他相关词放小标题、五点或后台。写完脱离词表重读，确保配件不被误认成主机。
 - id: title_localization
   type: required
   source_id: user_unit_localization
   prompt_fragment: 遵循目标语言的大小写、标点和语序；英语用自然 Title Case。尺寸使用规范化后的 display_text，并保持维度对应。型号和真实品牌保持原样。
-- id: title_family
-  type: required
-  source_id: user_family_rules
-  prompt_fragment: family 模式遵循 variation_rules.yaml：父标题只写系列共性；子标题由同一个 title_template 按输入顺序生成，按最长属性组合统一压缩共同部分。
 - id: title_verified_claims
   type: required
   source_id: skill_editorial_v2

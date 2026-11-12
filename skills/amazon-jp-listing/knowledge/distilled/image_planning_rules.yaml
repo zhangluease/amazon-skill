@@ -8,10 +8,10 @@ rules:
   type: required
   source_id: user_delivery_media_v21
   prompt_fragment: image_plan 和 a_plus_plan 每项按 data_contract 保存：唯一 plan_id、image 或 module、中文 direction、role、applies_to、买家问题、卖点、画面证据、场景/意图、overlay_text、引用、body_refs、mobile_check、production_notes。A+ 原生文字放 native_text；新输出统一用 a_plus_plan。
-- id: media_sets
+- id: media_counts
   type: required
   source_id: user_delivery_media_v21
-  prompt_fragment: 单品和系列共用方案都是 1 主图 + 6 附图 + 至少 5 张 A+ 图片（纯文字模块不计入）。系列按输入顺序再出逐子体方案：外观不同或未确认用 per_variant_full（每子体独立 1+6）；有来源确认外观相同且只差尺寸或数量时用 shared_secondary（每子体只独立主图，附图引用共用创意并用 variant_bindings 绑定参数和素材）。A+ 只放在 shared。所有创意都要归组。
+  prompt_fragment: 本品直接交付 1 主图 + 6 附图 + 至少 5 张 A+ 图片（纯文字模块不计入），按 image_plan 和 a_plus_plan 数组顺序组织，每个创意只计一次。
 - id: media_numbering
   type: required
   source_id: user_delivery_media_v21
@@ -23,15 +23,11 @@ rules:
 - id: media_main
   type: required
   source_id: amazon_product_photos
-  prompt_fragment: 主图为纯白背景（RGB 255），产品占画面 85% 以上，最长边建议 1600px 以上；overlay_text 和 native_text 都为空，不加 logo、水印或促销信息。准确展示该可售子体的实物、数量和随附配件，不把未随售的道具当配件，不把全系列画成一个购买套装。
-- id: media_variant_scope
-  type: required
-  source_id: user_delivery_media_v21
-  prompt_fragment: 共用模板 applies_to=all 的本体只引用根级共性和通用素材。参数或素材不同时，用 variant_bindings 按输入顺序覆盖全部子体，每个绑定只引用根级和本子体的事实与素材。
+  prompt_fragment: 主图为纯白背景（RGB 255），产品占画面 85% 以上，最长边建议 1600px 以上；overlay_text 和 native_text 都为空，不加 logo、水印或促销信息。准确展示本品实物、数量和随附配件，不把未随售的道具当配件。
 - id: media_material_availability
   type: required
   source_id: user_delivery_media_v21
-  prompt_fragment: source_image_ids 只能引用实际提供且范围匹配的素材。缺素材时标 pending，production_notes 写清子体、角度或部件缺口，验收保持 incomplete，不减图也不编造。
+  prompt_fragment: source_image_ids 只能引用实际提供且范围匹配的素材。缺素材时标 pending，production_notes 写清角度或部件缺口，验收保持 incomplete，不减图也不编造。
 - id: media_text_sync
   type: required
   source_id: user_unit_localization

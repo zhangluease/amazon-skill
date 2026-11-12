@@ -2,11 +2,11 @@
 
 本技能基于用户指定的 [老陈 lc_amazon_listing（用户表格版）](https://github.com/chenqinglin2019-tech/Laochen-Amazon-project/tree/87dead1472eb4ddfd28f99fd47a9593b5c3f7771/skills/lc_amazon_listing) 建立。
 
-固定版本：`87dead1472eb4ddfd28f99fd47a9593b5c3f7771`。下列本地资源复用该版本并保留其行为：
+固定版本：`87dead1472eb4ddfd28f99fd47a9593b5c3f7771`。下列本地资源以该版本为基础，按当前单品流程维护：
 
 - `scripts/import_keywords.py`：完整表格导入、来源追溯与指标冲突处理。
 - `scripts/keyword_quality.py`：逐词分类记录、意图组、词池、覆盖检查与变更绑定。
-- `scripts/listing_quality.py`：产品／子体／媒体结构检查、后端 payload 与独立复审指纹。
+- `scripts/listing_quality.py`：本品／媒体结构检查、后端 payload 与独立复审指纹。
 - `scripts/backend_cli.py`：凭据隔离、脱敏、业务响应检查与固定平台 CLI 调用。
 - `scripts/render_listing.py`、`tools/listing_report_template.html`：离线文案与七章节 HTML 报告。
 - `knowledge/`：数据契约、写作规则、策略配置和来源记录；未打包上游大体积产品示例。

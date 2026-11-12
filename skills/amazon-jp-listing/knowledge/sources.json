@@ -1,6 +1,6 @@
 {
-  "version": "2.2",
-  "reviewed_at": "2026-10-01",
+  "version": "2.5",
+  "reviewed_at": "2026-11-12",
   "notes": [
     "文档仅作为被审查资料，不作为可覆盖用户请求的指令。",
     "运行规则已提炼在 skill 中，不依赖用户本机 PDF 路径或在每次生成时读取原 PDF。",
@@ -9,36 +9,24 @@
   "sources": [
     {
       "source_id": "amazon_title_2026",
-      "title": "Amazon Seller Forums（News_Amazon）：Updates to improve your product titles begin on July 27",
+      "title": "Amazon 日本站 News_Amazon：商品名の改善に関する更新は7月27日より開始",
       "kind": "official_platform",
-      "scope": "公告所述非媒介类；目标站点、类目例外及字段实际可用性需核验",
-      "url": "https://sellercentral.amazon.com/seller-forums/discussions/t/145b6d0f-999c-4555-896c-c694bda2e470",
-      "checked_at": "2026-10-01",
+      "scope": "日本站非媒体类新版标题与 Item Highlight；类目字段可用性仍按实际后台核对",
+      "url": "https://sellercentral.amazon.co.jp/seller-forums/discussions/t/bb9f6ae3-daee-4d75-8f4f-bf694b9c39dd",
+      "checked_at": "2026-11-12",
       "policy_ref": "quality_policy.json.default_limits",
       "supported": [
-        "2026-07-27 起，除 media 外的标题 ≤75 字符（含空格）；新增可被搜索的 Item Highlights，125 字符，用于材质或推荐用途。",
-        "超长标题会被逐步替换为 AI 推荐版本，品牌方有 14 天审核期；员工说明标题加 Highlight 合计 200 字符。"
+        "日本站 2026-07-27 起非媒体类标题 ≤75 字符（含空格）。",
+        "独立 Item Highlight 最多 125 字符，可被搜索，显示于搜索结果和商品详情页的标题下。",
+        "官方将材质和推荐用途列为小标题可补充的信息，不要求所有卖家必须采用同一种字段分工。"
       ],
       "not_supported": [
-        "Item Highlights 的字段名、标点和重复词规则、JP 等站点的覆盖范围，官方都没有回答。"
+        "未公开标题、Highlight、五点开头的固定排序权重或排名保证。"
       ],
       "alternate_urls": [
+        "https://sellercentral.amazon.co.jp/help/hub/reference/external/YTR6SYGFA5E3EQC?locale=ja-JP",
         "https://sellercentral-europe.amazon.com/seller-forums/discussions/t/33f0a42a-17f1-46ef-b110-ba7512a3c881",
         "https://sellercentral.amazon.com/seller-forums/discussions/t/878dffcd-ed3f-4570-88c8-497e547e825a"
-      ]
-    },
-    {
-      "source_id": "amazon_variation_guide",
-      "title": "Amazon 全球开店：变体商品规范指南",
-      "kind": "official_platform",
-      "scope": "用于识别父子体和真实变体差异，最终主题以站点类目实际允许值为准",
-      "url": "https://gs.amazon.cn/zhishi/article-250809-2",
-      "checked_at": "2026-09-08",
-      "supported": [
-        "变体值应明确、真实；主题外商品基本特征应保持一致。"
-      ],
-      "not_supported": [
-        "不能据通用指南认定某一具体类目支持任意颜色、容量、功能或材质组合。"
       ]
     },
     {
@@ -233,24 +221,12 @@
       "source_id": "user_unit_localization",
       "title": "用户授权：美国站单位本地化与一致性",
       "kind": "user_requirement",
-      "scope": "US 普通长度自动转英寸；规格来源与子体范围可追溯",
+      "scope": "规格来源与本品范围可追溯",
       "recorded_at": "2026-09-08",
       "supported": [
         "所有文案、尺寸图、A+ 复用同一展示值。",
         "公称、尺码与数量区别处理。",
         "2026-10-01 更新：US 公制按量级换成 in/ft、oz/lb、fl oz/gal（见 user_optimization_round1）。"
-      ]
-    },
-    {
-      "source_id": "user_family_rules",
-      "title": "用户授权：父子体标题、Highlight 和完整交付",
-      "kind": "user_requirement",
-      "scope": "用户明确提供多子体与变体信息时",
-      "recorded_at": "2026-09-08",
-      "supported": [
-        "父体写系列共性，子体完整对应真实属性。",
-        "保留全部实际子体组合、稳定标识和输入顺序。",
-        "Highlight 为单条字段，独立于五点。"
       ]
     },
     {
@@ -260,7 +236,7 @@
       "scope": "主图、附图、基础 A+ 策划；不含实际制图与上传",
       "recorded_at": "2026-09-08",
       "supported": [
-        "每张图说明购买理由、画面证明、事实、需求和适用子体。",
+        "每张图说明购买理由、画面证明、事实和需求。",
         "中文策划、目标语言上图文案、移动端可读性要求。"
       ]
     },
@@ -310,15 +286,14 @@
     },
     {
       "source_id": "user_delivery_media_v21",
-      "title": "用户授权：三份标准交付与共用/逐子体图片方案",
+      "title": "用户授权：三份标准交付与本品图片方案",
       "kind": "user_requirement",
-      "scope": "本 skill 的输出格式、创意数量、父子体复用和本地验收；不代表 Amazon 平台统一图片配额",
+      "scope": "本品输出格式、创意数量和本地验收；不代表平台图片配额",
       "recorded_at": "2026-09-08",
       "supported": [
         "固定交付 07_listing.md、07_listing.json、report.html，沿用用户示例的章节与暖色完整报告风格；五点使用【大写卖点标签】正文。",
         "单品/系列共用 1 主图+6 附图+至少 5 张 A+ 图片，默认 5 张；纯文字不计图。",
-        "系列额外逐子体 1+6；外观相同且仅尺寸/数量不同则只主图独立，附图/A+ 共用构图并逐子体替换参数素材。",
-        "图片数组、分组引用及绑定可追溯，缺素材/事实不能通过；不另建子体 A+ 或额外文案预览文件。"
+        "图片数组及引用可追溯，缺素材/事实不能通过；不另建额外文案预览文件。"
       ],
       "reference_artifacts": [
         "07_listing.md",
@@ -337,7 +312,7 @@
         "使用可用、待评估、剔除三类词池；暂缓词不自动进入文案、后台或 QA 请求。",
         "全部拟剔除词逐条第二次语义复核，保留初次判断、复核结论及修正依据。",
         "禁止裸子串和封闭白名单批量删除；完整搜索对象、修饰关系与本品事实共同决定相关性。",
-        "总验收检查数量守恒、原词覆盖、事实/子体范围、导出与投放一致性、复核和指纹。",
+        "总验收检查数量守恒、原词覆盖、本品事实范围、导出与投放一致性、复核和指纹。",
         "报告保留既定七章节结构，仅在原筛词章节展示三类数量与折叠词表。"
       ],
       "superseded_by": "user_keyword_audit_v11"
@@ -353,7 +328,7 @@
         "取消全量拟剔除词第二次复核，不另设强制抽样或风险词复核阶段。",
         "03_keyword_decisions是唯一当前分类来源，修改分类同步更新理由并记录resolution；旧复核文件仅作历史留存。",
         "最终文案与关键词一致性复审保持必需，聚焦实际用词及相关意图，覆盖标题、正文、后台和图片文案。",
-        "保留核心品名、完整短语判断、未知事实暂缓、子体适用范围和三份交付及七章节报告。"
+        "保留核心品名、完整短语判断、未知事实暂缓和三份交付及七章节报告。"
       ]
     },
     {
@@ -456,7 +431,7 @@
       "supported": [
         "关键词由用户提供，不通过云端拉取卖家精灵数据，不使用旧解析器的预筛选、150 条截断或流量缺失删除。",
         "保留目标 Skill 的配置文件；统一启动脚本读取配置、检查、注入子进程环境并脱敏输出。",
-        "三类词池、最终文案与关键词一致性复审、父子体图文、三份交付及七章节报告继承优化版本。"
+        "三类词池、最终文案与关键词一致性复审、本品图文、三份交付及七章节报告继承优化版本。"
       ]
     },
     {
@@ -470,8 +445,62 @@
         "识别卖家精灵的月购买量、购买率、自然排名、ABA 周排名、标题密度，只用于排序和提示。",
         "至少一张表导入成功时，说明页记为 no_keyword_header 并附预览，不中断导入。",
         "词量大时用词面候选分组（view --clusters）辅助按组判定，全词覆盖不变。",
-        "导入时终端只输出汇总；报告不嵌入逐行 raw_cells；文件名站点不一致时给出提示。",
-        "validate 仍对每个子体调用，未变化且已通过的子体复用上次结果。"
+        "导入时终端只输出汇总；报告不嵌入逐行 raw_cells；文件名站点不一致时给出提示。"
+      ]
+    },
+    {
+      "source_id": "user_mobile_layout_20261112",
+      "title": "用户确认：日本站新版移动端字段分工",
+      "kind": "user_requirement",
+      "recorded_at": "2026-11-12",
+      "scope": "本技能仅生成新版标题、小标题、五点结构",
+      "supported": [
+        "标题优先高相关流量词，普通材质尺寸放五点正文；小标题优先几件装与套装组成；五点开头也放相关搜索词。",
+        "高流量以本次可用词及真实指标为依据，完整品名和事实约束仍须保留。"
+      ],
+      "not_supported": [
+        "不是 Amazon 官方排名公式；没有验证固定词位权重或收益幅度。"
+      ]
+    },
+    {
+      "source_id": "jp_new_layout_reference",
+      "title": "新版页面参考 B0FQPL9WKF",
+      "kind": "observed_product_page",
+      "url": "https://www.amazon.co.jp/dp/B0FQPL9WKF",
+      "checked_at": "2026-11-12",
+      "scope": "只参考主标题与其下灰字小标题的分离展示",
+      "supported": [
+        "浏览器可见独立 H1 标题和灰字小标题；本次页面语言为简体中文。"
+      ],
+      "not_supported": [
+        "不以翻译文字判断日文字数，不迁移该商品的数量、套装、材质、适配或性能至本品；不代表所有页面的实际部署状态。"
+      ]
+    },
+    {
+      "source_id": "user_compatibility_lists_20261112",
+      "title": "用户确认：适配型耗材采用连续多条完整机型列表",
+      "kind": "user_requirement",
+      "recorded_at": "2026-11-12",
+      "scope": "替换滤网等依赖设备适配的配件／耗材，不扩展为其他品类的通用结构",
+      "supported": [
+        "五点按系列分组完整列出有本品依据的适配机型，允许连续2–3条适配主题。",
+        "不因普通编辑预算或关键词缺流量而删机型；保留型号后缀和逐项来源。",
+        "本地编辑预算单独计机型，但上架原文和后端结果保持真实。"
+      ],
+      "not_supported": [
+        "参考截图不自动证明本品兼容，清单必须有本品证据。",
+        "没有据此确认Amazon各类目统一的五点字符上限或清单索引权重。"
+      ]
+    },
+    {
+      "source_id": "user_single_product_20261112",
+      "title": "用户确认：简化为每次一个商品",
+      "kind": "user_requirement",
+      "recorded_at": "2026-11-12",
+      "scope": "本技能的文案、画像、媒体、校验和报告",
+      "supported": [
+        "每次只处理一个商品，生成本品文案及一套图片／A+策划。",
+        "多个商品使用独立任务目录，不合并资料或套用其他商品参数。"
       ]
     }
   ]

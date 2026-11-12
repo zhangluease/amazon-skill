@@ -20,10 +20,6 @@ rules:
   type: required
   source_id: user_product_identity
   prompt_fragment: 不因泛化场景或高流量词扩大用途。参数使用同一个规范化展示值，并保留维度标签。
-- id: description_family_scope
-  type: required
-  source_id: user_family_rules
-  prompt_fragment: 共用长描只写系列共性；具体变体参数写进对应的 content_overrides.description，并为解析后的完整描述写 claims。
 - id: description_format
   type: editorial
   source_id: skill_editorial_v2

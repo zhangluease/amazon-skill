@@ -1,4 +1,4 @@
-version: '2.2'
+version: '2.3'
 domain: item_highlight
 contract_ref: ../data_contract.md
 policy_ref: ../quality_policy.json
@@ -6,22 +6,14 @@ sources_ref: ../sources.json
 rules:
 - id: highlight_scalar
   type: required
-  source_id: user_family_rules
+  source_id: user_single_product_20261112
   prompt_fragment: Item Highlight 始终是一个字符串（自然短句或短语），独立于 bullets；不另建 subtitle 字段，不把多条五点塞进来。
 - id: highlight_budget
   type: required
   source_id: amazon_title_2026
-  prompt_fragment: ≤125 字符（含空格）。官方定位是补充材质或推荐用途，可被搜索，并与标题一起展示。目标类目不支持该字段时报告具体限制。
+  prompt_fragment: ≤125 字符（含空格）。对应新版标题下灰字小标题，可被搜索，在搜索结果和详情页与标题分开展示。目标类目不支持该字段时报告具体限制。
   limit_ref: default_limits.item_highlight_max_chars
 - id: highlight_purchase_reason
   type: editorial
-  source_id: amazon_title_2026
-  prompt_fragment: 写标题没写到的已确认材质、结构、适配范围或使用场景，优先带上 intent_map 中最重要的用途或人群表达，以及标题放不下的高流量 eligible 词。不重复标题整句。
-- id: highlight_parent_scope
-  type: required
-  source_id: user_family_rules
-  prompt_fragment: 父 Highlight 只用根级 confirmed 事实，不含具体子体属性值。"多色可选"之类的表述必须有实际提供的子体支持。
-- id: highlight_variant_scope
-  type: required
-  source_id: user_family_rules
-  prompt_fragment: 每个子体单独一条 Highlight，只含本子体的有效事实与参数。仅颜色不同时可以主体相同，不编造性能或人群差异。
+  source_id: user_mobile_layout_20261112
+  prompt_fragment: 小标题先写有 confirmed 事实支持的几枚装／几个装或套装组成，再补标题未覆盖的相关词与用途；普通材质和尺寸留给五点正文。不把主商品加配件误写为同品多件装，数量未知不得默认 1 件装或抄竞品数量，记录缺口并使用其他已确认信息。不重复标题整句，不写成长段商品介绍。

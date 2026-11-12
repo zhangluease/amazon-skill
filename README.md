@@ -76,7 +76,9 @@ python3 skills/amazon-jp-keywords/scripts/amazon_jp_autocomplete.py \
 
 ## 日本站 Listing 生成
 
-[amazon-jp-listing](skills/amazon-jp-listing/SKILL.md) 接收关键词 XLSX/CSV/TSV、真实本品资料与图片，完整导入后进行购买意图筛词，生成日文标题、Highlight、五点、长描、后台搜索词、属性建议，以及主附图和 A+ 制作策划。支持单品和用户提供的父子体，交付 Markdown、JSON 和中文 HTML 验收报告。
+[amazon-jp-listing](skills/amazon-jp-listing/SKILL.md) 接收关键词 XLSX/CSV/TSV、真实本品资料与图片，完整导入后进行购买意图筛词，生成日文标题、Highlight、五点、长描、后台搜索词、属性建议，以及主附图和 A+ 制作策划。每次处理一个商品，交付 Markdown、JSON 和中文 HTML 验收报告。
+
+仅面向新版：标题最多 75 字符，优先高相关流量词；标题下独立小标题最多 125 字符，优先真实包装数量和套装组成；材质尺寸在五点正文，五点开头也放相关词。字段布局须对照原词指标与本品事实复审，报告将标题和灰字小标题相邻展示。 替换滤网等适配型耗材通常用2–3条五点按系列完整列出已确认机型，校验缺项、后缀和来源引用；机型清单单独于普通文案编辑预算计数，原文完整提交实际后端校验。
 
 流程：产品画像 → 完整导入词表 → 可用／暂缓／剔除三类词池 → 卖点与关键词布局 → 日文文案及图片策划 → 覆盖检查 → 本地／后端／独立语义验收。采集时保留的 Amazon 联想词在生成 Listing 时仍须按本品事实审核。
 

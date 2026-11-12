@@ -23,7 +23,3 @@ rules:
   type: editorial
   source_id: skill_editorial_v2
   prompt_fragment: 以目标站点实际用语为准；其他语言遵循自然分词。不为省字节截断单词或拆散必要语义。
-- id: search_terms_scope
-  type: required
-  source_id: user_family_rules
-  prompt_fragment: 共享搜索词必须适用于全部子体；子体独有的词放入对应的 content_overrides.search_terms。

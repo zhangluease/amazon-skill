@@ -9,6 +9,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+
+from listing_scope import require_single_product
 import re
 import sys
 import tempfile
@@ -144,14 +146,13 @@ def prepare(run):
 
 
 def fact_snapshot(profile):
-    """Per-fact digests so a later profile edit can name the exact keywords it affects."""
-    snapshot = {"__identity__": digest(profile.get("product_identity")), "__forbidden__": digest(profile.get("forbidden_terms", [])),
-                "__variants__": digest([v.get("variant_id") for v in profile.get("variants", []) if isinstance(v, dict)])}
-    for owner in [profile] + [v for v in profile.get("variants", []) if isinstance(v, dict)]:
-        for key, identity in (("facts", "fact_id"), ("measurements", "measurement_id")):
-            for value in owner.get(key, []):
-                if isinstance(value, dict) and isinstance(value.get(identity), str):
-                    snapshot[value[identity]] = digest(value)
+    """Per-fact digests name the exact keywords affected by a profile edit."""
+    require_single_product(profile)
+    snapshot = {"__identity__": digest(profile.get("product_identity")), "__forbidden__": digest(profile.get("forbidden_terms", []))}
+    for key, identity in (("facts", "fact_id"), ("measurements", "measurement_id")):
+        for value in profile.get(key, []):
+            if isinstance(value, dict) and isinstance(value.get(identity), str):
+                snapshot[value[identity]] = digest(value)
     return snapshot
 
 
@@ -407,6 +408,11 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
     issues = []
     def add(code, path, message, severity="error"):
         issues.append(dict(code=code, path=path, message=message, severity=severity))
+    try:
+        require_single_product(profile)
+    except ValueError as error:
+        add("single_product_only", PROFILE, str(error))
+        return status_result(issues)
     expected = source_records(raw)
     if decisions is None:
         add("keyword_audit_missing", DECISIONS, "缺少逐词审查；历史词表可读，但筛词尚未验收", "incomplete")
@@ -421,9 +427,8 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
     actual_projection = [{key: item.get(key) for key in ("keyword_id", "keyword", "normalized", "source_positions", "original_forms")} for item in actual_raw]
     if actual_projection != expected_projection:
         add("keyword_coverage", DECISIONS, "原始词必须按首次出现顺序全部且仅出现一次，完整保留重复位置与原词")
-    variant_ids = [v.get("variant_id") for v in profile.get("variants", [])] if profile.get("listing_mode") == "family" else []
     facts, measures = {}, {}
-    for owner_id, owner in [("all", profile)] + [(v.get("variant_id"), v) for v in profile.get("variants", [])]:
+    for owner_id, owner in [("all", profile)]:
         for key, catalog, identity in (("facts", facts, "fact_id"), ("measurements", measures, "measurement_id")):
             for value in owner.get(key, []):
                 identifier = value.get(identity)
@@ -463,9 +468,9 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
         if item.get("role") not in {"identity", "attribute", "intent", "synonym"} or item.get("label") not in {"high", "relevant"}:
             add("keyword_role", path, "角色和兼容相关性标签必须明确")
         scope = item.get("applies_to")
-        valid_scope = isinstance(scope, list) and bool(scope) and all(isinstance(s, str) for s in scope) and len(set(scope)) == len(scope) and (scope == ["all"] or bool(variant_ids) and set(scope) <= set(variant_ids))
+        valid_scope = scope == ["all"]
         if not valid_scope:
-            add("keyword_scope", path, "适用范围必须是全系列或已提供的具体子体"); scope = []
+            add("keyword_scope", path, "适用范围必须为本品"); scope = []
         supported = item.get("identity_basis") is True
         confirmed_refs = 0
         uncertain_refs = 0
@@ -479,8 +484,6 @@ def check_decisions(profile, raw, decisions, source_fingerprints):
                 if ref not in catalog:
                     add("keyword_reference_missing", path, "引用不存在：" + ref); continue
                 owner, fact = catalog[ref]
-                if owner != "all" and (scope == ["all"] or any(target != owner for target in scope)):
-                    add("keyword_fact_scope", path, "不能将子体事实提升到系列或串用给其他子体")
                 confirmed = nonempty(fact.get("source_ref")) and (field == "measurement_ids" or fact.get("status") == "confirmed")
                 supported |= confirmed
                 confirmed_refs += int(confirmed)
@@ -551,7 +554,7 @@ def project_pools(decisions, raw):
 
 
 def scope_allows(record, targets):
-    return record.get("applies_to") == ["all"] or set(targets) <= set(record.get("applies_to", []))
+    return record.get("applies_to") == ["all"] and targets in (["all"], ["single"])
 
 
 def check_usage(profile, decisions, title_keywords=None, qa=None, listing=None):
@@ -560,13 +563,13 @@ def check_usage(profile, decisions, title_keywords=None, qa=None, listing=None):
         issues.append(dict(code=code, path=path, message=message, severity="error"))
     records = all_records(decisions)
     by_word = {r["normalized"]: r for r in records}
-    variant_ids = {v.get("variant_id") for v in profile.get("variants", [])}
+    require_single_product(profile, *([listing] if listing is not None else []))
     def eligible(word, path, targets=None):
         item = by_word.get(norm(word)) if isinstance(word, str) else None
         if not item or item.get("decision") != "eligible":
             add("keyword_usage_quarantine", path, "只能使用可用词或有依据的本品补充词：" + str(word)); return
-        if targets is not None and (not isinstance(targets, list) or not targets or any(not isinstance(t, str) for t in targets) or len(set(targets)) != len(targets) or (targets != ["all"] and not set(targets) <= variant_ids) or not scope_allows(item, targets)):
-            add("keyword_usage_scope", path, "使用范围超出该词的真实适用子体")
+        if targets is not None and (targets != ["all"] or not scope_allows(item, targets)):
+            add("keyword_usage_scope", path, "关键词投放须使用本品范围")
     if title_keywords is not None:
         if not isinstance(title_keywords, dict):
             raise ValueError("Title keywords must be an object")
@@ -590,10 +593,10 @@ def check_usage(profile, decisions, title_keywords=None, qa=None, listing=None):
                 add("keyword_placement_shape", "placement_plan", "投放记录需要关键词、字段、范围和理由"); continue
             targets = entry.get("applies_to")
             if targets is None:
-                add("keyword_usage_scope", "placement_plan[%d]" % index, "投放计划必须明确适用子体")
+                add("keyword_usage_scope", "placement_plan[%d]" % index, "投放计划必须明确本品范围")
             eligible(entry.get("keyword"), "placement_plan[%d]" % index, targets)
-            if any(marker in entry["target_field"] for marker in ("parent.", "shared_content")) and targets != ["all"]:
-                add("keyword_usage_scope", "placement_plan[%d]" % index, "父体及共用正文不能使用子体专属词")
+            if entry["target_field"] not in FIELD_ORDER:
+                add("keyword_placement_field", "placement_plan[%d]" % index, "投放位置必须指向本品的有效文案字段")
         declared_protected = title_keywords.get("protected_terms", [])
         if not isinstance(declared_protected, list) or any(not nonempty(word) for word in declared_protected):
             add("keyword_protected_shape", "protected_terms", "必保词必须是完整短语数组")
@@ -602,6 +605,23 @@ def check_usage(profile, decisions, title_keywords=None, qa=None, listing=None):
             add("keyword_protected_missing", "protected_terms", "投放计划不得遗漏产品画像中的必保核心短语")
         for word in declared_protected:
             eligible(word, "protected_terms", ["all"])
+        strategies = title_keywords.get("field_strategy")
+        expected_targets = ["single"]
+        if (not isinstance(strategies, list)
+                or [s.get("target") if isinstance(s, dict) else None for s in strategies] != expected_targets):
+            add("field_strategy_targets", "field_strategy", "字段布局说明须只覆盖 single 本品")
+        else:
+            for index, strategy in enumerate(strategies):
+                path = "field_strategy[%d]" % index
+                if any(not nonempty(strategy.get(key)) for key in ("title", "item_highlight", "specifications")):
+                    add("field_strategy_shape", path, "须说明标题选词及指标依据、小标题数量依据、材质尺寸的正文落点或缺口")
+                openings = strategy.get("bullet_openings")
+                count = 5
+                if not isinstance(openings, list) or len(openings) != count or any(not nonempty(v) for v in openings):
+                    add("field_strategy_openings", path, "须逐条说明本品五个开头词与主题")
+                exceptions = strategy.get("exceptions")
+                if not isinstance(exceptions, list) or any(not nonempty(v) for v in exceptions):
+                    add("field_strategy_exceptions", path, "exceptions 须为说明例外依据的字符串数组，无例外时为空")
     if qa is not None:
         if not isinstance(qa, dict):
             raise ValueError("Enhanced QA must be an object")
@@ -610,11 +630,7 @@ def check_usage(profile, decisions, title_keywords=None, qa=None, listing=None):
     if listing is not None:
         if not isinstance(listing, dict):
             raise ValueError("Listing must be an object")
-        if profile.get("listing_mode") == "family":
-            shared = listing.get("shared_content", {})
-            contents = [("all", shared)] + [(v.get("variant_id"), dict(shared, **v.get("content_overrides", {}))) for v in listing.get("variants", [])]
-        else:
-            contents = [("all", listing)]
+        contents = [("all", listing)]
         for target, content in contents:
             text = content.get("search_terms", "")
             if not isinstance(text, str):
@@ -627,7 +643,7 @@ def check_usage(profile, decisions, title_keywords=None, qa=None, listing=None):
                 # A shorter ambiguous phrase inside a supported complete phrase is
                 # not a new search-intent claim (cat door vs cat door corner).
                 if any(not any(a <= start and end <= b and (a < start or end < b) for a, b in allowed_spans) for start, end in spans):
-                    add("keyword_search_terms_quarantine", str(target) + ".search_terms", "后台词出现暂缓、剔除或其他子体的完整词组：" + item["keyword"])
+                    add("keyword_search_terms_quarantine", str(target) + ".search_terms", "后台词出现暂缓或剔除的完整词组：" + item["keyword"])
     return issues
 
 
@@ -659,26 +675,9 @@ def _fields(content):
 
 
 def _targets(profile, listing):
-    """[(target, field-prefix map, content)] with family content resolved per child."""
-    if profile.get("listing_mode") != "family":
-        return [("single", {f: f for f in FIELD_ORDER}, listing)]
-    shared = listing.get("shared_content", {}) if isinstance(listing.get("shared_content"), dict) else {}
-    result = []
-    for variant in listing.get("variants", []):
-        if not isinstance(variant, dict):
-            continue
-        vid, overrides = variant.get("variant_id"), variant.get("content_overrides") or {}
-        content = dict(shared, **{k: v for k, v in overrides.items() if k in ("bullets", "description", "search_terms")})
-        content.update(title=variant.get("title"), item_highlight=variant.get("item_highlight"))
-        prefixes = {}
-        for field in FIELD_ORDER:
-            base = field.split("[")[0]
-            if base in ("title", "item_highlight") or base in overrides:
-                prefixes[field] = "variants.%s.%s" % (vid, field)
-            else:
-                prefixes[field] = "shared_content." + field
-        result.append((vid, prefixes, content))
-    return result
+    """One product and its direct field positions."""
+    require_single_product(profile, listing)
+    return [("single", {field: field for field in FIELD_ORDER}, listing)]
 
 
 def coverage(run, write_placement=False):
@@ -737,6 +736,23 @@ def coverage(run, write_placement=False):
             "searches_weighted_token_coverage": round(covered_searches / known, 4) if known else None,
             "top_uncovered": [r for r in rows if not r["token_covered"]][:30],
             "top10_in_title": [r["keyword"] for r in rows[:10] if r["title_tokens_covered"]],
+            # Exact phrase positions are evidence for the editor, not a ranking formula.
+            # Unknown metrics remain null and semantic relevance still needs review.
+            "field_layout": {
+                "title_chars": len(fields.get("title", "")),
+                "item_highlight_chars": len(fields.get("item_highlight", "")),
+                "title_max_chars": policy["default_limits"]["title_max_chars"],
+                "item_highlight_max_chars": policy["default_limits"]["item_highlight_max_chars"],
+                "top_keywords": [{"keyword": row["keyword"], "searches": row["searches"],
+                                  "title_position": (fields.get("title", "").find(row["keyword"])
+                                                     if row["keyword"] in fields.get("title", "") else None)}
+                                 for row in rows[:10]],
+                "bullet_openings": [
+                    {"field": "bullets[%d]" % index, "opening": bullet[:80],
+                     "exact_keyword_hits": [row["keyword"] for row in rows
+                                            if contains_phrase(bullet[:80], row["keyword"])]}
+                    for index, bullet in enumerate(content.get("bullets", [])) if isinstance(bullet, str)],
+            },
             "search_terms": {"bytes": len(search_terms.encode("utf-8")), "limit": byte_limit,
                              "words_repeated_from_title": repeated},
             "quarantined_phrase_hits": hits,
@@ -770,10 +786,7 @@ def coverage(run, write_placement=False):
         title_keywords = read_json(run / "05_title_keywords.json")
         plan, seen = [], set()
         for field, word, target, record in placements:
-            shared = not field.startswith("variants.")
-            applies = ["all"] if shared or profile.get("listing_mode") != "family" else [target]
-            if shared and record.get("applies_to") != ["all"]:
-                continue  # Scope problems stay visible in check/usage review, never silently planned.
+            applies = ["all"]
             key = (field, norm(word))
             if key not in seen:
                 seen.add(key)

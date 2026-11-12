@@ -8,9 +8,9 @@
 python3 "SKILL/scripts/listing_environment.py" init --run-dir "RUN"
 ```
 
-该命令只接受新任务目录，保存日本站明确跳过后端 QA 的记录。模型写 `00_product_input.json`，保留本轮输入、文件路径、站点、约束和子体清单；按[产品事实规则](../knowledge/distilled/product_facts_rules.yaml)写 `01_product_profile.json`。固定 JP/Japanese/ja，其他语言只用于中文解释或真实品牌、型号。
+该命令只接受新任务目录，保存日本站明确跳过后端 QA 的记录。模型写 `00_product_input.json`，保留本轮输入、文件路径、站点和约束；按[产品事实规则](../knowledge/distilled/product_facts_rules.yaml)写 `01_product_profile.json`。固定 JP/Japanese/ja，其他语言只用于中文解释或真实品牌、型号。
 
-区分本品与竞品、整机与配件、购买数量与随附配件数量。事实有 `confirmed/unknown/conflict` 状态及来源，图片不可推导未经确认的性能。产品、包装与适配尺寸分开记录。每个子体只引用共性或自己的事实、参数及素材。
+区分本品与竞品、整机与配件、购买数量与随附配件数量。事实有 `confirmed/unknown/conflict` 状态及来源，图片不可推导未经确认的性能。产品、包装与适配尺寸分开记录。替换滤网等有适配清单时，先读[机型清单规则](compatibility-lists.md)，将原件中的每个完整型号录入 compatible_models 事实并保留来源／状态，不以词表是否收录决定保留与否。只使用本品的事实、参数及素材。
 
 ```sh
 python3 "SKILL/scripts/listing_quality.py" normalize \
@@ -49,11 +49,10 @@ python3 "SKILL/scripts/keyword_quality.py" export --run-dir "RUN"
 
 ## 4. 卖点与字段安排
 
-把买家需求、本品能力、证据和适用场景对应起来，形成有依据的 `intent_map`。按[标题](../knowledge/distilled/title_rules.yaml)、[五点](../knowledge/distilled/bullets_rules.yaml)、[长描](../knowledge/distilled/description_rules.yaml)、[Highlight](../knowledge/distilled/item_highlight_rules.yaml)与[后台词](../knowledge/distilled/search_terms_rules.yaml)规则写 `05_title_keywords.json` 和 `07_listing.json`。
+只生成新版标题＋独立灰字小标题结构。把买家需求、本品能力、证据和适用场景对应起来，形成有依据的 `intent_map`。按[标题](../knowledge/distilled/title_rules.yaml)、[五点](../knowledge/distilled/bullets_rules.yaml)、[长描](../knowledge/distilled/description_rules.yaml)、[Highlight](../knowledge/distilled/item_highlight_rules.yaml)与[后台词](../knowledge/distilled/search_terms_rules.yaml)规则写 `05_title_keywords.json` 和 `07_listing.json`。
 
-`05` 的 high/relevant 代表词数组沿用上游兼容结构，合计最多 8 个，并非全部词库或全部投放词的数量上限；保留全部必保短语及 placement_plan。日本站不发 QA 请求，初始化的 `06_qa.json` 继续保留 skipped 状态。至少整理 6 个本品买家问题，缺事实的答案标为未声明，来源写本地资料整理，不伪造问答采集。
+`05` 的 high/relevant 代表词数组沿用上游兼容结构，合计最多 8 个，并非全部词库或全部投放词的数量上限；保留全部必保短语及 placement_plan。按[新版字段分工](japanese-listing.md)记录 `05.field_strategy`：标题按真实指标优先相关流量词，小标题优先 confirmed 数量／套装组成，材质尺寸在五点正文，五点逐条以相关词开头；适配型耗材通常用2–3条连续适配主题按组列全机型，记录事实引用、分组和预期数量，其余条目保留必要规格；说明指标未知、缺事实和必要例外。日本站不发 QA 请求，初始化的 `06_qa.json` 继续保留 skipped 状态。至少整理 6 个本品买家问题，缺事实的答案标为未声明，来源写本地资料整理，不伪造问答采集。
 
-父子体另读[变体规则](../knowledge/distilled/variation_rules.yaml)，先锁定用户子体与属性顺序，再构建父体、统一标题模板、每个子体完整内容和覆盖范围。只在资料明确外观相同且仅尺寸或数量不同的情况下共用附图，否则生成逐子体完整策划。
 
 ## 5. 图片、A+ 与覆盖反馈
 
@@ -63,7 +62,7 @@ python3 "SKILL/scripts/keyword_quality.py" export --run-dir "RUN"
 python3 "SKILL/scripts/keyword_quality.py" coverage --run-dir "RUN"
 ```
 
-结合 `07_keyword_coverage.json` 的未覆盖可用词、意图表达、后台字节和可补事实改进一轮，保持自然日语，不为覆盖率虚构用途。最后记录实际投放位置：
+结合 `07_keyword_coverage.json` 的未覆盖可用词、意图表达、后台字节和可补事实改进一轮，保持自然日语，不为覆盖率虚构用途。同时查看 field_layout 的标题／小标题字符数、标题词位和五条开头命中；这些是精确匹配提示，不能代替相关性判断。改动文案后同步更新 field_strategy，最后记录实际投放位置：
 
 ```sh
 python3 "SKILL/scripts/keyword_quality.py" coverage --run-dir "RUN" --write-placement
@@ -91,7 +90,7 @@ python3 "SKILL/scripts/listing_quality.py" review-template \
   --qa "RUN/06_qa.json" --output "RUN/08_semantic_review.json"
 ```
 
-每个可售子体单独 validate，只有内容相同且先前通过的子体可复用。独立复审者对照本品原始资料填写 identity、readability、factual_support、language、variant_scope、qa_relevance、keyword_usage 与 image_truth 的结论和依据；无资料或无实际复审不能填 pass。有可用的独立 Agent 时委派一次复审，提供本品原始资料、最终内容与待复审记录，要求返回逐项依据；没有独立复审者时保持 pending 并说明缺口。
+本品生成一个 validate 请求，只有内容相同且先前通过的本品记录可复用。独立复审者对照本品原始资料填写 identity、readability、factual_support、language、qa_relevance、keyword_usage、field_layout、compatibility_models 与 image_truth 的结论和依据。field_layout 须对照词表指标核对标题优先词、小标题数量事实、五点逐条开头与规格正文落点。compatibility_models 对照原件核对画像是否漏录、五点是否漏项／多写、完整后缀及本品资料一致性。长清单不为250字符本地编辑预算删型号；后端若拒绝真实长度，保留完整稿与失败状态，不静默截断。无资料或无实际复审不能填 pass。有可用的独立 Agent 时委派一次复审，提供本品原始资料、最终内容与待复审记录，要求返回逐项依据；没有独立复审者时保持 pending 并说明缺口。
 
 ```sh
 python3 "SKILL/scripts/listing_quality.py" check \

@@ -30,7 +30,7 @@ rules:
 - id: scope_and_placement
   type: required
   source_id: user_keyword_audit_v11
-  prompt_fragment: 相关性与投放字段相互独立，不适合标题不等于无关。子体专属词只用于对应子体，共用正文和父体不能吸收专属属性。后台词不是暂缓词的收容处。
+  prompt_fragment: 相关性与投放字段相互独立，不适合标题不等于无关。只采用本品有依据的属性与用途。后台词不是暂缓词的收容处。
 - id: honest_acceptance
   type: required
   source_id: user_keyword_audit_v11

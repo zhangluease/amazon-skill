@@ -37,5 +37,5 @@ rules:
 - id: site_final_review
   type: required
   source_id: skill_editorial_v2
-  prompt_fragment: 每个父子标题、Highlight、继承后完整正文和上图文案逐项复审语言与参数；不得只检查父体或第一个子体。所有字符/字节预算从 quality_policy.json
+  prompt_fragment: 本品标题、Highlight、完整正文和上图文案逐项复审语言与参数。所有字符/字节预算从 quality_policy.json
     读取。
