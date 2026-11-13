@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from urllib.parse import parse_qs, urlsplit
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'skills/pod-huaban-materials/scripts/huaban_tools.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'skills/pod-image-selection/scripts/huaban_tools.py'
 SPEC = importlib.util.spec_from_file_location('huaban_tools', SCRIPT)
 hb = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(hb)

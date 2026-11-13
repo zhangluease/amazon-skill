@@ -1,0 +1,10 @@
+{
+  "name": "pod-image-selection",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": "1.61.0"
+  }
+}

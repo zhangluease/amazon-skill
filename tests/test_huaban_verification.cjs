@@ -4,8 +4,8 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { challengeDetected, desktopAvailability, createHandoff }
-  = require('../skills/pod-huaban-materials/scripts/human_verification.cjs');
-const { argumentsFor } = require('../skills/pod-huaban-materials/scripts/huaban_browser.cjs');
+  = require('../skills/pod-image-selection/scripts/human_verification.cjs');
+const { argumentsFor } = require('../skills/pod-image-selection/scripts/huaban_browser.cjs');
 
 const challenge = { title: '安全验证 - EdgeOne', text: '确认您是真人', cards: 0, search: false,
   hostname: 'huaban.com', frames: [] };

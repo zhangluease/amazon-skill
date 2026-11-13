@@ -1,0 +1,4 @@
+interface:
+  display_name: "POD 选图"
+  short_description: "按父体销量展示 Amazon 竞品主图供多选，提取视觉元素，再搜索类似参考素材"
+  default_prompt: "请使用 $pod-image-selection，关键词：pet house。"

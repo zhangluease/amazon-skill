@@ -32,17 +32,19 @@ python3 scripts/configure.py status
 
 公共读取逻辑维护在 `shared/amazon_config.py`，两个相关技能随包包含同版本副本，因此单独安装一个技能也能使用公共文件。修改公共逻辑后运行 `python3 scripts/sync_shared_config.py`；`--check` 检查发布副本是否同步。
 
-## POD 花瓣素材初筛
+## POD 选图
 
-[pod-huaban-materials](skills/pod-huaban-materials/SKILL.md) 接收关键词与图片风格，搜索花瓣，结合右键找相似和推荐画板扩展，实际看图后去重，交付带图片、来源、筛选理由和授权状态的候选图集。默认 12 张，可补充产品、配色、比例、连续纹样和排除项。
+[pod-image-selection](skills/pod-image-selection/SKILL.md)（原 `pod-huaban-materials`）只需输入关键词，固定查询美国站。默认由固定 Playwright 脚本在专用持久浏览器运行原卖家精灵插件，查询关键词商品、读取父体近 30 天销量和主图，降序展示前 30 张供用户多选；用户选定后再提取关键视觉元素，到花瓣寻找类似参考图。
 
 ```text
-请使用 $pod-huaban-materials，找“猫”的素材，风格要复古木刻、黑白单色，适合 T 恤，初筛 12 张。
+请使用 $pod-image-selection，关键词：pet house。
 ```
 
-将整个 `skills/pod-huaban-materials/` 文件夹交给所用 Agent，说明“请安装这个 skill”即可。环境检查和依赖准备由 skill 在查询时自动处理，首次与后续使用的提示词相同。
+将整个 `skills/pod-image-selection/` 文件夹交给所用 Agent，说明“请安装这个 skill”即可。Agent 自动检查 Node.js 18+、Python 3.9+、锁定版本 Playwright、配套 Chromium 与本机原插件程序。首次在专用浏览器正常登录/同步卖家精灵，之后复用仓库外的完整专用配置；失效时弹出可操作浏览器等待登录后继续，无需导出 HAR。无交互桌面的容器需转到本机或可操作的远程桌面。
 
-优先使用独立 Playwright 无头脚本，批量捕获网站 JSON 和图片响应；本次未登录搜索 38 张约 3.3 秒，相似图和画板扩展约 8 秒缓存 60 个候选。无障碍定位可与无头模式同时使用，Browser Use 作为备用。首次使用自动校验 Node.js 18+、Python 3.9+、Playwright、浏览器启动和输出权限，按需准备私有运行库与 Chromium；也可用 `environment.cjs check/prepare/smoke` 分别检查本地环境、准备依赖及测试花瓣连接。详见[环境自检与试用提示词](skills/pod-huaban-materials/references/environment.md)和[访问说明](skills/pod-huaban-materials/references/huaban-access.md)；初筛素材的 POD 授权仍需核实。
+2026-11-13 已验证原插件在专用 Chromium 中加载、未登录识别，以及自建测试扩展的持久会话复用和授权恢复。真实卖家精灵账号登录后的关键词流程待试用确认。排序范围为本次返回的候选，未验证全局排名；界面缩写销量保留显示精度。普通使用不需要抓包，手动 HAR 工具仅保留给用户明确要求的诊断。
+
+原有花瓣无头采集、相似图与画板扩展、环境自动准备及真人验证接管继续可用。详见[卖家精灵接口](skills/pod-image-selection/references/sellersprite-access.md)、[花瓣检索](skills/pod-image-selection/references/huaban-workflow.md)和[环境自检](skills/pod-image-selection/references/environment.md)。初筛素材的 POD 授权仍需核实。
 
 ## 日本站关键词查找
 

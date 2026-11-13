@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { argumentsFor, responsePins, isDataForSource } = require('../skills/pod-huaban-materials/scripts/huaban_browser.cjs');
+const { argumentsFor, responsePins, isDataForSource } = require('../skills/pod-image-selection/scripts/huaban_browser.cjs');
 
 test('late similar responses cannot be attributed to a board page', () => {
   const board = { via: 'recommended_board', provenance: { parent_board_id: '56207432' } };

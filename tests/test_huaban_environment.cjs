@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { cacheRoot, findPython, findPlaywright, outputCheck, launchAvailable, parseArguments }
-  = require('../skills/pod-huaban-materials/scripts/environment.cjs');
+  = require('../skills/pod-image-selection/scripts/environment.cjs');
 
 test('finds a supported Python instead of accepting an older first interpreter', () => {
   const calls = [];

@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { findPlaywright } = require('../skills/pod-huaban-materials/scripts/environment.cjs');
-const { collect } = require('../skills/pod-huaban-materials/scripts/huaban_browser.cjs');
+const { findPlaywright } = require('../skills/pod-image-selection/scripts/environment.cjs');
+const { collect } = require('../skills/pod-image-selection/scripts/huaban_browser.cjs');
 const runtime = findPlaywright();
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=', 'base64');
 

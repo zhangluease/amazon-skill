@@ -7,4 +7,4 @@ __pycache__/
 !.env.example
 reports/
 config.json
-skills/pod-huaban-materials/node_modules/
+skills/pod-image-selection/node_modules/

@@ -1,4 +1,0 @@
-interface:
-  display_name: "POD 花瓣素材初筛"
-  short_description: "按关键词和图片风格搜索花瓣，结合相似图与推荐画板输出可追溯初筛图集"
-  default_prompt: "请使用 $pod-huaban-materials，查找 10 张动漫风狗狗图片，用作 T 恤图案灵感。"
