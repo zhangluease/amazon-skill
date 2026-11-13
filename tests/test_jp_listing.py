@@ -148,7 +148,7 @@ class JapaneseListingTests(unittest.TestCase):
                                 "specifications": "软件测试夹具，材质在第一点，尺寸在描述；本例未通过语义布局复审。", "exceptions": []}],
             "placement_plan": [{"keyword": "ペン立て", "target_field": "title", "applies_to": ["all"], "reason": "保留商品身份"},
                                {"keyword": "文具収納", "target_field": "search_terms", "applies_to": ["all"], "reason": "相关别称"}]})
-        write(self.run, "07_listing.json", self.listing)
+        write(self.run, "listing.json", self.listing)
 
     def import_device_keywords(self):
         self.csv.write_text("日文关键词,全部来源\nHD-500A フィルター,官网\n"
@@ -477,7 +477,7 @@ class JapaneseListingTests(unittest.TestCase):
         stage = keywords.check_run(self.run)
         self.assertEqual(stage["status"], "passed", stage["issues"])
         self.listing["search_terms"] += " 鉄製 ペン立て"
-        write(self.run, "07_listing.json", self.listing)
+        write(self.run, "listing.json", self.listing)
         self.assertEqual(keywords.check_run(self.run)["status"], "failed")
 
     def test_changed_facts_invalidate_the_bound_keyword_review(self):
@@ -583,7 +583,7 @@ class JapaneseListingTests(unittest.TestCase):
         self.listing["title"] = "テスト ペン立て"
         self.listing["item_highlight"] = "文具収納用"
         self.listing["bullets"][0] = "【ペン立て】ステンレス製。高さ15 cm。"
-        write(self.run, "07_listing.json", self.listing)
+        write(self.run, "listing.json", self.listing)
         before = json.loads((self.run / "05_title_keywords.json").read_text())["field_strategy"]
         result = keywords.coverage(self.run, write_placement=True)
         layout = result["targets"]["single"]["field_layout"]
@@ -608,7 +608,7 @@ class JapaneseListingTests(unittest.TestCase):
 
     def test_keyword_changes_reset_field_layout_review_but_keep_factual_review(self):
         self.import_and_classify()
-        profile_path, listing_path = self.run / "01_product_profile.json", self.run / "07_listing.json"
+        profile_path, listing_path = self.run / "01_product_profile.json", self.run / "listing.json"
         previous = quality.make_review_template(profile_path, listing_path)
         for record in previous["records"]:
             record.update(status="pass", evidence="synthetic-test:review")
@@ -626,7 +626,7 @@ class JapaneseListingTests(unittest.TestCase):
         self.import_and_classify()
         result = self.invoke("keyword_quality.py", "coverage", "--run-dir", self.run, "--write-placement")
         self.assertEqual(result.returncode, 0, result.stderr)
-        common = ["--profile", self.run / "01_product_profile.json", "--listing", self.run / "07_listing.json", "--qa", self.run / "06_qa.json"]
+        common = ["--profile", self.run / "01_product_profile.json", "--listing", self.run / "listing.json", "--qa", self.run / "06_qa.json"]
         result = self.invoke("listing_quality.py", "review-template", *common, "--output", self.run / "08_semantic_review.json")
         self.assertEqual(result.returncode, 0, result.stderr)
         result = self.invoke("listing_quality.py", "check", *common, "--review", self.run / "08_semantic_review.json", "--output", self.run / "08_validation.json")
@@ -636,8 +636,13 @@ class JapaneseListingTests(unittest.TestCase):
         self.assertEqual(validation["status"], "incomplete")
         result = self.invoke("render_listing.py", "--run-dir", self.run)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["validation_status"], "incomplete")
-        markdown = (self.run / "07_listing.md").read_text()
+        rendered = json.loads(result.stdout)
+        self.assertEqual(rendered["validation_status"], "incomplete")
+        self.assertEqual(rendered["files"], ["listing.md", "listing.json", "report.html"])
+        self.assertTrue(all((self.run / name).is_file() for name in rendered["files"]))
+        self.assertFalse((self.run / "07_listing.md").exists())
+        self.assertFalse((self.run / "07_listing.json").exists())
+        markdown = (self.run / "listing.md").read_text()
         page = (self.run / "report.html").read_text()
         self.assertIn("ペン立て", markdown)
         self.assertNotIn("犬用 ドア", markdown)

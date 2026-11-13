@@ -1,6 +1,6 @@
 # 本地数据契约 v2.7（Listing schema_version 仍为 "2.1"）
 
-本地版本只执行 JP/Japanese/ja，主要面向耗材。用户附件名称任意；本文的编号文件名仅是任务目录内的脚本接口，不限制用户原文件命名。来源库中的历史文件名也不是必交附件。
+本地版本只执行 JP/Japanese/ja，主要面向耗材。用户附件名称任意；本文的编号文件名仅用于任务目录内的中间流程，不限制用户原文件命名；最终交付使用 listing.md、listing.json、report.html。来源库中的历史文件名也不是必交附件。
 
 本文是新增字段的唯一结构定义。已有单品字段继续有效；新生成内容使用 `schema_version: "2.1"`。每次只生成一个商品，多个商品使用独立任务目录；旧内容不能因可读取而被宣布通过当前验收。所有 JSON 使用 UTF-8。
 
@@ -100,7 +100,7 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 自然正文、图片和后台倒装表达的语义由最终 `keyword_usage` 复审负责，核对实际采用的词及相关同意图表达，不要求将全部未采用或剔除词再审一遍。field_layout 另按新版字段分工逐项复审词位、包装数量、五点开头和规格落点；该复审不通过词袋交集自动认定违规，也不能用程序检查代替语义复核。最终语义复审额外保存 `keyword_fingerprints`，绑定原词、编号角色、分类和 05 投放计划；修改这些文件后须重新复审关键词使用、字段布局及适配对象。
 
-## 最终内容：07_listing.json
+## 最终内容：listing.json
 
 公共字段：schema_version、site、listing_language、listing_language_code、brand_name（字符串或 null）、buyer_question_coverage（数组）、excluded_claims（字符串数组）、attribute_suggestions（数组）。
 
@@ -155,8 +155,8 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 - 两个命令均可选 --config、--cli、--timeout；凭据只能从配置文件读取，无环境变量回退或 token 命令行参数。默认配置相对 Skill 定位，不依赖工作目录；自动选择本 Skill tools/bin 中的 laochen-cli-v2 平台文件。
 - 非零进程退出、无有效 JSON、超时和显式业务失败均返回非零；validate 仍要求 ok=true 且 errors=[]。进程已执行时保留真实 exit_code，未执行/未正常返回时为 null。错误响应可留档，不代表验收通过；无新有效响应时旧文件不覆盖、不视为本次结果。原始进程日志不透传。
 
-报告工具 `python3 scripts/render_listing.py --run-dir DIR` 从同一 JSON 生成 07_listing.md 与 report.html。
+报告工具 `python3 scripts/render_listing.py --run-dir DIR` 从同一 JSON 生成 listing.md 与 report.html。
 
 - Markdown 单品依次为 Title、Item Highlight、Bullet Points、Description、Search Terms、附图策划、A+ 整体策划、买家问题覆盖清单。只显示文案、中文创意说明和必要产品信息，不放 claims、画像、指纹、校验 JSON。
 - HTML 保持示例的报头、摘要漏斗、七个章节和白底 Listing 文档卡片；标题与灰字小标题在同一预览区域依次展示，下附各自字符计数，不将两段合并；完整图片创意用标题和自然段展开。禁止新增导航条、验收面板、原始 JSON 或逐图技术字段列表；图片保留画面说明、目标语言文案及必要的制作前待确认事项。技术引用和完整验收记录存入内嵌 JSON，摘要仅显示简短状态；缺失或旧版校验不能标通过。HTML 的简洁展示不删改结构化 JSON 或 Markdown 的内容。
-- 最终固定链接 07_listing.md、07_listing.json、report.html 三份文件；中间采集/校验文件保留追溯，不另建“文案预览”。
+- 最终固定链接 listing.md、listing.json、report.html 三份文件；中间采集/校验文件保留追溯，不另建“文案预览”。

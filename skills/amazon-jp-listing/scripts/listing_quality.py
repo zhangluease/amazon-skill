@@ -1004,7 +1004,7 @@ def validate_bundle(profile, listing, qa=None, review=None, backend=None, finger
         keywords = copy.deepcopy(keywords)
     if keywords.get("status") == "passed":
         bound = keywords.get("fingerprints", {})
-        for source, key in (("01_product_profile.json", "profile_sha256"), ("07_listing.json", "listing_sha256"), ("06_qa.json", "qa_sha256")):
+        for source, key in (("01_product_profile.json", "profile_sha256"), ("listing.json", "listing_sha256"), ("06_qa.json", "qa_sha256")):
             if fingerprints is None or bound.get(source) != fingerprints.get(key):
                 keywords["status"] = "incomplete"
                 keywords.setdefault("issues", []).append({"severity": "incomplete", "code": "keyword_bundle_mismatch", "path": source, "message": "Keyword audit is not bound to the product, Listing or QA used by this validation"})

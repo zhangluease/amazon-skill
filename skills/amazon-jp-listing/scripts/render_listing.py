@@ -23,7 +23,7 @@ FILES = {
     "profile": "01_product_profile.json", "kw_raw": "02_kw_raw.json",
     "kw_removed": "03_kw_removed.json", "kw_filtered": "03_kw_filtered.json",
     "kw_tagged": "04_kw_tagged.json", "title_keywords": "05_title_keywords.json",
-    "qa": "06_qa.json", "listing": "07_listing.json", "validation": "08_validation.json",
+    "qa": "06_qa.json", "listing": "listing.json", "validation": "08_validation.json",
     "review": "08_semantic_review.json", "backend": "08_backend_validation.json",
     "kw_pending": "03_kw_pending.json", "keyword_decisions": "03_keyword_decisions.json",
     "coverage": "07_keyword_coverage.json",
@@ -503,7 +503,7 @@ def build_report(run_dir: Path, generated_at=None):
 def write_outputs(run_dir, markdown, report):
     temporary = []
     try:
-        for name, content in (("07_listing.md", markdown), ("report.html", report)):
+        for name, content in (("listing.md", markdown), ("report.html", report)):
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=run_dir, prefix=".listing-report-", delete=False) as handle:
                 handle.write(content)
                 temporary.append((Path(handle.name), run_dir / name))
@@ -527,7 +527,7 @@ def main(argv=None):
     except (TypeError, AttributeError, KeyError) as exc:
         print(f"报告生成失败：嵌套数据结构不符合要求（{exc}）；请检查对象、数组及编号字段。", file=sys.stderr)
         return 1
-    print(json.dumps({"rendered": True, "validation_status": status, "files": ["07_listing.md", "07_listing.json", "report.html"]}, ensure_ascii=False))
+    print(json.dumps({"rendered": True, "validation_status": status, "files": ["listing.md", "listing.json", "report.html"]}, ensure_ascii=False))
     return 0
 
 

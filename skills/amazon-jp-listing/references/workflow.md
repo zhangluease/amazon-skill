@@ -54,7 +54,7 @@ python3 "SKILL/scripts/keyword_quality.py" export --run-dir "RUN"
 
 ## 4. 卖点与字段安排
 
-只生成新版标题＋独立灰字小标题结构。把买家需求、本品能力、证据和适用场景对应起来，形成有依据的 `intent_map`。按[标题](../knowledge/distilled/title_rules.yaml)、[五点](../knowledge/distilled/bullets_rules.yaml)、[长描](../knowledge/distilled/description_rules.yaml)、[Highlight](../knowledge/distilled/item_highlight_rules.yaml)与[后台词](../knowledge/distilled/search_terms_rules.yaml)规则写 `05_title_keywords.json` 和 `07_listing.json`。
+只生成新版标题＋独立灰字小标题结构。把买家需求、本品能力、证据和适用场景对应起来，形成有依据的 `intent_map`。按[标题](../knowledge/distilled/title_rules.yaml)、[五点](../knowledge/distilled/bullets_rules.yaml)、[长描](../knowledge/distilled/description_rules.yaml)、[Highlight](../knowledge/distilled/item_highlight_rules.yaml)与[后台词](../knowledge/distilled/search_terms_rules.yaml)规则写 `05_title_keywords.json` 和 `listing.json`。
 
 `05` 的 high/relevant 代表词数组沿用上游兼容结构，合计最多 8 个，并非全部词库或全部投放词的数量上限；保留全部必保短语及 placement_plan。按[新版字段分工](japanese-listing.md)记录 `05.field_strategy`：标题按真实指标优先相关流量词，小标题优先 confirmed 数量／套装组成，材质尺寸在五点正文，五点逐条以相关词开头；按型号选购时通常用2–3条连续适配主题按组列全对象，规格型和通用耗材按真实选择条件或购买问题安排，不强制机型表；记录事实引用、分组和预期数量，其余条目保留必要规格；说明指标未知、缺事实和必要例外。日本站不发 QA 请求，初始化的 `06_qa.json` 继续保留 skipped 状态。至少整理 6 个本品买家问题，给定资料（含可信关键词）仍未表达的事实不补造，相关答案标为未声明，来源写本地资料整理，不伪造问答采集。
 
@@ -79,7 +79,7 @@ python3 "SKILL/scripts/keyword_quality.py" coverage --run-dir "RUN" --write-plac
 
 ```sh
 python3 "SKILL/scripts/listing_quality.py" check \
-  --profile "RUN/01_product_profile.json" --listing "RUN/07_listing.json" \
+  --profile "RUN/01_product_profile.json" --listing "RUN/listing.json" \
   --qa "RUN/06_qa.json" --output "RUN/08_validation.json"
 python3 "SKILL/scripts/listing_environment.py" config-status
 ```
@@ -88,10 +88,10 @@ python3 "SKILL/scripts/listing_environment.py" config-status
 
 ```sh
 python3 "SKILL/scripts/listing_quality.py" backend \
-  --profile "RUN/01_product_profile.json" --listing "RUN/07_listing.json" \
+  --profile "RUN/01_product_profile.json" --listing "RUN/listing.json" \
   --output "RUN/08_backend_validation.json"
 python3 "SKILL/scripts/listing_quality.py" review-template \
-  --profile "RUN/01_product_profile.json" --listing "RUN/07_listing.json" \
+  --profile "RUN/01_product_profile.json" --listing "RUN/listing.json" \
   --qa "RUN/06_qa.json" --output "RUN/08_semantic_review.json"
 ```
 
@@ -99,10 +99,10 @@ python3 "SKILL/scripts/listing_quality.py" review-template \
 
 ```sh
 python3 "SKILL/scripts/listing_quality.py" check \
-  --profile "RUN/01_product_profile.json" --listing "RUN/07_listing.json" \
+  --profile "RUN/01_product_profile.json" --listing "RUN/listing.json" \
   --qa "RUN/06_qa.json" --review "RUN/08_semantic_review.json" \
   --backend "RUN/08_backend_validation.json" --output "RUN/08_validation.json"
 python3 "SKILL/scripts/render_listing.py" --run-dir "RUN"
 ```
 
-某个证据文件未取得时从最终检查命令中省略对应参数，状态必须保留 incomplete／failed，不能创建假通过文件。验收最多修复两轮；改动后只重跑受影响校验与复审。三份最终文件为 `07_listing.md`、`07_listing.json`、`report.html`，失败或部分完成也输出已有结果与准确缺口。完整词池、原始输入、指纹和失败记录保存在任务目录。
+某个证据文件未取得时从最终检查命令中省略对应参数，状态必须保留 incomplete／failed，不能创建假通过文件。验收最多修复两轮；改动后只重跑受影响校验与复审。三份最终文件为 `listing.md`、`listing.json`、`report.html`，失败或部分完成也输出已有结果与准确缺口。完整词池、原始输入、指纹和失败记录保存在任务目录。

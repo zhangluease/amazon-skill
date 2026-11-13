@@ -30,7 +30,7 @@ DECISION_CODES = {
     "deferred": {"ambiguous_intent", "unknown_fact", "seasonal_unconfirmed", "identity_conflict"},
     "excluded": {"product_mismatch", "fact_conflict", "user_restriction", "unusable_query"},
 }
-DOWNSTREAM = ("05_title_keywords.json", "06_qa.json", "07_listing.json")
+DOWNSTREAM = ("05_title_keywords.json", "06_qa.json", "listing.json")
 
 
 def norm(value):
@@ -763,7 +763,7 @@ def coverage(run, write_placement=False):
 
     It is advisory (never a completion gate) so it cannot start a repair loop.
     """
-    profile, raw, decisions, listing = [read_json(run / name) for name in (PROFILE, RAW, DECISIONS, "07_listing.json")]
+    profile, raw, decisions, listing = [read_json(run / name) for name in (PROFILE, RAW, DECISIONS, "listing.json")]
     qa = read_json(run / "06_qa.json", required=False)
     policy = read_json(POLICY)
     site = profile.get("site")
@@ -894,7 +894,7 @@ def check_run(run, require_exports=True, downstream=True):
                     if actual != expected:
                         result["issues"].append(dict(code="keyword_export_mismatch", path=name, message="词池或标注与审查记录不一致；必须通过统一工具导出", severity="error"))
             if downstream:
-                if before["07_listing.json"] is not None and before["05_title_keywords.json"] is None:
+                if before["listing.json"] is not None and before["05_title_keywords.json"] is None:
                     result["issues"].append(dict(code="keyword_placement_missing", path="05_title_keywords.json", message="已有 Listing 但缺少候选及实际投放计划", severity="incomplete"))
                 result["issues"].extend(check_usage(profile, decisions, *[read_json(run / name, required=False) for name in DOWNSTREAM]))
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
