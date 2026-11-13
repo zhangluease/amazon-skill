@@ -1,78 +1,38 @@
-# 花瓣参考素材检索与初筛
+# 花瓣检索与初筛
 
-用于用户选定竞品主图后的素材检索阶段，也支持用户明确要求直接搜索花瓣。下列 scripts 路径均相对 skill 根目录。
+使用已选竞品图片提取的主题、风格、配色和构图搜索。直接找素材时沿用用户提供的条件。不同视觉方向分组检索，每组记录来源ASIN；组合过窄时拆词或换同义词，保留用户明确限定的风格。
 
-## 运行环境（自动处理）
+## 采集与扩展
 
-环境校验和依赖准备是 skill 的内部流程，用户只需提供关键词、风格等业务条件，无需声明首次使用或在提示词中要求自检。正常任务直接运行采集入口，它会自动检查 Node.js 18+、Python 3.9+、npm、锁定版本 Playwright、可写输出目录，实际启动浏览器，并按需准备依赖后继续采集；复用已验证启动的浏览器，无需额外先跑一轮独立检查。
+以下命令在skill目录运行，替换查询词和输出路径：
 
-使用当前 Agent 能调用的 Node 和 Python。缺少运行库时安装到用户私有缓存，优先复用 Chrome，缺少可用浏览器时准备 Playwright 管理的 Chromium。成功时直接继续；只在缺 Node/Python、依赖准备失败、缺系统运行库或需要用户接管登录时说明具体问题。单项准备失败不循环安装，不修改全局 npm、日常 Chrome 配置，不把环境失败当成没搜到图片。
+```sh
+node scripts/huaban_browser.cjs --query '狗 动漫' --limit 40 --out /absolute/run/huaban/search
+python3 scripts/huaban_tools.py normalize /absolute/run/huaban/search/response.json --via keyword --query '狗 动漫' --style '动漫' --output /absolute/run/candidates.json
+```
 
-独立排障可使用 `scripts/environment.cjs check`、`prepare`；用户要求联网验收时使用 `smoke`，普通查询直接以真实采集验证网站连接。`environment.json` 只记录本地环境，不能代替联网成功。脚本与输出路径由 Agent 换成实际绝对路径，输出放在用户当前项目。详细命令、排障与试用方式见[环境自检与首次试用](environment.md)。
+采集器自动检查环境，默认匿名无头运行，监听页面JSON和图片响应，缓存本地预览。输出 `response.json`、`browser-candidates.json`、`browser-assets/` 和页面截图。人工验证处理见 [环境与人工接管](environment.md#花瓣人机验证接管)。
 
-## 明确筛选目标
+先看候选图，再从2–3张合适的种子扩展：相似页使用 `--similar <pin_id>`，推荐画板使用 `--board <board_id>`，二者可重复提供。画板链接带 `source_file_id` 时同时传 `--source-file-id`，保留原推荐排序。默认最多扩展两层、检查约60个去重候选，有足够多样的素材后停止。
 
-此阶段使用用户已选竞品图中提取的关键词与风格；直接找素材时可使用用户提供的关键词与风格。缺少且无法从已选图片提取时再问。风格可以是自然语言或参考图，例如“猫，复古木刻，黑白单色，适合 T 恤”。若已有上下文则直接使用。
+需要登录内容时，可使用用户提供的花瓣会话文件 `--state`；它与卖家精灵授权独立。读取失败时区分访问错误、验证和真实无结果，交付已有结果及缺口。
 
-产品类型、配色、横竖比例、是否需要连续纹样、排除元素、候选数量均为可选条件。未提供时先选灵感图，注明尚未按具体印刷区域评估；默认交付 12 张初筛图，数量不足如实说明。
+## 看图与去重
 
-把描述拆成主题、技法、构图、色彩与排除项。先用主题加主要风格搜索；组合过窄时分开查主题词与风格同义词，记录实际查询词。用户明确限定的风格不能因结果少而悄悄放宽。
+实际查看图片或联系表，判断主体、技法、配色、构图与用户条件的匹配，不能用标题或相似推荐标签代替看图。按pin_id、file_id、file key去重并合并来源，再检查裁切、换色、水印等近重复。
 
-## 取得候选
+在 `candidates.json` 为每张填写 `decision`（保留/备选/排除/待看图）、`visual_notes`、`product_fit` 和 `limitations`。看不清的标为待看图。保留完整搜索词及搜索/相似/画板来源关系。
 
-1. 优先使用随附 [huaban_browser.cjs](../scripts/huaban_browser.cjs) 运行完整 Playwright 无头采集：先进入发现页建立游客会话，再导航到搜索页，监听网页自身的 JSON 与图片响应并缓存预览。本次实测匿名搜索 38 张约 3.3 秒，无需预先登录；相似图加推荐画板约 8 秒取得并缓存 60 个候选。不要以发现页的随机推荐代替关键词搜索。检测到明确真人验证时由脚本自动接管，不对普通 HTTP 错误反复切换有界面模式重试。
-2. 对结果看图，选择少量符合条件的种子。右键“找相似”或详情页“找相似”继续找；详情页“推荐画板”与“所在画板”也可进入。页面不同版本的相似分类名称可能不同，以当前页面为准。
-3. 优先从 2–3 张符合风格的种子扩展，比较推荐画板的封面与实际内容，避免只凭画板标题判断。默认最多扩展两层、检查约 60 个去重候选；已有足够多样的好图时提前结束，用户要求更多时再增加。
-4. 需要登录的内容才使用用户已提供的站点会话文件 `--state`，或交给可见浏览器由用户完成登录；不因没有 Cookie 就强制登录或注册。本次匿名公开搜索可用，但不能保证所有账号、网络、接口和时间都相同。浏览器脚本也失败时，复用已登录 Browser Use，核对登录提示、验证码或访问错误；不要把 405 简单判断为没登录。
-5. 有可用、经验证的 HTTP 会话时，可直接读取 JSON。仅有 Cookie 不能保证成功：可能还有 Bearer、实验头、浏览器校验或设备条件。请求失败时切换已验证浏览器方式，不反复试猜接口或签名。
-6. 当前 Browser Use 工具若只允许只读 DOM evaluate，就只读取页面中的图片、链接、文字，不能在该工具 evaluate 中调用 fetch、读取 Cookie、应用内部状态或任意运行时对象。可使用 [extract_cards.js](../scripts/extract_cards.js) 的函数表达式提取已呈现的图片卡片。随附独立脚本使用完整 Playwright，可按其正式 API 监听响应；两种执行面不要混淆。
-
-真人验证属于正常接管流程，不需要用户在提示词中指定。本机可交互桌面上，脚本会打开一次可见浏览器，将本轮隔离会话在内存中迁移，等待用户手动验证，成功后沿用该可见会话继续采集。出现 `awaiting_human` 日志或 `verification.json` 状态时，立即告知用户到浏览器完成验证，并保持采集进程运行；默认等 5 分钟。Agent 不点击、识别或代做验证题。超时、用户关闭窗口或再次触发验证时明确报告，不循环弹窗。
-
-云端、容器、SSH 或 xvfb 不默认视为用户可操作桌面。收到 `HUMAN_VERIFICATION_REQUIRED` 时，优先使用宿主实际提供的本地执行或可交互远程浏览器入口；没有相应能力时说明需改在本机运行，不把虚拟显示说成“已弹出浏览器”。不要用另一台电脑验证后直接保证沙箱可以复用。接管状态、可调等待时间和远程桌面配置见[人机验证接管](environment.md#花瓣人机验证接管)。
-
-定位约定：点击、填表优先使用 `getByRole` 配合可访问名称、`getByLabel` 等语义定位；根据控件实际语义选择，不套用固定的全局优先级。批量图片读取继续使用网络响应和采集链接等稳定业务属性，保留没有有效 alt 的图片，不将整批提取机械替换为 `getByRole('img')`。语义定位可以直接用于无头脚本，无需额外获取 AX 树快照。详见[定位原则](huaban-access.md#定位原则)。
-
-搜索、相似图、推荐画板的来源路径分别保存。API 图片元数据与页面缩略图尺寸分开标记。图片地址的 `auth_key` 和变换后缀原样保留，不能凭 file key 拼接原图，也不能把缩略图放大当作高清素材。
-
-## 看图初筛
-
-必须实际查看图片或联系表，不能用标题、采集量、搜索排名或“相似”标签代替视觉判断。按用户条件解释主题、技法、配色、构图、元素密度的匹配与偏差；相似推荐可能跑题，仍需重新筛选。
-
-结合产品判断可用方向：T 恤关注主体辨识度、留白和底色适配；杯子关注横向展开、把手避让；全幅印花关注元素尺度和重复节奏。未验证平铺接缝时，只能写“适合进一步制作连续纹样”，不能宣称已无缝。实际印刷尺寸和像素已知时才计算像素需求；低清预览不支持印刷质量结论。
-
-按 pin_id、file_id、file key 去重，合并同图的多条来源；必要时再看图合并裁切、换色、加水印等近重复。保留风格多样性，避免整组都是同一图案的小变体。
-
-每张标记：`保留 / 备选 / 排除 / 待看图`，附具体理由。不要编造相似度或客观评分。无法看清或未加载的图标为待核实。
-
-花瓣“版权素材”“商用素材”、会员身份或原站“免费下载”不代表已取得 POD 商品印刷授权。初筛默认标记“灵感参考，授权待核实”，保留作者/原站线索；只有拿到覆盖具体使用方式的授权证据才升级状态。用户要求找可直接商用的素材时，授权可核实性成为筛选条件。不要购买、采集到账号或发布素材来完成普通初筛。
+优先使用采集器缓存的 `local_image`。图片完整URL及其签名、缩略图后缀原样保留，不拼接猜测原图。API文件尺寸与当前预览尺寸分开记录；缩略图不支持印刷质量结论，未经接缝检查不宣称无缝纹样。
 
 ## 交付
 
-默认在当前项目 `reports/pod-materials/<日期>-<主题>/` 保存：
+用户指定数量时按其要求筛选；未指定时默认12张初筛参考图，数量不足如实说明。候选默认 `rights_status=灵感参考，授权待核实`，只有取得覆盖POD用途的授权证据才更新。
 
-- `gallery.html`：编号图片、风格判断、适用方向、限制、原采集链接，可在浏览器查看。
-- `candidates.json`：完整候选与去重后的来源路径，含未入选和待核实项。
-- `report.md`：查询词、访问方式、搜索/相似/画板覆盖情况、初筛取舍与缺口。
-
-优先用独立脚本监听浏览器图片响应并读取响应体，保存为本地预览；这样无需再次请求 CDN 或逐张右键。图片 CDN 的独立 HTTP 下载与跨站外链可能失败，取得 `auth_key` 不代表可直接嵌入图集。脚本不可用时才用浏览器已支持的下载功能；当前 Chrome 可按 Shift 右键显示原生菜单，再“图片存储为”。`downloadMedia` 可能已下载文件但仍等待超时，先检查明确的下载结果，不盲目重复。
-
-将浏览器返回或明确保存的本地图片绝对路径填入候选 `local_image`，图集脚本会复制到同目录资源文件夹。没有下载到图时保留链接并说明，不交付空白图集冒充初筛完成。签名图片地址可能过期，需要重访采集刷新。图集默认不展示“排除”项，它们仍保存在完整候选 JSON；`--selected-only` 只展示“保留”。
-
-推荐字段为 `pin_id, pin_url, image_url, file_id, file_key, width, height, dimension_source, title, source_url, board_id, source_paths, decision, visual_notes, product_fit, limitations, rights_status`。尺寸未知写 null。`source_paths` 记录 query、via、parent_pin_id、parent_board_id，保留找图关系。
-
-脚本使用方式：
+看图并补充字段后生成图集：
 
 ```sh
-node scripts/huaban_browser.cjs --query '狗 动漫' --limit 40 --out /absolute/output/search
-python3 scripts/huaban_tools.py normalize /absolute/output/search/response.json --via keyword --query '狗 动漫' --style '动漫' --output candidates.json
-python3 scripts/huaban_tools.py api-url search --query '碎花 水彩' --limit 20
-python3 scripts/huaban_tools.py api-url similar --pin-id 6498350553
-python3 scripts/huaban_tools.py api-url related-boards --pin-id 6498350553 --preview
-python3 scripts/huaban_tools.py normalize response.json --via keyword --query '碎花 水彩' --style '水彩小碎花' --output candidates.json
-python3 scripts/huaban_tools.py gallery candidates.json --download --output gallery.html
+python3 scripts/huaban_tools.py gallery /absolute/run/candidates.json --selected-only --output /absolute/run/gallery.html
 ```
 
-以上命令在 skill 目录执行；从其他目录运行时使用脚本绝对路径。依赖准备按前述环境校验执行；浏览器可以是 Chrome 或 Playwright 管理的 Chromium。采集输出 `response.json`、带来源的完整记录、预览缓存、截图与耗时；`--similar <pin_id>`、`--board <board_id>` 可多次提供，用于看图选种子后的扩展。`api-url` 只输出 URL，不发请求。看图后补充判断字段再渲染正式初筛图集。
-
-接口与验证码不可用时交付已有结果和明确缺口。不要用 HTTP 200、登录页、校验脚本或空响应证明成功；不要把“浏览器内成功”写成“Cookie 在独立 HTTP 客户端中已验证成功”。
+`gallery.html` 展示保留项及理由；`candidates.json` 保留全部候选和来源；`report.md` 记录查询词、筛选取舍和缺口。没有可查看的图片时，不宣称初筛完成。
