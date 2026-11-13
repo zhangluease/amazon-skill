@@ -17,6 +17,8 @@ const REMEDIES = {
   AUTHORIZATION_CANCELLED: '授权窗口已关闭；请保持窗口打开直到脚本提示会话已保存。',
   AUTHORIZATION_REJECTED: '卖家精灵拒绝网页账号同步，请核对官网账号和插件授权状态。',
   AUTHORIZATION_BRIDGE_UNAVAILABLE: '插件账号存在但未取得完整接口会话，请反馈状态并核对插件版本。',
+  AMAZON_HUMAN_VERIFICATION_REQUIRED: 'Amazon匿名请求遇到真人验证，本轮已停止；不会自动开浏览器或循环请求。',
+  AMAZON_RESULTS_NOT_CONFIRMED: '未读到可确认的Amazon搜索结果，不能用推荐商品或卖家精灵关键词结果代替。',
 };
 
 function argumentsFor(argv) {
@@ -25,13 +27,15 @@ function argumentsFor(argv) {
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     if (key === 'headless') { options.headless = true; continue; }
-    if (!['query', 'out', 'extension-dir', 'state-dir', 'authorization-timeout'].includes(key) || !argv[i + 1]) throw fail('INVALID_ARGUMENT');
+    if (!['query', 'out', 'extension-dir', 'state-dir', 'authorization-timeout', 'amazon-pages'].includes(key) || !argv[i + 1]) throw fail('INVALID_ARGUMENT');
     options[key] = argv[++i];
   }
   options.timeout = Number(options['authorization-timeout'] || 300);
   if (!Number.isInteger(options.timeout) || options.timeout < 5 || options.timeout > 900) throw fail('INVALID_TIMEOUT');
   if (options.command === 'search' && (!options.query?.trim() || options.query.length > 500)) throw fail('INVALID_QUERY');
   options.query = options.query?.trim();
+  options.amazonPages = Number(options['amazon-pages'] || 1);
+  if (!Number.isInteger(options.amazonPages) || options.amazonPages < 1 || options.amazonPages > 4) throw fail('INVALID_PAGE_COUNT');
   if (!options.out) throw fail('MISSING_OUTPUT');
   return options;
 }
@@ -70,12 +74,36 @@ async function run(options, dependencies = {}) {
       await fs.writeFile(path.join(output, 'browser-status.json'), JSON.stringify(result, null, 2));
       return result;
     }
+    stage = 'amazon_search';
+    const cohortPath = path.join(output, 'amazon-search.json');
+    let cohort;
+    try {
+      const response = await (dependencies.execute || execute)(python.command, [...python.prefix,
+        path.join(__dirname, 'amazon_search.py'), '--query', options.query,
+        '--pages', String(options.amazonPages || 1), '--out', cohortPath], { timeout: 125000, maxBuffer: 1024 * 1024 });
+      cohort = JSON.parse(response.stdout);
+    } catch (error) {
+      let category;
+      try { category = JSON.parse(error.stderr).category; } catch {}
+      throw fail(typeof category === 'string' && /^[A-Z0-9_]{1,80}$/.test(category) ? category : 'AMAZON_SEARCH_FAILED');
+    }
+    if (cohort.status === 'empty' && cohort.asins_found === 0) {
+      const result = { status: 'empty', query: options.query, marketplace: 'US', products: [], returned_candidates: 0,
+        source: 'amazon_anonymous_search_http', collection_method: 'independent_http', lookup_performed: false };
+      await fs.writeFile(path.join(output, 'ranked-products.json'), JSON.stringify(result, null, 2));
+      const summary = { ...result, products: 0 };
+      await fs.writeFile(path.join(output, 'browser-status.json'), JSON.stringify(summary, null, 2));
+      await publish('not_required', { reason: 'no_amazon_results' });
+      return summary;
+    }
+    if (cohort.status !== 'ok' || !Number.isInteger(cohort.asins_found) || cohort.asins_found < 1)
+      throw fail('AMAZON_RESULTS_NOT_CONFIRMED');
     const query = async () => {
       stage = 'http_query';
       try {
         const result = await (dependencies.execute || execute)(python.command, [...python.prefix,
           path.join(__dirname, 'sellersprite_plugin_client.py'), 'search', '--query', options.query,
-          '--session-file', session, '--out', output], { timeout: 35000, maxBuffer: 1024 * 1024 });
+          '--asins-file', cohortPath, '--session-file', session, '--out', output], { timeout: 35000, maxBuffer: 1024 * 1024 });
         return JSON.parse(result.stdout);
       } catch (error) {
         if (error.code === 3 && error.stdout) return JSON.parse(error.stdout);
@@ -98,6 +126,8 @@ async function run(options, dependencies = {}) {
         { timeout: 30000, maxBuffer: 1024 * 1024 });
     }
     const summary = { ...result, collection_method: 'independent_http', authorization_handoffs: handoffs,
+      candidate_source: 'amazon_anonymous_search_http', amazon_asins_found: cohort.asins_found,
+      amazon_pages_loaded: cohort.pages_loaded,
       elapsed_ms: Date.now() - started };
     await fs.writeFile(path.join(output, 'browser-status.json'), JSON.stringify(summary, null, 2));
     return summary;
@@ -105,7 +135,7 @@ async function run(options, dependencies = {}) {
     const code = typeof error.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : 'COLLECTION_FAILED';
     if (/^AUTHORIZATION_/.test(code)) await publish(code.replace('AUTHORIZATION_', '').toLowerCase());
     await fs.writeFile(path.join(output, 'browser-status.json'), JSON.stringify({ status: 'failed', category: code, stage,
-      collection_method: 'independent_http', remedy: REMEDIES[code] || '请反馈此状态文件；不会改用Amazon页面或表格导出。' }, null, 2));
+      collection_method: 'independent_http', remedy: REMEDIES[code] || '请反馈此状态文件；不会启动浏览器搜索或导出表格。' }, null, 2));
     throw fail(code);
   } finally { await home?.release(); }
 }

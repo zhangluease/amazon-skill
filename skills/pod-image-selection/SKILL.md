@@ -1,6 +1,6 @@
 ---
 name: pod-image-selection
-description: 为 POD 业务选图。输入关键词，通过卖家精灵查询美国站商品，按父体销量降序展示前 30 张主图供用户多选，提取所选图片的关键视觉元素，再到花瓣等指定来源检索类似素材并看图初筛。也支持直接按主题风格找参考图；竞品销量不代表某个图案的销量，素材授权需核实。
+description: 为 POD 业务选图。按关键词匿名获取 Amazon 美国站搜索结果ASIN，通过卖家精灵批量查父体销量和主图，降序展示前30供用户多选；提取所选图的关键元素，到花瓣等指定来源检索类似参考素材。也支持直接按主题风格找图；竞品销量不代表某个图案的销量，素材授权需核实。
 ---
 
 # POD 选图
@@ -9,7 +9,7 @@ description: 为 POD 业务选图。输入关键词，通过卖家精灵查询�
 
 ## 工作流程
 
-1. 复用浏览器中卖家精灵插件的登录授权，通过脚本按关键词查询美国站商品及父体销量、主图。
+1. 匿名HTTP获取Amazon美国站关键词搜索结果ASIN，再复用本机卖家精灵授权，批量查这些ASIN的父体销量与主图。
 2. 按父体近 30 天销量降序展示前 30 张主图，等待用户多选。
 3. 实际查看选中的图片，提取图案元素、风格、配色、构图，去花瓣检索类似素材。
 
@@ -19,9 +19,9 @@ description: 为 POD 业务选图。输入关键词，通过卖家精灵查询�
 
 ## 第一阶段：取得并排序竞品
 
-先读 [卖家精灵授权与接口取数](references/sellersprite-access.md)。默认使用独立 Python HTTP 客户端请求卖家精灵接口，直接解析 JSON；不打开 Amazon、不操作插件搜索框、不滚动或导出表格。
+先读 [匿名搜索与批量销量查询](references/sellersprite-access.md)。默认通过独立HTTP读取Amazon搜索页HTML提取ASIN，再请求卖家精灵ASIN接口并解析JSON；不启动浏览器搜索，不操作插件搜索框或表格。
 
-默认候选范围为**卖家精灵按关键词查询到的美国站商品**。用户已确认统一从卖家精灵取数据，替代早期“Amazon 插件已加载结果内排序”的方案。记录关键词、匹配方式、站点、销量窗口、查询时间与结果来源，不将产品库查询说成 Amazon 当前实时搜索页。
+默认候选范围为**匿名Amazon美国站关键词搜索页的主商品卡片ASIN**，默认第一页。不是卖家精灵关键词库结果，也不是全量匹配商品。需要扩大范围时显式使用 `--amazon-pages 2`（最多4页、200个去重ASIN），普通查询不自动翻更多页。记录页面、ASIN清单与时间。匿名配送上下文、广告及排序可能与用户当前浏览器不同，不承诺逐项一致。
 
 采用**本机私密 HTTP 会话 + 仅在需要时浏览器授权**。普通查询只检查 Node.js 18+、Python 3.9+，有效会话时不启动浏览器。首次缺会话或接口明确要求重新授权时，才准备锁定版本 Playwright、配套 Chromium 和原卖家精灵插件，在专用持久配置中复用或完成登录，自动保存接口所需会话。目录与环境处理见 [环境自检](references/environment.md)。不要求 HAR，不复制日常浏览器登录数据。
 
@@ -33,13 +33,13 @@ node scripts/sellersprite_browser.cjs search --query 'pet house' --out /absolute
 
 看到即时事件 `seller_authorization` 的 `awaiting_login` 时，**立即告诉用户在专用浏览器登录卖家精灵官网，保持窗口打开，并继续等待同一个进程**。脚本自动同步该配置中网页账号至原插件，保存本机私密 HTTP 会话后，才关闭浏览器并继续同一关键词请求。不要单独先运行 login 再重启搜索；普通 search 包含完整授权恢复。默认等待300秒，可用 `--authorization-timeout 600` 延长。取消、超时、无桌面或再次失效时停止并报告状态，不循环重试。会话有效期由平台决定；`--headless` 仅兼容旧调用，普通查询本来就不需要浏览器。
 
-请求固定 `GET https://e.sellersprite.com/v2/extension/competitor-lookup/US`，传 `qt=K`、`q=用户关键词`。只保留 ASIN（去重与编号）、父体近30天销量 `units`、主图 `image`，按数值销量倒排取前30。其他商品指标不采集或展示。只承诺 `returned_candidates_only`，不声称全量全局前30。不能拿子体销量、BSR、评论数替代父体销量；宽泛词不暗中改词或删掉非目标品类。
+先 `GET https://www.amazon.com/s?k=关键词&page=1`，不带登录或Cookie；返回HTML后只提取主商品卡片ASIN。再固定请求 `GET https://e.sellersprite.com/v2/extension/competitor-lookup/US`，传 `asins=本次ASIN清单`，不传 `qt=K` 或 `q=关键词`。只保留ASIN、父体近30天销量 `units`、主图 `image`，按数值倒排取前30。卖家精灵多返回的其他ASIN排除；未返回的请求ASIN明确标缺失。只承诺 `returned_candidates_only`，不声称全量全局前30。其他商品指标不保留，不拿子体销量、BSR或评论数替代。
 
 默认按 ASIN 去重，并记录策略；同父体下不同 ASIN 的主图仍可供选择，不默认按父体去重，也不相加父体销量。同销量按收集顺序排列。缺销量、缺图或缺响应时明确标记，不能补零或伪造排名。取到不足 30 个有效候选时如实交付。
 
-检查 HTTP 状态、业务码、美国站响应与商品结构。限流、网络或业务错误不触发反复登录，不改用 Amazon 表格、截图、页面导出或旧结果。仅明确授权失效时自动恢复一次，再次失效停止。仅用户明确要求接口诊断时才读 [手动抓包](references/capture-plugin-requests.md)，普通查询不要求 HAR。
+Amazon端检查HTTP状态、查询词与主卡片/明确无结果证据；验证码或错误页即停，不自动开浏览器、不循环重试、不改用卖家精灵关键词库补候选。匿名访问也可能被风控。卖家精灵端检查业务码、美国站与商品结构；仅其明确授权失效时恢复一次，并复用已取得的同一ASIN文件，不再次请求Amazon。普通查询不要求HAR，诊断才读 [手动抓包](references/capture-plugin-requests.md)。
 
-验证边界：历史真实会话已验证美国站关键词 HTTP 请求；新增私密会话校验、普通查询零浏览器启动、授权恢复次数与模拟扩展会话保存/复用有测试覆盖。新增“官网登录→原插件同步→独立 HTTP”真实账号全流程仍待试用；不能用模拟测试代替真实授权验证。
+验证边界：2026-11-13匿名HTTP两次取得 `pet house` 美国站第一页48个ASIN，约2.5–2.6秒，无登录、Cookie或浏览器。ASIN批量参数、候选范围限制和排序有测试覆盖；历史原插件ASIN请求已有证据。新“Amazon匿名搜索→卖家精灵US批量查销量”真实账号全流程及自动授权衔接仍待试用，不能用模拟测试替代。
 
 ## 第二阶段：主图多选
 
@@ -57,6 +57,6 @@ node scripts/sellersprite_browser.cjs search --query 'pet house' --out /absolute
 
 ## 产物与限制
 
-在当前项目 `reports/pod-selection/<日期>-<主题>/` 保存请求计划/响应、排序结果 `ranked-products.json`、竞品主图 `products.html`、`selected-products.json`、元素分析 `visual-elements.json`、参考素材 `gallery.html`/`candidates.json` 和中文 `report.md`。只生成本轮实际完成阶段的产物，用户选择前不生成伪造的选图或分析结果。
+在当前项目 `reports/pod-selection/<日期>-<主题>/` 保存搜索ASIN快照 `amazon-search.json`、请求计划/公开响应、排序结果 `ranked-products.json`、竞品主图 `products.html`、`selected-products.json`、元素分析 `visual-elements.json`、参考素材 `gallery.html`/`candidates.json` 和中文 `report.md`。只生成实际完成阶段的产物，用户选择前不生成伪造选图或分析。
 
 接口失败、授权失效、登录/验证码和真实无数据分别报告。未取得实际可查看图片时不宣称图集已完成。销量和主图用于市场参考，不能证明设计因果或商用授权；竞品图、花瓣采集和会员素材均不自动具有 POD 商品印刷授权。

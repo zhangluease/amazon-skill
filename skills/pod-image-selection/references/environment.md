@@ -1,6 +1,8 @@
 # 环境检查与会话目录
 
-普通竞品查询需要 Node.js18+、Python3.9+（标准库），使用独立 HTTP，不依赖浏览器、插件页面或 HAR。直接运行 search 即可，不先执行独立 check/login。原插件、Playwright 和 Chromium 只在首次授权、明确会话失效或用户要求环境排障时准备。花瓣阶段继续按原方式按需准备浏览器。
+普通竞品查询需要 Node.js18+、Python3.9+（标准库），先匿名HTTP请求Amazon搜索页提取ASIN，再通过卖家精灵ASIN接口查销量和主图，不依赖浏览器或HAR。直接运行search，不先独立check/login。原插件、Playwright和Chromium只在卖家精灵首次授权、明确会话失效或环境排障时准备。花瓣阶段按原方式按需准备浏览器。
+
+Amazon请求无登录、无Cookie，默认1页，可显式 `--amazon-pages 2`，最多4页/200个去重ASIN。遇验证、错误或无法确认搜索结果就停止，不自动开Amazon浏览器，也不重新登录卖家精灵解决Amazon错误。卖家精灵授权恢复沿用已保存的 `amazon-search.json`，不重复发起Amazon搜索。
 
 ## 本机私密会话
 

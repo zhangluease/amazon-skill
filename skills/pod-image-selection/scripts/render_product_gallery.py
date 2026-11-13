@@ -32,7 +32,9 @@ def render(document):
     scope = (f'本次返回 {returned} 款候选；以下展示其中父体销量前 {len(products)} 款。接口报告总匹配 {total:,} 款，全部匹配商品的全局排名尚未验证。'
              if document.get('ranking_scope') == 'returned_candidates_only' and isinstance(total, int)
              else f'本次取得 {returned} 款候选，按父体近30天销量展示前 {len(products)} 款；全部匹配商品的全局排名尚未验证。')
-    provenance = '来源：卖家精灵插件；查询时间：' + str(document.get('queried_at') or '未知')
+    provenance = ('来源：Amazon匿名搜索结果，销量由卖家精灵提供；查询时间：'
+                  if document.get('candidate_source') == 'amazon_anonymous_search_http'
+                  else '来源：卖家精灵插件；查询时间：') + str(document.get('queried_at') or '未知')
     if document.get('sales_precision') == 'plugin_display':
         provenance += '。销量采用插件界面显示值，可能经过缩写或四舍五入。'
     return '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

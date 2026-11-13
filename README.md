@@ -34,7 +34,7 @@ python3 scripts/configure.py status
 
 ## POD 选图
 
-[pod-image-selection](skills/pod-image-selection/SKILL.md)（原 `pod-huaban-materials`）输入关键词，固定美国站，由独立 HTTP 脚本请求卖家精灵接口，只取 ASIN、父体近30天销量与主图，倒排取前30供用户多选；选定后再提取视觉元素，到花瓣寻找参考图。普通查询不启动浏览器、不打开 Amazon、不读或导出插件表格。
+[pod-image-selection](skills/pod-image-selection/SKILL.md)（原 `pod-huaban-materials`）输入关键词，匿名HTTP获取Amazon美国站搜索页ASIN，再由卖家精灵接口批量查询这些ASIN的父体近30天销量和主图，倒排取前30供用户多选；选定后再提取视觉元素，到花瓣寻找参考图。默认第一页，不用卖家精灵关键词库代替候选。普通查询不启动浏览器或操作插件表格。
 
 ```text
 请使用 $pod-image-selection，关键词：pet house。
@@ -42,7 +42,7 @@ python3 scripts/configure.py status
 
 将整个文件夹交给 Agent，说明“请安装这个 skill”即可。普通查询检查 Node.js18+、Python3.9+ 并复用仓库外的私密 HTTP 会话；仅首次缺会话或明确失效时，才按需准备 Playwright、Chromium 和原插件，通过专用浏览器登录卖家精灵官网、同步插件授权并保存必要会话。保存后关闭授权浏览器，继续独立 HTTP 查询。无需 HAR；真人登录需要可操作桌面。
 
-历史真实会话已验证美国站关键词接口取数；新增测试覆盖私密会话校验、普通查询零浏览器启动、授权一次恢复，以及模拟扩展的会话保存与持久复用。新增自动授权衔接的真实账号全流程仍待试用确认。只排名本次返回候选，不宣称全局前30；失败不回退到 Amazon 页面操作。手动 HAR 仅保留作用户明确要求的诊断。
+2026-11-13实测不登录、不带Cookie的HTTP搜索返回美国站pet house第一页48个ASIN，约2.5–2.6秒。普通查询零浏览器启动；只排名已取得页面范围内的候选，不宣称全局前30，匿名结果可能与已有浏览器会话不同。验证码/错误页立即停止，不自动开浏览器或改用其他候选。新US批量销量与自动授权的真实账号全流程仍待试用确认，手动HAR仅用于用户明确要求的诊断。
 
 原有花瓣无头采集、相似图与画板扩展、环境自动准备及真人验证接管继续可用。详见[卖家精灵接口](skills/pod-image-selection/references/sellersprite-access.md)、[花瓣检索](skills/pod-image-selection/references/huaban-workflow.md)和[环境自检](skills/pod-image-selection/references/environment.md)。初筛素材的 POD 授权仍需核实。
 

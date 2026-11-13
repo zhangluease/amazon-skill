@@ -155,10 +155,37 @@ def load_session(path):
         raise ApiError('INVALID_SESSION_HAR') from None
 
 
-def request_plugin(query, session):
+def validate_asins(asins):
+    if not isinstance(asins, list) or not 1 <= len(asins) <= 200 or any(
+            not isinstance(asin, str) or not re.fullmatch('[A-Z0-9]{10}', asin) for asin in asins):
+        raise ApiError('INVALID_ASIN_COHORT')
+    if len(set(asins)) != len(asins):
+        raise ApiError('INVALID_ASIN_COHORT')
+    return asins
+
+
+def load_search_cohort(path, query):
+    try:
+        if path.stat().st_size > 65536:
+            raise ValueError()
+        value = json.loads(path.read_text(encoding='utf-8'))
+        if (value.get('format') != 'amazon-search-asins-v1' or value.get('marketplace') != 'US'
+                or value.get('query') != query or value.get('status') != 'ok'):
+            raise ValueError()
+        validate_asins(value.get('asins'))
+        return value
+    except (OSError, ValueError, TypeError, AttributeError):
+        raise ApiError('INVALID_ASIN_COHORT') from None
+
+
+def request_plugin(query, session, asins=None):
     query = validate_query(query)
-    parameters = dict(session['parameters'], qt='K', q=query,
-                      tk=checksum(query, session['extension_version']))
+    if asins is None:
+        parameters = dict(session['parameters'], qt='K', q=query,
+                          tk=checksum(query, session['extension_version']))
+    else:
+        joined = ','.join(validate_asins(asins))
+        parameters = dict(session['parameters'], q='', asins=joined, tk=checksum(joined, session['extension_version']))
     headers = dict(session['headers'])
     headers.update({'accept-encoding': 'identity', 'accept': 'application/json', 'content-type': 'application/json'})
     request = urllib.request.Request(ENDPOINT + '?' + urlencode(parameters), headers=headers, method='GET')
@@ -253,6 +280,28 @@ def normalize_plugin(query, document):
     return result, public
 
 
+def normalize_cohort(query, document, cohort):
+    requested = validate_asins(cohort['asins'])
+    lookup = {}
+    for row in validate_response(document)['data']['items']:
+        if isinstance(row, dict) and isinstance(row.get('asin'), str) and re.fullmatch('[A-Z0-9]{10}', row['asin']):
+            lookup.setdefault(row['asin'], row)
+    rows = [lookup[asin] for asin in requested if asin in lookup]
+    result, public = normalize_plugin(query, {'code': 'OK', 'data': {'items': rows, 'total': None}})
+    missing = [{'asin': asin, 'reason': 'not_returned_by_sellersprite'} for asin in requested if asin not in lookup]
+    result['incomplete'].extend(missing)
+    result.update({'source': 'sellersprite_extension_asin_api', 'candidate_source': 'amazon_anonymous_search_http',
+                   'scope': 'amazon_returned_search_asins', 'match_type': 'amazon_search_results',
+                   'returned_candidates': len(requested), 'lookup_returned_rows': len(rows),
+                   'returned_rows_complete': not result['incomplete'], 'total_matches': None,
+                   'amazon_pages_requested': cohort.get('pages_requested'),
+                   'amazon_pages_loaded': len(cohort.get('pages', [])),
+                   'amazon_queried_at': cohort.get('queried_at'),
+                   'note': '在匿名Amazon美国站本次搜索页ASIN内按父体近30天销量取前30；不是卖家精灵关键词库结果，也未验证全量全局排名。'})
+    result.pop('observed_server_units_desc', None)
+    return result, public
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['status', 'plan', 'search', 'normalize'])
@@ -260,6 +309,7 @@ def main(argv=None):
     parser.add_argument('--session-har', type=Path)
     parser.add_argument('--session-file', type=Path)
     parser.add_argument('--input', type=Path)
+    parser.add_argument('--asins-file', type=Path)
     parser.add_argument('--out', type=Path)
     args = parser.parse_args(argv)
     if args.session_file and args.session_har:
@@ -278,6 +328,7 @@ def main(argv=None):
         if not args.out:
             raise ValueError('Missing output directory')
         query = validate_query(args.query)
+        cohort = load_search_cohort(args.asins_file, query) if args.asins_file else None
         if args.command == 'normalize':
             if not args.input or args.input.resolve() == (args.out / 'sellersprite-candidates.json').resolve():
                 raise ValueError('Separate browser input is required')
@@ -312,14 +363,15 @@ def main(argv=None):
                                                        'sellersprite-candidates.json', 'api-status.json']]:
             raise ValueError('Output must not overwrite session HAR')
         write_json(args.out / 'request-plan.json', {'endpoint': ENDPOINT, 'method': 'GET',
-                   'parameters': {'qt': 'K', 'q': query}, 'marketplace': 'US',
-                   'source': 'sellersprite_extension_keyword_api', 'ranking_scope': 'returned_candidates_only'})
+                   'parameters': {'asins': cohort['asins']} if cohort else {'qt': 'K', 'q': query}, 'marketplace': 'US',
+                   'source': 'sellersprite_extension_asin_api' if cohort else 'sellersprite_extension_keyword_api',
+                   'ranking_scope': 'returned_candidates_only'})
         if args.command == 'plan':
             print(json.dumps({'status': 'planned', 'marketplace': 'US', 'requested_top': 30}))
             return 0
         session = loader(path)
-        document, elapsed = request_plugin(query, session)
-        result, public = normalize_plugin(query, document)
+        document, elapsed = request_plugin(query, session, asins=cohort['asins']) if cohort else request_plugin(query, session)
+        result, public = normalize_cohort(query, document, cohort) if cohort else normalize_plugin(query, document)
         write_json(args.out / 'sellersprite-candidates.json', public)
         write_json(args.out / 'ranked-products.json', result)
         summary = {'status': 'empty' if not result['returned_candidates'] else 'ok' if result['returned_rows_complete'] else 'partial',

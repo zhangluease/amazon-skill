@@ -101,6 +101,46 @@ class SellerSpritePluginTests(unittest.TestCase):
                  self.assertRaisesRegex(plugin.ApiError, expected):
                 plugin.request_plugin('pet house', session)
 
+    def test_asin_lookup_sends_the_search_cohort_not_a_keyword_search(self):
+        session = {'parameters': {'version': '5.0.6'}, 'extension_version': '5.0.6', 'headers': {}}
+        opener = mock.Mock()
+        opener.open.return_value = MemoryResponse(json.dumps(response()).encode())
+        asins = ['B000000002', 'B000000001']
+        with mock.patch.object(plugin.urllib.request, 'build_opener', return_value=opener):
+            plugin.request_plugin('pet house', session, asins=asins)
+        params = parse_qs(urlsplit(opener.open.call_args.args[0].full_url).query)
+        self.assertEqual(params['asins'], [','.join(asins)])
+        self.assertEqual(params['tk'], [plugin.checksum(','.join(asins), '5.0.6')])
+        self.assertNotIn('q', params)
+        self.assertNotIn('qt', params)
+        raw_params = parse_qs(urlsplit(opener.open.call_args.args[0].full_url).query, keep_blank_values=True)
+        self.assertEqual(raw_params['q'], [''])
+
+    def test_cohort_excludes_unrequested_rows_and_marks_missing_sales(self):
+        item = response()['data']['items'][0]
+        cohort = {'asins': ['B000000002', 'B000000001', 'B000000003'], 'pages': [{}], 'pages_requested': 1}
+        doc = response([{'asin': []}, dict(item, asin='B000000099', units=99999),
+                        dict(item, asin='B000000001', units=10), dict(item, asin='B000000002', units=10)])
+        result, public = plugin.normalize_cohort('pet house', doc, cohort)
+        self.assertEqual([p['asin'] for p in result['products']], ['B000000002', 'B000000001'])
+        self.assertEqual(result['incomplete'], [{'asin': 'B000000003', 'reason': 'not_returned_by_sellersprite'}])
+        self.assertEqual(result['returned_candidates'], 3)
+        self.assertEqual(result['lookup_returned_rows'], 2)
+        self.assertIsNone(result['total_matches'])
+        self.assertEqual(result['candidate_source'], 'amazon_anonymous_search_http')
+        self.assertNotIn('B000000099', json.dumps(public))
+
+    def test_cohort_requires_matching_query_us_and_unique_asins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'search.json'
+            for changes in [{'marketplace': 'JP'}, {'query': 'wrong'}, {'asins': ['bad']},
+                            {'asins': ['B000000001', 'B000000001']}]:
+                doc = dict({'format': 'amazon-search-asins-v1', 'marketplace': 'US', 'query': 'pet house',
+                            'status': 'ok', 'asins': ['B000000001']}, **changes)
+                source.write_text(json.dumps(doc))
+                with self.subTest(changes=changes), self.assertRaises(plugin.ApiError):
+                    plugin.load_search_cohort(source, 'pet house')
+
     def test_normalization_retains_variants_missing_sales_and_ranking_scope(self):
         row = response()['data']['items'][0]
         rows = [dict(row, asin='B000000001', units=None), dict(row, asin='B000000002', units=0),
@@ -223,6 +263,28 @@ class SellerSpritePluginTests(unittest.TestCase):
                 data = json.loads((Path(directory) / 'out/ranked-products.json').read_text())
                 self.assertEqual(data['collection_method'], 'independent_http')
                 self.assertTrue(all('title' not in item and 'parent_asin' not in item for item in data['products']))
+
+    def test_asin_cli_uses_the_saved_amazon_snapshot_and_preserves_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'session.json'
+            source.write_text(json.dumps({'format': 'sellersprite-http-session-v1', 'extension_version': '5.0.6',
+                'headers': {'auth-token': 'fixture-token', 'auth-fp': 'fixture-fp', 'random-token': 'fixture-random'},
+                'parameters': {'version': '5.0.6'}}))
+            cohort = Path(directory) / 'amazon-search.json'
+            cohort.write_text(json.dumps({'format': 'amazon-search-asins-v1', 'marketplace': 'US',
+                'query': 'pet house', 'status': 'ok', 'asins': ['B000000001'], 'pages': [{}], 'pages_requested': 1}))
+            out = Path(directory) / 'out'
+            with mock.patch.object(plugin, 'request_plugin', return_value=(response(), 10)) as request, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                result = plugin.main(['search', '--query', 'pet house', '--asins-file', str(cohort),
+                                      '--session-file', str(source), '--out', str(out)])
+            self.assertEqual(result, 0)
+            self.assertEqual(request.call_args.kwargs['asins'], ['B000000001'])
+            ranked = json.loads((out / 'ranked-products.json').read_text())
+            self.assertEqual(ranked['candidate_source'], 'amazon_anonymous_search_http')
+            self.assertEqual(ranked['amazon_pages_loaded'], 1)
+            plan = json.loads((out / 'request-plan.json').read_text())
+            self.assertEqual(plan['parameters'], {'asins': ['B000000001']})
 
     def test_browser_empty_state_requires_explicit_ui_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:
