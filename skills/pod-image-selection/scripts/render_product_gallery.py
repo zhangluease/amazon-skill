@@ -19,13 +19,13 @@ def render(document):
         title = html.unescape(item.get('title') or item['asin'])
         cards.append(f'''<article><label><span class="pick"><input type="checkbox" value="{esc(item['rank'])}"> <b>#{esc(item['rank'])}</b></span>
 <img src="{esc(item['image_url'])}" alt="{esc(title)}" loading="lazy" referrerpolicy="no-referrer">
-<h2>{esc(title)}</h2><p class="sales">父体近30天预估销量：{esc(format(item['parent_units_30d'], ',g'))}</p>
-<p class="asin">ASIN：{esc(item['asin'])}<br>父体：{esc(item.get('parent_asin') or '未知')}</p></label>
+<p class="sales">父体近30天预估销量：{esc(format(item['parent_units_30d'], ',g'))}</p>
+<p class="asin">ASIN：{esc(item['asin'])}</p></label>
 <a href="{esc(item['product_url'])}" target="_blank" rel="noopener noreferrer">查看 Amazon 商品 ↗</a></article>''')
     mapping = {'query': document['query'], 'marketplace': document['marketplace'],
                'queried_at': document.get('queried_at'), 'source': document.get('source', 'sellersprite_extension_keyword_api'),
                'ranking_scope': document.get('ranking_scope', document.get('scope')),
-               'products': [{'rank': p['rank'], 'asin': p['asin'], 'parent_asin': p.get('parent_asin')} for p in products]}
+               'products': [{'rank': p['rank'], 'asin': p['asin']} for p in products]}
     encoded = json.dumps(mapping, ensure_ascii=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     returned = document.get('returned_candidates', len(products))
     total = document.get('total_matches')

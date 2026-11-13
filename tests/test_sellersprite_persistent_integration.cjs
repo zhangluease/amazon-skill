@@ -1,82 +1,86 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
-const os = require('node:os');
 const path = require('node:path');
+const os = require('node:os');
 const crypto = require('node:crypto');
-const { findPlaywright, findPython } = require('../skills/pod-image-selection/scripts/environment.cjs');
-const { run } = require('../skills/pod-image-selection/scripts/sellersprite_browser.cjs');
-const runtime = findPlaywright();
+const { findPlaywright } = require('../skills/pod-image-selection/scripts/environment.cjs');
+const { prepareHome } = require('../skills/pod-image-selection/scripts/sellersprite_session.cjs');
+const { authorize } = require('../skills/pod-image-selection/scripts/sellersprite_auth.cjs');
 
-test('persistent extension UI: first authorization, reuse, expiry recovery and cancellation', { timeout: 90000 }, async () => {
-  assert.ok(runtime.playwright, 'Prepare the pinned Playwright runtime before integration testing');
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pod-persistent-test-'));
-  const extension = path.join(tmp, 'fixture-extension');
-  await fs.mkdir(extension);
+test('authorization persists a private HTTP session using only SellerSprite pages and normal extension messages', { timeout: 60000 }, async () => {
+  const runtime = findPlaywright();
+  assert.ok(runtime.playwright);
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pod-http-auth-test-'));
+  const ext = path.join(tmp, 'fixture');
+  await fs.mkdir(ext);
   const key = crypto.generateKeyPairSync('rsa', { modulusLength: 1024 }).publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-  await fs.writeFile(path.join(extension, 'manifest.json'), JSON.stringify({ manifest_version: 3, name: 'Seller UI fixture', version: '1.0.0', key,
+  await fs.writeFile(path.join(ext, 'manifest.json'), JSON.stringify({ manifest_version: 3, name: 'Authorization fixture', version: '1.0.0', key,
     permissions: ['storage'], host_permissions: ['https://e.sellersprite.com/*'], action: { default_popup: 'popup.html' },
-    content_scripts: [{ matches: ['https://www.amazon.com/*'], js: ['fixture.js'] }] }));
-  await fs.writeFile(path.join(extension, 'popup.html'), '<title>fixture</title>');
-  await fs.writeFile(path.join(extension, 'fixture.js'), `
-    const root=document.createElement('div');root.id='main-sellersprite-extension';document.body.append(root);
-    async function draw(){const state=await chrome.storage.local.get(['signedIn','expiredOnce']);
-      if(!state.signedIn){root.innerHTML='<h1>卖家精灵用户登录</h1><button>模拟登录</button>';root.querySelector('button').onclick=async()=>{await chrome.storage.local.set({signedIn:true});draw()};return;}
-      root.innerHTML='<a>产品查询</a><form name="header-search-form"><div class="product-search-selection"><div>ASIN</div><div class="product-search-select-item"><span>关键词</span></div></div><input placeholder="关键词 或 ASIN"><span class="input-group-suffix">搜索</span></form><div class="el-loading-mask" style="display:none">loading</div><div class="vxe-table--body-wrapper"><table><thead><tr><th>产品</th><th>近30天销量(父)</th><th>子体销量</th></tr></thead><tbody></tbody></table></div><div id="count"></div>';
-      root.querySelector('.product-search-select-item').onclick=()=>root.querySelector('.product-search-selection>div').textContent='关键词';
-      root.querySelector('.input-group-suffix').onclick=async()=>{const q=root.querySelector('input').value;
-        if(q==='expire-once'&&!state.expiredOnce){await chrome.storage.local.set({signedIn:false,expiredOnce:true});draw();return;}
-        if(q==='reject-query'){const error=document.createElement('div');error.className='el-message--error';error.textContent='查询失败';document.body.append(error);return;}
-        root.querySelector('.el-loading-mask').style.display='block';setTimeout(()=>{
-          const rows=Array.from({length:40},(_,i)=>'<tr><td><a href="https://www.amazon.com/dp/B'+String(i+1).padStart(9,'0')+'">'+q+'</a><img src="https://m.media-amazon.com/images/I/fixture.jpg"></td><td>'+(40-i)+'</td><td>99999</td></tr>').join('');
-          root.querySelector('tbody').innerHTML=rows;root.querySelector('#count').textContent='加载数据40条';root.querySelector('.el-loading-mask').style.display='none';
-        },100);
-      };
-    }draw();
+    background: { service_worker: 'worker.js' }, content_scripts: [{ matches: ['https://www.sellersprite.com/*'], js: ['web.js'] }] }));
+  await fs.writeFile(path.join(ext, 'popup.html'), '<title>Authorization fixture</title>');
+  await fs.writeFile(path.join(ext, 'web.js'), 'const b=document.querySelector("button");b.onclick=()=>chrome.storage.local.set({webToken:"fixture-web-token"});b.disabled=false;');
+  await fs.writeFile(path.join(ext, 'worker.js'), `
+    chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+      (async()=>{
+        const state=await chrome.storage.local.get(['webToken','signedIn']);
+        if(message.action==='AUTO_SIGN_IN_INFO')return {code:'OK',data:state.webToken?{token:state.webToken}:null};
+        if(message.action==='SIGN_IN_WITH_TOKEN'){
+          await chrome.storage.local.set({__FP:{value:'fixture-fp',expire:Date.now()+3600000},__UUID:'fixture-uuid'});
+          setTimeout(()=>chrome.storage.local.set({signedIn:true}),150);
+          return {code:'OK',data:{}};
+        }
+        if(message.action==='CLIENT_LATEST'){
+          if(!state.signedIn)return {code:'OK',data:null};
+          return {code:'OK',data:{token:'fixture-new-token',nickname:'not-saved'}};
+        }
+        return {code:'ERROR'};
+      })().then(respond);return true;
+    });
   `);
-  let current;
-  const events = [];
-  const dependencies = { prepare: async () => ({ report: { ready: true }, playwright: runtime.playwright, python: findPython() }),
-    desktop: () => ({ available: true, reason: 'fixture' }),
-    launch: async (profile, settings) => {
-      // Headless fixture tests exercise the same persistent profile, not a real user's login.
-      current = await runtime.playwright.chromium.launchPersistentContext(profile, { ...settings, headless: true });
-      await current.route('https://www.amazon.com/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Fixture Amazon</title><body></body>' }));
-      await current.route('https://m.media-amazon.com/**', route => route.abort());
+  let current, home;
+  const requests = [], events = [];
+  const dependencies = { prepare: async () => ({ report: { ready: true }, playwright: runtime.playwright }),
+    desktop: () => ({ available: true, reason: 'test_fixture' }),
+    launch: async (profile, options) => {
+      current = await runtime.playwright.chromium.launchPersistentContext(profile, { ...options, headless: true });
+      current.on('request', request => requests.push(request.url()));
+      await current.route('**/*', route => route.abort());
+      await current.route('https://www.sellersprite.com/**', route => route.fulfill({ contentType: 'text/html',
+        body: '<!doctype html><title>Website login fixture</title><button disabled>Fixture login</button>' }));
+      await current.route('https://e.sellersprite.com/**', route => route.fulfill({ contentType: 'application/json',
+        body: JSON.stringify({code:'OK',data:{token:'fixture-new-token',nickname:'not-saved'}}) }));
       return current;
-    },
-    notify: value => { events.push(value); if(value.status==='awaiting_login') current.pages()[0].getByRole('button',{name:'模拟登录'}).click().catch(()=>{}); }
+    }
+  };
+  const publish = async value => {
+    events.push(value);
+    if(value === 'awaiting_login') {
+      await current.pages().find(p=>p.url().startsWith('https://www.sellersprite.com/'))
+        .getByRole('button',{name:'Fixture login'}).click({timeout:2000});
+    }
   };
   try {
-    const common = { command: 'search', query: 'pet house', timeout: 5, 'extension-dir': extension, 'state-dir': path.join(tmp, 'state') };
-    const first = await run({ ...common, headless: true, out: path.join(tmp, 'first') }, dependencies);
-    assert.equal(first.products, 30); assert.equal(first.authorization_handoffs, 1);
-    assert.equal(first.browser_headless, false);
-    const data = JSON.parse(await fs.readFile(path.join(tmp, 'first', 'ranked-products.json')));
-    assert.equal(data.source, 'sellersprite_extension_browser');
-    assert.equal(data.products[0].parent_units_30d, 40);
-    assert.equal(data.returned_candidates, 40);
-    assert.ok(await fs.stat(path.join(tmp, 'first', 'products.html')));
-    const second = await run({ ...common, out: path.join(tmp, 'second') }, dependencies);
-    assert.equal(second.authorization_handoffs, 0);
-    const expired = await run({ ...common, query: 'expire-once', out: path.join(tmp, 'expired') }, dependencies);
-    assert.equal(expired.authorization_handoffs, 1); assert.equal(expired.products, 30);
-    await assert.rejects(run({ ...common, query: 'reject-query', out: path.join(tmp, 'rejected') }, dependencies), { code: 'PLUGIN_QUERY_REJECTED' });
-    const wrongMarket = { ...dependencies, launch: async (profile, settings) => {
-      const browser = await dependencies.launch(profile, settings);
-      await browser.route('https://www.amazon.com/**', route => route.fulfill({ status: 302, headers: { location: 'https://www.amazon.co.jp/' } }));
-      await browser.route('https://www.amazon.co.jp/**', route => route.fulfill({ contentType: 'text/html', body: '<title>Wrong market</title>' }));
-      return browser;
-    } };
-    await assert.rejects(run({ ...common, out: path.join(tmp, 'wrong-market') }, wrongMarket), { code: 'MARKETPLACE_NOT_US' });
-    const cancel = { ...dependencies, notify: value => { if(value.status==='awaiting_login') current.close(); } };
-    await assert.rejects(run({ ...common, 'state-dir': path.join(tmp, 'cancel-state'), out: path.join(tmp, 'cancel') }, cancel), { code: 'AUTHORIZATION_CANCELLED' });
-    await assert.rejects(run({ ...common, timeout: 0.1, 'state-dir': path.join(tmp, 'timeout-state'), out: path.join(tmp, 'timeout') },
-      { ...dependencies, notify: () => {} }), { code: 'AUTHORIZATION_TIMEOUT' });
-    await assert.rejects(run({ ...common, 'state-dir': path.join(tmp, 'no-desktop'), out: path.join(tmp, 'no-desktop-out') },
-      { ...dependencies, desktop: () => ({ available: false, reason: 'container' }) }), { code: 'INTERACTIVE_BROWSER_REQUIRED' });
-    assert.ok(events.some(event => event.status === 'reused'));
-    process.stdout.write(JSON.stringify({ fixturePersistentLogin: true, reuse: true, expiryRecovery: true,
-      cancellation: true, timeout: true, noDesktop: true, realAccountAuthenticated: false })+'\n');
-  } finally { await current?.close().catch(()=>{}); await fs.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+    home = await prepareHome(path.join(tmp,'state'),path.join(tmp,'out'));
+    const options = { out: path.join(tmp,'out'), timeout: 5, 'extension-dir': ext };
+    const sessionPath = await authorize(home,options,publish,dependencies);
+    const session = JSON.parse(await fs.readFile(sessionPath));
+    assert.equal(session.headers['auth-token'],'fixture-new-token');
+    assert.ok(!JSON.stringify(session).includes('not-saved'));
+    if(process.platform !== 'win32')assert.equal((await fs.stat(sessionPath)).mode & 0o777,0o600);
+    assert.ok(events.includes('awaiting_login'));
+    events.length=0;
+    await authorize(home,options,publish,dependencies);
+    assert.deepEqual(events,['reused']);
+    for (const [name, code] of [['cancel','AUTHORIZATION_CANCELLED'],['timeout','AUTHORIZATION_TIMEOUT'],['remote','INTERACTIVE_BROWSER_REQUIRED']]) {
+      const fresh = await prepareHome(path.join(tmp,'state-'+name),path.join(tmp,'out-'+name));
+      try {
+        const notify = async status => { if(name==='cancel' && status==='awaiting_login') await current.close(); };
+        const deps = name==='remote' ? {...dependencies,desktop:()=>({available:false,reason:'fixture_container'})} : dependencies;
+        await assert.rejects(authorize(fresh,{...options,out:path.join(tmp,'out-'+name),timeout:0.1},notify,deps),{code});
+      } finally {await fresh.release();}
+    }
+    assert.equal(requests.filter(url=>/^https:\/\/[^/]*amazon\./.test(url)).length,0);
+    process.stdout.write(JSON.stringify({privateSessionSaved:true,persistentReuse:true,amazonRequests:0,realAccountVerified:false})+'\n');
+  } finally {await current?.close().catch(()=>{});await home?.release();await fs.rm(tmp,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
 });

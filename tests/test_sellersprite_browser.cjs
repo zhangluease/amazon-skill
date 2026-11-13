@@ -4,12 +4,22 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { prepareHome, prepareExtension, stateRoot, extensionId } = require('../skills/pod-image-selection/scripts/sellersprite_session.cjs');
-const { parseSales } = require('../skills/pod-image-selection/scripts/sellersprite_ui.cjs');
+const { sessionFromBridge, isAmazon } = require('../skills/pod-image-selection/scripts/sellersprite_auth.cjs');
 const { argumentsFor } = require('../skills/pod-image-selection/scripts/sellersprite_browser.cjs');
 
-test('parent sales parses zero and separators without treating missing or child annotations as zero', () => {
-  for (const [text, value] of [['72,354', 72354], ['0', 0], ['1.2K', 1200], ['2万', 20000], ['5K+', null], ['--', null], ['****', null], ['销量：123', null]])
-    assert.equal(parseSales(text), value);
+test('only complete dedicated-profile sessions survive the private field whitelist', () => {
+  const value = { format: 'sellersprite-http-session-v1', extension_version: '1.0.0',
+    headers: { 'auth-token': 'new', 'auth-fp': 'fixture-fp', 'random-token': 'fixture-random', Cookie: 'excluded' },
+    account: 'excluded', parameters: { version: '1.0.0', secret: 'excluded' } };
+  const session = sessionFromBridge(value, '1.0.0');
+  assert.equal(session.headers['auth-token'], 'new');
+  assert.ok(!JSON.stringify(session).includes('excluded'));
+  assert.equal(sessionFromBridge(value, '2.0.0'), null);
+  assert.equal(sessionFromBridge({ ...value, headers: {} }, '1.0.0'), null);
+  assert.equal(sessionFromBridge(null, '1.0.0'), null);
+  assert.ok(isAmazon('https://www.amazon.com/'));
+  assert.ok(isAmazon('https://sellercentral.amazon.co.jp/'));
+  assert.ok(!isAmazon('https://www.sellersprite.com/'));
 });
 test('query and authorization bounds are validated', () => {
   assert.equal(argumentsFor(['search', '--query', ' pet house ', '--out', '/tmp/out']).query, 'pet house');

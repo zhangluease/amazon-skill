@@ -34,15 +34,15 @@ python3 scripts/configure.py status
 
 ## POD 选图
 
-[pod-image-selection](skills/pod-image-selection/SKILL.md)（原 `pod-huaban-materials`）只需输入关键词，固定查询美国站。默认由固定 Playwright 脚本在专用持久浏览器运行原卖家精灵插件，查询关键词商品、读取父体近 30 天销量和主图，降序展示前 30 张供用户多选；用户选定后再提取关键视觉元素，到花瓣寻找类似参考图。
+[pod-image-selection](skills/pod-image-selection/SKILL.md)（原 `pod-huaban-materials`）输入关键词，固定美国站，由独立 HTTP 脚本请求卖家精灵接口，只取 ASIN、父体近30天销量与主图，倒排取前30供用户多选；选定后再提取视觉元素，到花瓣寻找参考图。普通查询不启动浏览器、不打开 Amazon、不读或导出插件表格。
 
 ```text
 请使用 $pod-image-selection，关键词：pet house。
 ```
 
-将整个 `skills/pod-image-selection/` 文件夹交给所用 Agent，说明“请安装这个 skill”即可。Agent 自动检查 Node.js 18+、Python 3.9+、锁定版本 Playwright、配套 Chromium 与本机原插件程序。首次在专用浏览器正常登录/同步卖家精灵，之后复用仓库外的完整专用配置；失效时弹出可操作浏览器等待登录后继续，无需导出 HAR。无交互桌面的容器需转到本机或可操作的远程桌面。
+将整个文件夹交给 Agent，说明“请安装这个 skill”即可。普通查询检查 Node.js18+、Python3.9+ 并复用仓库外的私密 HTTP 会话；仅首次缺会话或明确失效时，才按需准备 Playwright、Chromium 和原插件，通过专用浏览器登录卖家精灵官网、同步插件授权并保存必要会话。保存后关闭授权浏览器，继续独立 HTTP 查询。无需 HAR；真人登录需要可操作桌面。
 
-2026-11-13 已验证原插件在专用 Chromium 中加载、未登录识别，以及自建测试扩展的持久会话复用和授权恢复。真实卖家精灵账号登录后的关键词流程待试用确认。排序范围为本次返回的候选，未验证全局排名；界面缩写销量保留显示精度。普通使用不需要抓包，手动 HAR 工具仅保留给用户明确要求的诊断。
+历史真实会话已验证美国站关键词接口取数；新增测试覆盖私密会话校验、普通查询零浏览器启动、授权一次恢复，以及模拟扩展的会话保存与持久复用。新增自动授权衔接的真实账号全流程仍待试用确认。只排名本次返回候选，不宣称全局前30；失败不回退到 Amazon 页面操作。手动 HAR 仅保留作用户明确要求的诊断。
 
 原有花瓣无头采集、相似图与画板扩展、环境自动准备及真人验证接管继续可用。详见[卖家精灵接口](skills/pod-image-selection/references/sellersprite-access.md)、[花瓣检索](skills/pod-image-selection/references/huaban-workflow.md)和[环境自检](skills/pod-image-selection/references/environment.md)。初筛素材的 POD 授权仍需核实。
 

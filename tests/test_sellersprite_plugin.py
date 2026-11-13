@@ -123,7 +123,8 @@ class SellerSpritePluginTests(unittest.TestCase):
         self.assertEqual(len(result['products']), 30)
         self.assertEqual([p['parent_units_30d'] for p in result['products']], list(range(40, 10, -1)))
         self.assertEqual([p['rank'] for p in result['products']], list(range(1, 31)))
-        self.assertEqual(len({p['parent_asin'] for p in result['products']}), 1)
+        self.assertNotIn('parent_asin', result['products'][0])
+        self.assertNotIn('title', result['products'][0])
 
     def test_invalid_numbers_and_unsafe_images_are_marked_incomplete(self):
         source = response()['data']['items'][0]
@@ -192,6 +193,36 @@ class SellerSpritePluginTests(unittest.TestCase):
             source = Path(directory) / 'input.json'
             source.write_text(json.dumps({'keyword': 'pet house', 'marketplace': 'JP', 'items': []}))
             self.assertEqual(plugin.main(['normalize', '--query', 'pet house', '--input', str(source), '--out', str(Path(directory) / 'out')]), 2)
+
+    def test_private_http_session_validates_and_drops_unrelated_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'session.json'
+            source.write_text(json.dumps({'format': 'sellersprite-http-session-v1', 'extension_version': '5.0.6',
+                'headers': {'auth-token': 'fixture-token', 'auth-fp': 'fixture-fp', 'random-token': 'fixture-random',
+                            'cookie': 'EXCLUDED'}, 'parameters': {'version': '5.0.6', 'q': 'EXCLUDED'}}))
+            session = plugin.load_session_file(source)
+            self.assertEqual(session['headers']['auth-token'], 'fixture-token')
+            self.assertNotIn('EXCLUDED', json.dumps(session))
+            source.write_text('{"headers":{"auth-token":"secret"}}')
+            with self.assertRaisesRegex(plugin.ApiError, '^INVALID_HTTP_SESSION$'):
+                plugin.load_session_file(source)
+
+    def test_private_http_session_search_uses_the_same_fixed_us_endpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'session.json'
+            source.write_text(json.dumps({'format': 'sellersprite-http-session-v1', 'extension_version': '5.0.6',
+                'headers': {'auth-token': 'fixture-token', 'auth-fp': 'fixture-fp', 'random-token': 'fixture-random'},
+                'parameters': {'version': '5.0.6'}}))
+            with mock.patch.object(plugin, 'request_plugin', return_value=(response(), 12)) as request, \
+                    mock.patch.object(plugin, 'load_session') as har, contextlib.redirect_stdout(io.StringIO()):
+                result = plugin.main(['search', '--query', 'pet house', '--session-file', str(source),
+                                      '--out', str(Path(directory) / 'out')])
+                self.assertEqual(result, 0)
+                har.assert_not_called()
+                self.assertEqual(request.call_args.args[0], 'pet house')
+                data = json.loads((Path(directory) / 'out/ranked-products.json').read_text())
+                self.assertEqual(data['collection_method'], 'independent_http')
+                self.assertTrue(all('title' not in item and 'parent_asin' not in item for item in data['products']))
 
     def test_browser_empty_state_requires_explicit_ui_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:

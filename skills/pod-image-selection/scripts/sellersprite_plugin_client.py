@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize browser table data, or diagnose a user-provided SellerSprite session HAR."""
+"""Query US keyword images and parent sales using a locally authorized HTTP session."""
 import argparse
 import datetime as dt
 import json
@@ -27,6 +27,38 @@ class ApiError(Exception):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+def load_session_file(path):
+    if not path or not Path(path).expanduser().is_file():
+        raise ApiError('MISSING_HTTP_SESSION')
+    try:
+        path = Path(path).expanduser()
+        if path.stat().st_size > 32768:
+            raise ValueError()
+        value = json.loads(path.read_text(encoding='utf-8'))
+        version = value.get('extension_version', '')
+        if value.get('format') != 'sellersprite-http-session-v1' or not re.fullmatch(r'\d+\.\d+\.\d+(?:\.\d+)?', version):
+            raise ValueError()
+        source = value['headers']
+        headers = {}
+        for name in HEADERS:
+            v = source.get(name)
+            if v is not None:
+                if not isinstance(v, str) or not v or len(v) > 8192 or '\r' in v or '\n' in v:
+                    raise ValueError()
+                headers[name] = v
+        if any(headers.get(k, '').lower() in ['', 'null', 'undefined', '***', '[redacted]']
+               for k in ['auth-token', 'auth-fp', 'random-token']):
+            raise ValueError()
+        params = value.get('parameters', {})
+        params = {k: v for k, v in params.items() if k in ['version', 'language', 'extension', 'source']
+                  and isinstance(v, str) and len(v) <= 200}
+        params['version'] = version
+        return {'headers': headers, 'parameters': params, 'extension_version': version,
+                'captured_at': value.get('captured_at')}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        raise ApiError('INVALID_HTTP_SESSION') from None
 
 
 def write_json(path, value):
@@ -158,13 +190,10 @@ def public_candidates(document):
         if not isinstance(row, dict):
             raise ApiError('UNEXPECTED_PRODUCT')
         result = {}
-        for key in ['asin', 'parent']:
+        for key in ['asin']:
             value = row.get(key)
             if isinstance(value, str) and re.fullmatch('[A-Z0-9]{10}', value):
                 result[key] = value
-        title = row.get('title')
-        if isinstance(title, str):
-            result['title'] = title[:2000]
         units = row.get('units')
         if isinstance(units, (int, float)) and not isinstance(units, bool) and math.isfinite(units):
             result['units'] = units
@@ -201,7 +230,7 @@ def normalize_plugin(query, document):
         if not image:
             incomplete.append({'asin': asin, 'reason': 'missing_image'})
             continue
-        valid.append({'asin': asin, 'parent_asin': item.get('parent'), 'title': item.get('title'),
+        valid.append({'asin': asin,
                       'image_url': image, 'parent_units_30d': units, 'api_order': index,
                       'product_url': 'https://www.amazon.com/dp/' + asin})
     valid.sort(key=lambda item: (-item['parent_units_30d'], item['api_order']))
@@ -210,6 +239,7 @@ def normalize_plugin(query, document):
     sales = [row.get('units') for row in public['data']['items']]
     valid_sales = [value for value in sales if isinstance(value, (int, float)) and value >= 0]
     result = {'query': query, 'marketplace': 'US', 'source': 'sellersprite_extension_keyword_api',
+              'collection_method': 'independent_http',
               'scope': 'sellersprite_returned_keyword_candidates', 'match_type': 'extension_keyword_search',
               'sales_window': 'nearly', 'deduplication': 'asin_only',
               'sort': 'parent_units_30d_desc_then_api_order',
@@ -228,16 +258,20 @@ def main(argv=None):
     parser.add_argument('command', choices=['status', 'plan', 'search', 'normalize'])
     parser.add_argument('--query')
     parser.add_argument('--session-har', type=Path)
+    parser.add_argument('--session-file', type=Path)
     parser.add_argument('--input', type=Path)
     parser.add_argument('--out', type=Path)
     args = parser.parse_args(argv)
-    path = args.session_har or os.environ.get('SELLERSPRITE_SESSION_HAR')
+    if args.session_file and args.session_har:
+        parser.error('Choose one local session source')
+    path = args.session_file or args.session_har or os.environ.get('SELLERSPRITE_SESSION_HAR')
+    loader = load_session_file if args.session_file else load_session
     try:
         if args.command == 'status':
             if not path:
                 print(json.dumps({'configured': False, 'network_tested': False, 'reason': 'MISSING_SESSION_HAR'}))
             else:
-                session = load_session(path)
+                session = loader(path)
                 print(json.dumps({'configured': True, 'network_tested': False,
                                   'extension_version': session['extension_version'], 'captured_at': session['captured_at']}))
             return 0
@@ -283,12 +317,12 @@ def main(argv=None):
         if args.command == 'plan':
             print(json.dumps({'status': 'planned', 'marketplace': 'US', 'requested_top': 30}))
             return 0
-        session = load_session(path)
+        session = loader(path)
         document, elapsed = request_plugin(query, session)
         result, public = normalize_plugin(query, document)
         write_json(args.out / 'sellersprite-candidates.json', public)
         write_json(args.out / 'ranked-products.json', result)
-        summary = {'status': 'ok' if result['returned_rows_complete'] else 'partial',
+        summary = {'status': 'empty' if not result['returned_candidates'] else 'ok' if result['returned_rows_complete'] else 'partial',
                    'source': result['source'], 'marketplace': 'US', 'elapsed_ms': elapsed,
                    'total_matches': result['total_matches'], 'returned_candidates': result['returned_candidates'],
                    'products': len(result['products']), 'incomplete': len(result['incomplete']),
