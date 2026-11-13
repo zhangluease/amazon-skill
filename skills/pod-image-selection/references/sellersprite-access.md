@@ -1,6 +1,6 @@
 # 卖家精灵授权与接口取数
 
-输入关键词，固定美国站。先匿名HTTP取得Amazon搜索结果ASIN，再批量向卖家精灵查询父体近30天销量和主图，倒排取前30。普通查询不启动浏览器，不操作插件搜索框或表格；仍会发起正常HTTP网页/接口请求。
+输入关键词，固定美国站。先匿名HTTP取得Amazon搜索结果ASIN，再批量向卖家精灵查询父体近30天销量和主图，按销量降序展示全部有效候选，不做数量截断。普通查询不启动浏览器，不操作插件搜索框或表格；仍会发起正常HTTP网页/接口请求。
 
 ## 普通入口
 
@@ -14,7 +14,7 @@ node scripts/sellersprite_browser.cjs search --query 'pet house' --out /absolute
 
 入口为 `GET https://www.amazon.com/s?k=关键词&page=1`，不带Cookie或账号，返回HTML。只提取主卡片 `data-component-type="s-search-result"` 的有效 `data-asin`，不把推荐轮播或任意链接中的ASIN混入。保存页面号、URL、时间、响应摘要与ASIN清单，不保存原始HTML或匿名会话标识。
 
-默认第一页全部去重主卡片，包含该类型卡片中实际返回的广告。用户明确要更多时可 `--amazon-pages 2`，最多4页且不超过200个去重ASIN；检测无下一页后停止。不是全市场销量前30。匿名默认配送上下文、广告和实时排序可能与已登录浏览器不同，不保证重现用户当时的结果。
+默认第一页全部去重主卡片，包含该类型卡片中实际返回的广告。用户明确要更多时可 `--amazon-pages 2`，最多4页且不超过200个去重ASIN；检测无下一页后停止。排名只覆盖已取得的页面。匿名默认配送上下文、广告和实时排序可能与已登录浏览器不同，不保证重现用户当时的结果。
 
 HTTP错误、验证码、查询词不符或无法确认结果时失败，不把它当作零结果，不自动开浏览器、循环重试、登录Amazon或改用卖家精灵关键词库。只有明确搜索页无结果证据才返回empty，此时不调用或授权卖家精灵。匿名不等于免风控，单次成功不代表所有IP和时间可用。
 
@@ -22,9 +22,9 @@ HTTP错误、验证码、查询词不符或无法确认结果时失败，不把�
 
 接口为 `GET https://e.sellersprite.com/v2/extension/competitor-lookup/US`，参数 `asins=本次搜索ASIN清单`；客户端计算该清单的插件校验值，附加已授权会话。**不传qt=K或q=关键词**，后者是卖家精灵关键词库另一候选范围。HTTP状态、业务码、美国站标识和商品结构均需通过。
 
-只取 `asin`、`units`（父体近30天预估销量）、`image`（主图）。规范为 `asin`、`parent_units_30d`、`image_url`，另外保留编号、商品链接及来源元数据。ASIN去重，保留不同子体，不相加父体销量；缺销量或缺图不补零，少于30如实交付。不采集标题、价格、评分、评论数等额外商品指标。
+只取 `asin`、`units`（父体近30天预估销量）、`image`（主图）。规范为 `asin`、`parent_units_30d`、`image_url`，另外保留编号、商品链接及来源元数据。ASIN去重，保留不同子体，不相加父体销量。全部有效候选都展示；缺销量或缺图标记缺失，不补零。不采集标题、价格、评分、评论数等额外商品指标。
 
-仅排名这次取得的Amazon搜索ASIN：`candidate_source=amazon_anonymous_search_http`、`ranking_scope=returned_candidates_only`、`global_top_30_verified=false`。接口多返回的其他ASIN排除，未返回的请求ASIN标记missing，不补零；同销量按Amazon卡片顺序。`total_matches`未知，不把卖家精灵批量返回数当成Amazon总搜索匹配数。
+仅排名这次取得的Amazon搜索ASIN：`candidate_source=amazon_anonymous_search_http`、`ranking_scope=returned_candidates_only`、`global_ranking_verified=false`、`selection_limit=null`。接口多返回的其他ASIN排除，未返回的请求ASIN标记missing，不补零；同销量按Amazon卡片顺序。`total_matches`未知，不把卖家精灵批量返回数当成Amazon总搜索匹配数。
 
 ## 首次授权与失效恢复
 

@@ -261,7 +261,7 @@ def normalize_plugin(query, document):
                       'image_url': image, 'parent_units_30d': units, 'api_order': index,
                       'product_url': 'https://www.amazon.com/dp/' + asin})
     valid.sort(key=lambda item: (-item['parent_units_30d'], item['api_order']))
-    for rank, item in enumerate(valid[:30], 1):
+    for rank, item in enumerate(valid, 1):
         item['rank'] = rank
     sales = [row.get('units') for row in public['data']['items']]
     valid_sales = [value for value in sales if isinstance(value, (int, float)) and value >= 0]
@@ -272,11 +272,11 @@ def normalize_plugin(query, document):
               'sort': 'parent_units_30d_desc_then_api_order',
               'queried_at': dt.datetime.now(dt.timezone.utc).isoformat(),
               'returned_rows_complete': not incomplete, 'incomplete': incomplete,
-              'total_matches': public['data']['total'], 'requested_top': 30, 'products': valid[:30],
+              'total_matches': public['data']['total'], 'selection_limit': None, 'products': valid,
               'returned_candidates': len(sales), 'ranking_scope': 'returned_candidates_only',
-              'global_top_30_verified': False,
+              'global_ranking_verified': False,
               'observed_server_units_desc': all(a >= b for a, b in zip(valid_sales, valid_sales[1:])),
-              'note': '在本次接口返回的关键词候选中按父体近30天销量取前30；未验证全部匹配商品的全局排名。关键词匹配可能含非目标品类。'}
+              'note': '本次接口返回的全部有效关键词候选按父体近30天销量降序展示；未验证全部匹配商品的全局排名。关键词匹配可能含非目标品类。'}
     return result, public
 
 
@@ -297,7 +297,7 @@ def normalize_cohort(query, document, cohort):
                    'amazon_pages_requested': cohort.get('pages_requested'),
                    'amazon_pages_loaded': len(cohort.get('pages', [])),
                    'amazon_queried_at': cohort.get('queried_at'),
-                   'note': '在匿名Amazon美国站本次搜索页ASIN内按父体近30天销量取前30；不是卖家精灵关键词库结果，也未验证全量全局排名。'})
+                   'note': '匿名Amazon美国站本次搜索页ASIN的全部有效候选按父体近30天销量降序展示，不做数量截断；未验证全量全局排名。'})
     result.pop('observed_server_units_desc', None)
     return result, public
 
@@ -367,7 +367,7 @@ def main(argv=None):
                    'source': 'sellersprite_extension_asin_api' if cohort else 'sellersprite_extension_keyword_api',
                    'ranking_scope': 'returned_candidates_only'})
         if args.command == 'plan':
-            print(json.dumps({'status': 'planned', 'marketplace': 'US', 'requested_top': 30}))
+            print(json.dumps({'status': 'planned', 'marketplace': 'US', 'selection_limit': None}))
             return 0
         session = loader(path)
         document, elapsed = request_plugin(query, session, asins=cohort['asins']) if cohort else request_plugin(query, session)
@@ -378,7 +378,7 @@ def main(argv=None):
                    'source': result['source'], 'marketplace': 'US', 'elapsed_ms': elapsed,
                    'total_matches': result['total_matches'], 'returned_candidates': result['returned_candidates'],
                    'products': len(result['products']), 'incomplete': len(result['incomplete']),
-                   'ranking_scope': result['ranking_scope'], 'global_top_30_verified': False}
+                   'ranking_scope': result['ranking_scope'], 'global_ranking_verified': False}
         write_json(args.out / 'api-status.json', summary)
         print(json.dumps(summary))
         return 0 if result['returned_rows_complete'] else 3

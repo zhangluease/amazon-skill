@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 SPEC = importlib.util.spec_from_file_location('sellersprite_plugin_client', SCRIPTS / 'sellersprite_plugin_client.py')
 plugin = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(plugin)
+from render_product_gallery import render
 
 
 def entry(url='https://e.sellersprite.com/v2/extension/competitor-lookup/JP?asins=B000000001&version=5.0.6&language=zh_CN&extension=fixture&source=chrome',
@@ -150,21 +151,38 @@ class SellerSpritePluginTests(unittest.TestCase):
         self.assertEqual([p['asin'] for p in result['products']], ['B000000003', 'B000000004', 'B000000002'])
         self.assertEqual(len(result['incomplete']), 2)
         self.assertEqual(result['ranking_scope'], 'returned_candidates_only')
-        self.assertFalse(result['global_top_30_verified'])
+        self.assertFalse(result['global_ranking_verified'])
         self.assertEqual(result['returned_candidates'], 5)
         self.assertEqual(result['total_matches'], 7519)
         self.assertNotIn('SECRET', json.dumps(public))
 
-    def test_ranking_returns_thirty_unique_asins_by_parent_sales(self):
+    def test_ranking_returns_all_unique_asins_by_parent_sales(self):
         source = response()['data']['items'][0]
         rows = [dict(source, asin='B' + str(i).zfill(9), units=i, amzUnit=99999-i) for i in range(1, 41)]
         rows.append(dict(rows[-1], units=9999))
         result, _ = plugin.normalize_plugin('pet house', response(rows=rows))
-        self.assertEqual(len(result['products']), 30)
-        self.assertEqual([p['parent_units_30d'] for p in result['products']], list(range(40, 10, -1)))
-        self.assertEqual([p['rank'] for p in result['products']], list(range(1, 31)))
+        self.assertEqual(len(result['products']), 40)
+        self.assertEqual([p['parent_units_30d'] for p in result['products']], list(range(40, 0, -1)))
+        self.assertEqual([p['rank'] for p in result['products']], list(range(1, 41)))
+        self.assertIsNone(result['selection_limit'])
+        self.assertNotIn('requested_top', result)
         self.assertNotIn('parent_asin', result['products'][0])
         self.assertNotIn('title', result['products'][0])
+
+    def test_cohort_and_gallery_keep_every_valid_candidate_beyond_thirty(self):
+        source = response()['data']['items'][0]
+        for count in [48, 80]:
+            with self.subTest(count=count):
+                asins = ['B' + str(i).zfill(9) for i in range(1, count + 1)]
+                rows = [dict(source, asin=asin, units=i) for i, asin in enumerate(asins, 1)]
+                result, _ = plugin.normalize_cohort('pet house', response(rows=rows),
+                    {'asins': asins, 'pages': [{}], 'pages_requested': 1})
+                self.assertEqual([p['asin'] for p in result['products']], list(reversed(asins)))
+                self.assertEqual([p['rank'] for p in result['products']], list(range(1, count + 1)))
+                self.assertIsNone(result['selection_limit'])
+                gallery = render(result)
+                self.assertEqual(gallery.count('<article>'), count)
+                self.assertEqual(gallery.count('type="checkbox"'), count)
 
     def test_invalid_numbers_and_unsafe_images_are_marked_incomplete(self):
         source = response()['data']['items'][0]

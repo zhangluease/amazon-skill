@@ -29,9 +29,9 @@ def render(document):
     encoded = json.dumps(mapping, ensure_ascii=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     returned = document.get('returned_candidates', len(products))
     total = document.get('total_matches')
-    scope = (f'本次返回 {returned} 款候选；以下展示其中父体销量前 {len(products)} 款。接口报告总匹配 {total:,} 款，全部匹配商品的全局排名尚未验证。'
+    scope = (f'本次返回 {returned} 款候选；以下按父体销量降序展示全部 {len(products)} 款有效候选。接口报告总匹配 {total:,} 款，全部匹配商品的全局排名尚未验证。'
              if document.get('ranking_scope') == 'returned_candidates_only' and isinstance(total, int)
-             else f'本次取得 {returned} 款候选，按父体近30天销量展示前 {len(products)} 款；全部匹配商品的全局排名尚未验证。')
+             else f'本次取得 {returned} 款候选，按父体近30天销量降序展示全部 {len(products)} 款有效候选；全部匹配商品的全局排名尚未验证。')
     provenance = ('来源：Amazon匿名搜索结果，销量由卖家精灵提供；查询时间：'
                   if document.get('candidate_source') == 'amazon_anonymous_search_http'
                   else '来源：卖家精灵插件；查询时间：') + str(document.get('queried_at') or '未知')
