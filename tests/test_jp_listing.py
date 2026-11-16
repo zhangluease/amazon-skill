@@ -659,6 +659,53 @@ class JapaneseListingTests(unittest.TestCase):
                                      config=self.root / "absent.json")
         self.assertEqual(result["error_code"], "config_unreadable")
 
+    def test_backend_rejects_unused_qa_and_other_sites_before_setup(self):
+        with patch.object(backend, "select_cli", side_effect=AssertionError("unsupported requests must not prepare CLI")), \
+             patch.object(backend, "load_config", side_effect=AssertionError("unsupported requests must not load credentials")):
+            for command, site in (("qa", "JP"), ("qa", "US"), ("validate", "US")):
+                result = backend.run_cli(command, site=site)
+                self.assertEqual(result["error_code"], "invalid_arguments")
+                self.assertIsNone(result["exit_code"])
+
+    def test_source_units_remain_unchanged_for_japanese_consumables(self):
+        profile = copy.deepcopy(self.profile)
+        profile["measurements"] = [
+            {"measurement_id": "length", "kind": "length", "value": "230.00", "unit": "mm"},
+            {"measurement_id": "weight", "kind": "weight", "value": "120", "unit": "g"},
+            {"measurement_id": "volume", "kind": "volume", "value": "250", "unit": "ml"}]
+        normalized = quality.normalize_profile(profile)
+        self.assertEqual([m["display_text"] for m in normalized["measurements"]], ["230 mm", "120 g", "250 ml"])
+        self.assertEqual([m["value"] for m in normalized["measurements"]], ["230.00", "120", "250"])
+
+    def test_jp_acceptance_and_report_use_product_questions_without_qa_collection(self):
+        self.import_and_classify()
+        (self.run / "06_qa.json").unlink()
+        self.listing["buyer_question_coverage"] = [{
+            "question": "素材は？ <script>bad()</script>", "status": "covered",
+            "location": "第一条五点", "source": "local_editorial"}]
+        write(self.run, "listing.json", self.listing)
+        keywords.coverage(self.run, write_placement=True)
+        keyword_status = keywords.check_run(self.run)
+        self.assertEqual(keyword_status["status"], "passed", keyword_status)
+        review = quality.make_review_template(self.run / "01_product_profile.json", self.run / "listing.json")
+        for record in review["records"]:
+            record.update(status="pass", evidence="synthetic-test: content reviewed against supplied fixture")
+        with patch.object(quality.backend_cli, "run_cli", return_value={"exit_code": 0, "response": {"ok": True, "errors": []}}):
+            backend_result = quality.run_backend(self.profile, self.listing)
+        result = quality.validate_bundle(self.profile, self.listing, review=review, backend=backend_result,
+                                        fingerprints=quality.file_fingerprints(self.run / "01_product_profile.json", self.run / "listing.json"),
+                                        keywords=keyword_status)
+        self.assertEqual(result["status"], "passed", result["issues"])
+        write(self.run, "08_semantic_review.json", review)
+        write(self.run, "08_backend_validation.json", backend_result)
+        write(self.run, "08_validation.json", result)
+        _, page, status = renderer.build_report(self.run)
+        self.assertEqual(status, "passed")
+        self.assertIn("第一条五点", page)
+        self.assertIn("&lt;script&gt;bad()&lt;/script&gt;", page)
+        self.assertNotIn("<script>bad()</script>", page)
+        self.assertNotIn("当前连接器仅接 US", page)
+
 
     def test_shared_configuration_rotation_preserves_aba_fields_and_redacts_status(self):
         from listing_config import configure, config_status

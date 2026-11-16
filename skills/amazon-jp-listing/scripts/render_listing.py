@@ -208,9 +208,9 @@ def effective_status(validation, fingerprints, gaps, evidence_fingerprints=None)
         issues.append("验收未绑定当前产品画像、Listing 或 QA 文件，或文件已变更；必须重新验收。")
     recorded_evidence = validation.get("evidence_fingerprints")
     if not evidence_fingerprints or any(value is None for value in evidence_fingerprints.values()):
-        issues.append("缺少原始语义复审或后端验收记录；不能仅凭汇总声明通过。")
+        issues.append("缺少原始内容复核或后端验收记录；不能仅凭汇总声明通过。")
     if not isinstance(recorded_evidence, dict) or recorded_evidence != evidence_fingerprints:
-        issues.append("原始语义复审或后端验收记录与汇总不匹配；必须重新验收。")
+        issues.append("原始内容复核或后端验收记录与汇总不匹配；必须重新验收。")
     declared = validation.get("status")
     stages = [validation.get(key) for key in ("local", "semantic", "backend", "keywords")]
     stage_statuses = [stage.get("status") if isinstance(stage, dict) else stage for stage in stages]
@@ -225,7 +225,7 @@ def effective_status(validation, fingerprints, gaps, evidence_fingerprints=None)
     else:
         status = "incomplete"
         if declared != "passed" or any(value != "passed" for value in stage_statuses):
-            issues.append("本地、筛词、语义复审、后端检查尚未全部通过；不能交付为已通过。")
+            issues.append("本地、筛词、内容复核、后端检查尚未全部通过；不能交付为已通过。")
     issues.extend(gaps)
     for issue in errors:
         if isinstance(issue, dict):
@@ -441,6 +441,20 @@ def report_kw_raw(raw):
     return slim
 
 
+def buyer_questions_html(listing):
+    labels = {"covered": "已覆盖", "partially_covered": "部分覆盖", "not_claimed": "未声明", "not_applicable": "不适用"}
+    rows = []
+    questions = listing.get("buyer_question_coverage", [])
+    for item in questions if isinstance(questions, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("question"), str):
+            status = item.get("status")
+            label = labels.get(status, "未确认") if isinstance(status, str) else "未确认"
+            rows.append('<div class="qa-item"><div class="q-line">' + html.escape(item["question"])
+                        + '</div><p>' + label + ' · '
+                        + html.escape(as_text(item.get("location"))) + '</p></div>')
+    return "".join(rows) or '<div class="empty-note">尚未整理本品购买问题</div>'
+
+
 def build_report(run_dir: Path, generated_at=None):
     data, snapshots = {}, {}
     for key, filename in FILES.items():
@@ -484,7 +498,7 @@ def build_report(run_dir: Path, generated_at=None):
                          "__DATA_VALIDATION__": script_json(validation),
                          "__DATA_EVIDENCE__": script_json({key: data[key] for key in ("validation", "review", "backend", "keyword_decisions")}),
                          "__DATA_KEYWORD_AUDIT__": script_json(keywords),
-                         "__LISTING_HTML__": listing_html, "__VALIDATION_LABEL__": html.escape(validation["label"]),
+                         "__LISTING_HTML__": listing_html, "__BUYER_QUESTIONS_HTML__": buyer_questions_html(listing), "__VALIDATION_LABEL__": html.escape(validation["label"]),
                          "__VALIDATION_STATUS__": validation["status"]})
     template = (ROOT / "tools/listing_report_template.html").read_text(encoding="utf-8")
     tokens = set(re.findall(r"__[A-Z][A-Z0-9_]*__", template))

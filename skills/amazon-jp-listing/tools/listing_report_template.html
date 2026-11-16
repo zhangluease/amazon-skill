@@ -445,10 +445,10 @@ body{
 
   <!-- ============ 06 买家问题 ============ -->
   <section class="chapter">
-    <div class="chapter-rail"><div class="idx">0<span>6</span></div><div class="tick" id="qaTick">Rufus QA</div></div>
+    <div class="chapter-rail"><div class="idx">0<span>6</span></div><div class="tick" id="qaTick">Questions</div></div>
     <div>
-      <div class="chapter-head"><h2 id="qaTitle">买家问题</h2><div class="sub" id="qaSubtitle">Rufus 问答采集 —— 真实购买疑虑</div></div>
-      <div class="card"><div id="qaSection"></div></div>
+      <div class="chapter-head"><h2 id="qaTitle">买家问题</h2><div class="sub" id="qaSubtitle">本品购买问题、覆盖位置与资料缺口</div></div>
+      <div class="card"><div id="qaSection">__BUYER_QUESTIONS_HTML__</div></div>
     </div>
   </section>
 
@@ -536,10 +536,9 @@ function render(){
   const keywordAudit=loadData('data-keyword-audit');
   const kwTagged=loadData('data-kw-tagged');
   const titleKw=loadData('data-title-keywords');
-  const qa=loadData('data-qa');
-  const site=String((profile&&profile.site)||(kwRaw&&kwRaw.site)||(qa&&qa.site)||'未识别').toUpperCase();
+  const site=String((profile&&profile.site)||(kwRaw&&kwRaw.site)||'未识别').toUpperCase();
   const siteLabel=site==='未识别'?'站点未识别':`${site} 站`;
-  const language=(profile&&profile.listing_language)||({US:'English',JP:'Japanese',UK:'English',DE:'German',FR:'French',IT:'Italian',ES:'Spanish',CA:'English',IN:'English'}[site]||'—');
+  const language=(profile&&profile.listing_language)||'Japanese';
 
   /* 时间固定为文件生成时间，打开报告不会改写。 */
   const meta=loadData('data-meta');
@@ -700,29 +699,6 @@ function render(){
       (coverage.unsupported_questions||[]).map(q=>`<span class="kw-item">${esc(q)}<span class="traffic reason">买家问题缺少本品事实</span></span>`).join('');
   }
 
-
-  /* 06 QA */
-  if(qa&&qa.status==='skipped'){
-    document.getElementById('qaTick').textContent='Skipped';
-    document.getElementById('qaTitle').textContent='买家问题（未启用）';
-    document.getElementById('qaSubtitle').textContent=`当前连接器仅接 US 的购物问答；${site} 站已跳过`;
-    document.getElementById('qaSection').innerHTML=`<div class="empty-note">已按站点规则跳过后端问答，不影响 ${esc(site)} 站 Listing 生成。</div>`;
-  }else if(qa&&qa.status==='unavailable'){
-    document.getElementById('qaTick').textContent='Unavailable';
-    document.getElementById('qaSubtitle').textContent='本次未取得购物问答；其他内容与验收状态见报告';
-    document.getElementById('qaSection').innerHTML='<div class="empty-note">本次未取得买家问题。</div>';
-  }else if(qa){
-    const pairs=qa.qa_pairs||(Array.isArray(qa)?qa:[]);
-    document.getElementById('qaSection').innerHTML=pairs.length?pairs.map(p=>{
-      const questions=Array.isArray(p.questions)?p.questions:((p.question||'').split(';').map(q=>q.trim()).filter(Boolean));
-      return `<div class="qa-item">
-        <div class="q-src">◎ ${esc(p.source||p.keyword||'相关问题')}</div>
-        ${questions.map(q=>`<div class="q-line">${esc(q)}</div>`).join('')}
-      </div>`;
-    }).join(''):'<div class="empty-note">暂无买家问题</div>';
-  }else{
-    document.getElementById('qaSection').innerHTML='<div class="empty-note">暂无买家问题</div>';
-  }
 
   /* Listing 与验收状态已在生成时安全渲染；禁用脚本仍可阅读全部内容。 */
 }

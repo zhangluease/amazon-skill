@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic Listing v2 checks; semantic truth still needs an independent review.
+"""Deterministic Listing v2 checks; semantic truth still needs content review.
 
 Python 3.9+, standard library only. No command rewrites generated marketing text.
 Fingerprints bind review files to source bytes; backend fingerprints bind canonical
@@ -15,7 +15,7 @@ import re
 import sys
 import tempfile
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from listing_scope import require_single_product
@@ -121,23 +121,7 @@ def _decimal_text(value):
     return result.rstrip("0").rstrip(".") if "." in result else result
 
 
-US_PREFERRED_UNITS = {"length": ("in", "ft"), "weight": ("oz", "lb"), "volume": ("fl oz", "gal")}
-# Exact factors to the US base unit of each kind (inch, ounce, US fluid ounce).
-TO_US_BASE = {
-    "length": {"mm": Decimal("1") / Decimal("25.4"), "cm": Decimal("1") / Decimal("2.54"),
-               "m": Decimal("100") / Decimal("2.54"), "in": Decimal("1"), "ft": Decimal("12")},
-    "weight": {"mg": Decimal("0.001") / Decimal("28.349523125"), "g": Decimal("1") / Decimal("28.349523125"),
-               "kg": Decimal("1000") / Decimal("28.349523125"), "oz": Decimal("1"), "lb": Decimal("16")},
-    "volume": {"ml": Decimal("1") / Decimal("29.5735295625"), "cl": Decimal("10") / Decimal("29.5735295625"),
-               "l": Decimal("1000") / Decimal("29.5735295625"), "fl oz": Decimal("1"), "gal": Decimal("128")},
-}
-US_LARGE_UNIT = {"length": ("ft", Decimal("12"), Decimal("120")),   # metric >= 10 ft reads as feet
-                 "weight": ("lb", Decimal("16"), Decimal("16")),     # metric >= 1 lb reads as pounds
-                 "volume": ("gal", Decimal("128"), Decimal("128"))}  # metric >= 1 gal reads as gallons
-METRIC_UNITS = {"mm", "cm", "m", "mg", "g", "kg", "ml", "cl", "l"}
-
-
-def _measurement_display(record, site):
+def _measurement_display(record):
     kind = record.get("kind")
     value, unit = record.get("value"), record.get("unit")
     if not isinstance(value, str) or not value.strip() or not isinstance(unit, str) or not unit.strip():
@@ -161,29 +145,11 @@ def _measurement_display(record, site):
         raise ValueError("volume unit is unsupported (fl oz is volume; oz is mass)")
     if kind == "length" and unit not in LENGTH_UNITS:
         raise ValueError("unsupported length unit")
-    preferred = record.get("preferred_unit")
-    if preferred is not None and (site != "US" or preferred not in US_PREFERRED_UNITS[kind]):
-        raise ValueError("preferred_unit is only for US and must be one of %s for %s" % (US_PREFERRED_UNITS[kind], kind))
-    approximate = False
-    with localcontext() as context:
-        context.prec = 50
-        # US: metric values are converted; imperial source units stay as supplied unless a
-        # preferred US unit is declared (e.g. 6 ft cables, 16 oz tumblers). Other sites keep source.
-        if site == "US" and unit in TO_US_BASE[kind]:
-            exact = number
-            if unit in METRIC_UNITS or preferred:
-                base = number * TO_US_BASE[kind][unit]
-                large_unit, factor, threshold = US_LARGE_UNIT[kind]
-                small_unit = US_PREFERRED_UNITS[kind][0]
-                unit = preferred or (large_unit if base >= threshold else small_unit)
-                exact = base / factor if unit == large_unit else base
-            number = exact.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            if number == 0:
-                raise ValueError("value rounds to zero in US units; needs an explicit precision exception")
-            approximate = number != exact
+    if record.get("preferred_unit") is not None:
+        raise ValueError("Japanese listings retain source units; remove preferred_unit")
     shown = _decimal_text(number)
     return {"display_value": shown, "display_unit": unit,
-            "display_text": shown + " " + unit, "approximate": approximate}
+            "display_text": shown + " " + unit, "approximate": False}
 
 
 def normalize_profile(profile):
@@ -201,7 +167,7 @@ def normalize_profile(profile):
         mid = measurement.get("measurement_id")
         if not isinstance(mid, str) or not mid or mid in seen:
             raise ValueError("measurement_id must be present and unique")
-        measurement.update(_measurement_display(measurement, site))
+        measurement.update(_measurement_display(measurement))
         seen.add(mid)
     return result
 
@@ -324,7 +290,7 @@ def _check_local(profile, listing, qa=None):
                 add("buyer_question_coverage", "listing.buyer_question_coverage[%d].status" % index, "Use covered, partially_covered, not_claimed, or not_applicable")
     site = profile.get("site")
     if site not in policy["sites"]:
-        add("site", "profile.site", "A supported site is required; no implicit US default")
+        add("site", "profile.site", "Site JP is required")
     if listing.get("site") != site:
         add("site_mismatch", "listing.site", "Listing site must match profile")
     for key in ("listing_language", "listing_language_code"):
@@ -371,28 +337,12 @@ def _check_local(profile, listing, qa=None):
                     if record.get("subject") not in ("product", "package", "fit") or not nonempty(record.get("label")) or not nonempty(record.get("source_ref")):
                         add("measurement_metadata", path, "Measurement requires subject, dimension label, and source")
                     try:
-                        display = _measurement_display(record, site)
+                        display = _measurement_display(record)
                         if any(record.get(k) != value for k, value in display.items()):
-                            add("measurement_display", path, "Display differs from deterministic conversion; run normalize")
+                            add("measurement_display", path, "Display differs from source normalization; run normalize")
                     except (ValueError, InvalidOperation) as error:
                         add("measurement_invalid", path, str(error))
     length_token = re.compile(r'(?<![A-Za-z0-9_.])(\d+(?:\.\d+)?)\s*[-‐‑]?\s*(centimeters?|millimeters?|meters?|inches|inch|in|cm|mm|m|feet|foot|ft|")(?![A-Za-z])', re.I)
-
-    def _dual_source_display(text, match, number, unit, allowed_owners):
-        before = text[:match.start()].rstrip()
-        if not before.endswith("("):
-            return False
-        before = before[:-1].rstrip()
-        for owner_id, measurement in measurements.values():
-            try:
-                same_source = (Decimal(str(measurement.get("value"))) == number
-                               and UNIT_ALIASES.get(str(measurement.get("unit", "")).strip().lower(), str(measurement.get("unit", "")).strip().lower()) == unit)
-            except InvalidOperation:
-                same_source = False
-            shown = measurement.get("display_text")
-            if owner_id in allowed_owners and same_source and isinstance(shown, str) and before.casefold().endswith(shown.casefold()):
-                return True
-        return False
 
     def scan_measurements(text, allowed_owners, path):
         matching_groups = []
@@ -402,9 +352,7 @@ def _check_local(profile, listing, qa=None):
             number, unit = Decimal(match[1]), UNIT_ALIASES.get(match[2].lower(), match[2].lower())
             if unit == "in" and re.match(r"\s*[-‐‑]?\s*\d", text[match.end():]):
                 continue  # "2 in 1" / "3-in-1" is a product claim, not a length.
-            if site == "US" and unit in ("mm", "cm", "m") and _dual_source_display(text, match, number, unit, allowed_owners):
-                continue  # "5.91 in (15 cm)": the source unit shown after its US display.
-            matches, own, nominal = [], [], []
+            own = []
             for mid, (owner_id, measurement) in measurements.items():
                 shown_unit = measurement.get("display_unit")
                 if isinstance(shown_unit, str):
@@ -414,14 +362,9 @@ def _check_local(profile, listing, qa=None):
                 except InvalidOperation:
                     same_value = False
                 if shown_unit == unit and same_value:
-                    matches.append(mid)
                     if owner_id in allowed_owners:
                         own.append(mid)
-                        if measurement.get("kind") in ("nominal", "size"):
-                            nominal.append(mid)
-            if site == "US" and unit in ("mm", "cm", "m") and not nominal:
-                add("source_unit_leak", path, "Ordinary US lengths must use normalized inches, including compact or reformatted numeric units")
-            elif not own:
+            if not own:
                 add("measurement_unregistered", path, "Numeric length has no matching registered measurement for this product: " + match[0])
             if own:
                 matching_groups.append(set(own))
@@ -790,62 +733,13 @@ def _check_local(profile, listing, qa=None):
             refs = check_refs({"fact_ids": item.get("fact_ids", []), "measurement_ids": item.get("measurement_ids", [])}, allowed, path)
             if not refs["fact_ids"] and not refs["measurement_ids"] and not item.get("fact_ids") and not item.get("measurement_ids"):
                 add("attribute_unsupported", path, "Attribute values must cite confirmed facts or measurements")
-        if len(_list(listing.get("buyer_question_coverage"))) < 6:
-            add("question_matrix_thin", "listing.buyer_question_coverage", "Cover the who/what/when/where/why/how buyer-question matrix (mark missing facts as not_claimed)", "warning")
-
     if qa is not None:
         if not isinstance(qa, dict):
             add("qa_object", "qa", "QA must be an object")
         elif qa.get("site") != site:
             add("qa_site", "qa.site", "QA site must match profile")
-        elif site != "US":
-            if qa.get("status") != "skipped" or qa.get("reason_code") != "rufus_us_only" or qa.get("qa_pairs") != []:
-                add("qa_non_us", "qa", "Non-US must retain the explicit skipped record with an empty qa_pairs array")
-        else:
-            if qa.get("status") == "unavailable":
-                if not nonempty(qa.get("reason")) or any(qa.get(key) != [] for key in ("requested_keywords", "qa_pairs", "question_reviews")):
-                    add("qa_unavailable_shape", "qa", "Unavailable QA requires the real reason and empty requested_keywords/qa_pairs/question_reviews arrays")
-                else:
-                    add("qa_unavailable", "qa", "US QA collection is unavailable; retain the reason and complete collection before final acceptance", "incomplete")
-                return issues
-            if qa.get("status") != "completed":
-                add("qa_status", "qa.status", "US QA must be completed or the deliverable remains incomplete")
-            requested = array(qa, "requested_keywords", "qa")
-            if not requested or any(not nonempty(keyword) for keyword in requested):
-                add("qa_requested_keywords", "qa.requested_keywords", "Retain the actual nonempty keyword strings used for collection")
-            questions = set()
-            for pair in array(qa, "qa_pairs", "qa"):
-                if isinstance(pair, dict):
-                    for question in _list(pair.get("questions")):
-                        if isinstance(question, str):
-                            questions.add((pair.get("keyword"), question))
-            reviewed_questions = set()
-            for index, review in enumerate(array(qa, "question_reviews", "qa")):
-                path = "qa.question_reviews[%d]" % index
-                if not isinstance(review, dict):
-                    add("qa_review_object", path, "Question review must be an object")
-                    continue
-                pair = (review.get("keyword"), review.get("question"))
-                if any(not isinstance(v, str) for v in pair):
-                    add("qa_question", path, "Review requires original keyword and question strings")
-                    continue
-                if pair not in questions:
-                    add("qa_provenance", path, "Reviewed question must come from the captured original response")
-                if pair[0] not in requested:
-                    quarantined = review.get("relevance") in ("irrelevant", "uncertain") and review.get("disposition") == "excluded"
-                    add("qa_seed_mismatch", path, "Response seed differs from requested keywords; preserve and quarantine it",
-                        "warning" if quarantined else "error")
-                reviewed_questions.add(pair)
-                relevance, disposition = review.get("relevance"), review.get("disposition")
-                if relevance not in ("relevant", "irrelevant", "uncertain") or disposition not in ("answered", "unsupported", "excluded"):
-                    add("qa_disposition", path, "Invalid relevance or disposition")
-                if disposition == "answered" and (relevance != "relevant" or not _list(review.get("fact_ids"))):
-                    add("qa_unsupported_answer", path, "Only relevant questions with product evidence may be answered")
-                applicable = scope(review.get("applies_to"), path + ".applies_to")
-                allowed = {"all"}
-                check_refs({"fact_ids": review.get("fact_ids"), "measurement_ids": []}, allowed, path)
-            if reviewed_questions != questions:
-                add("qa_review_coverage", "qa.question_reviews", "Every captured question needs a relevance/disposition review")
+        elif qa.get("status") != "skipped" or qa.get("reason_code") != "rufus_us_only" or qa.get("qa_pairs") != []:
+            add("qa_non_us", "qa", "Legacy QA metadata must record skipped/rufus_us_only with empty qa_pairs for Japan")
     return issues
 
 
@@ -919,15 +813,13 @@ def validate_bundle(profile, listing, qa=None, review=None, backend=None, finger
 
     local_errors = sum(i["severity"] == "error" for i in issues)
     local_status = "failed" if local_errors else "incomplete" if any(i["severity"] == "incomplete" for i in issues) else "passed"
-    if qa is None:
-        add("qa_missing", "qa", "QA evidence or explicit non-US skipped file is missing", "incomplete")
     expected = load_json(POLICY_PATH)
     targets = ["single"]
     required = {(str(target), check) for target in targets for check in expected["semantic_checks"]}
     required |= {("media", check) for check in expected["media_checks"]}
     semantic_start = len(issues)
     if review is None:
-        add("review_missing", "semantic", "Independent semantic review is missing", "incomplete")
+        add("review_missing", "semantic", "Semantic content review is missing", "incomplete")
     elif not isinstance(review, dict):
         add("review_invalid", "semantic", "Semantic review must be an object")
     else:

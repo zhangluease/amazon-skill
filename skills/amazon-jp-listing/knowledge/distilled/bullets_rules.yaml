@@ -23,7 +23,7 @@ rules:
 - id: bullets_complete_compatibility
   type: required
   source_id: user_compatibility_lists_20261112
-  prompt_fragment: 有适配资料的配件／耗材须按 references/compatibility-lists.md 在五点完整列出所有已确认 compatible_models。每个型号保持完整，含所有实际后缀；按系列／来源组分配 2–3 条，不用シリーズなど、省略号、范围或仅热门型号替代，不把完整名单只放长描或图片。型号是事实枚举，不须逐个具有关键词流量。核对本品清单的缺失、额外机型、来源和范围，五点 claims 引用对应机型事实。
+  prompt_fragment: 有适配资料的配件／耗材须按 references/consumables.md 在五点完整列出所有已确认 compatible_models。每个型号保持完整，含所有实际后缀；按系列／来源组分配 2–3 条，不用シリーズなど、省略号、范围或仅热门型号替代，不把完整名单只放长描或图片。型号是事实枚举，不须逐个具有关键词流量。核对本品清单的缺失、额外机型、来源和范围，五点 claims 引用对应机型事实。
 - id: bullets_intent_relations
   type: editorial
   source_id: cosmo_paper

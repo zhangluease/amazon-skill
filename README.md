@@ -78,9 +78,9 @@ python3 skills/amazon-jp-keywords/scripts/amazon_jp_autocomplete.py \
 
 仅面向新版：标题最多 75 字符，优先高相关流量词；标题下独立小标题最多 125 字符，优先真实包装数量和套装组成；材质尺寸在五点正文，五点开头也放相关词。字段布局须对照原词指标与本品事实复审，报告将标题和灰字小标题相邻展示。 按对象型号选购的耗材通常用2–3条五点按系列完整列出已确认机型，校验缺项、后缀和来源引用；机型清单单独于普通文案编辑预算计数，原文完整提交实际后端校验。
 
-流程：产品画像 → 完整导入词表 → 可用／暂缓／剔除三类词池 → 卖点与关键词布局 → 日文文案及图片策划 → 覆盖检查 → 本地／后端／独立语义验收。采集时保留的 Amazon 联想词在生成 Listing 时仍须按本品事实审核。
+流程：产品画像 → 完整导入词表 → 可用／暂缓／剔除三类词池 → 卖点与关键词布局 → 日文文案及图片策划 → 覆盖与词位检查 → 本地／后端校验和内容复核。给定词按默认可信原则使用，检查本品范围及具体输入冲突。
 
-基于[老陈用户表格版](https://github.com/chenqinglin2019-tech/Laochen-Amazon-project/tree/87dead1472eb4ddfd28f99fd47a9593b5c3f7771/skills/lc_amazon_listing)的固定版本实现，只面向日本站。本地导入、筛词和渲染只需 Python 3.9+ 标准库；后端校验自动准备并核对 CLI，不需要注册 MCP，读取公共 `~/.amazon-skill/config.json` 的 `backend_token`。日本站明确跳过仅支持美国站的 QA 采集，仍整理买家问题覆盖。缺少后端或独立复审证据时，报告保留未完成状态。
+基于[老陈用户表格版](https://github.com/chenqinglin2019-tech/Laochen-Amazon-project/tree/87dead1472eb4ddfd28f99fd47a9593b5c3f7771/skills/lc_amazon_listing)的固定版本实现，只面向日本站。本地导入、筛词和渲染只需 Python 3.9+ 标准库；后端校验自动准备并核对 CLI，不需要注册 MCP，读取公共 `~/.amazon-skill/config.json` 的 `backend_token`。后端入口仅提供日本站 validate；买家问题根据本品资料整理，不另采集 QA。缺少实际后端或内容复核记录时，报告保留未完成状态。
 
 ```text
 请使用 $amazon-jp-listing，根据我提供的关键词文件（名称不限）和耗材图片、规格及包装清单，为日本站生成完整日文 Listing，完成意图筛词、主附图与 A+ 策划，并交付文案和验收报告。

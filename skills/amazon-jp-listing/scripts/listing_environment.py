@@ -68,7 +68,7 @@ def init_run(run):
     run = Path(run)
     run.mkdir(parents=True, exist_ok=False)
     qa = {"site": "JP", "status": "skipped", "reason_code": "rufus_us_only",
-          "qa_pairs": [], "requested_keywords": [], "question_reviews": []}
+          "qa_pairs": []}
     (run / "06_qa.json").write_text(json.dumps(qa, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {"status": "initialized", "site": "JP", "run_dir": str(run.resolve()),
             "qa_status": "skipped", "backend_validated": False}

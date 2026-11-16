@@ -764,7 +764,6 @@ def coverage(run, write_placement=False):
     It is advisory (never a completion gate) so it cannot start a repair loop.
     """
     profile, raw, decisions, listing = [read_json(run / name) for name in (PROFILE, RAW, DECISIONS, "listing.json")]
-    qa = read_json(run / "06_qa.json", required=False)
     policy = read_json(POLICY)
     site = profile.get("site")
     byte_limit = policy["sites"].get(site, {}).get("search_terms_max_bytes", policy["default_limits"]["search_terms_max_bytes"])
@@ -855,9 +854,9 @@ def coverage(run, write_placement=False):
         item["keywords"].append(record["keyword"])
         item["searches"] += _searches(metrics.get(record["normalized"], {})) or 0
     report["fact_unlocks"] = sorted(unlocks.values(), key=lambda item: -item["searches"])
-    if isinstance(qa, dict):
-        report["unsupported_questions"] = [r.get("question") for r in qa.get("question_reviews", [])
-                                           if isinstance(r, dict) and r.get("disposition") == "unsupported"]
+    report["unsupported_questions"] = [q["question"] for q in listing.get("buyer_question_coverage", [])
+                                       if isinstance(q, dict) and isinstance(q.get("question"), str)
+                                       and q.get("status") in ("not_claimed", "partially_covered")]
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
     atomic_write(run / "07_keyword_coverage.json", report)
     if write_placement:

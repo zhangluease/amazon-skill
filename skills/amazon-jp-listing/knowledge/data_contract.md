@@ -1,4 +1,4 @@
-# 本地数据契约 v2.7（Listing schema_version 仍为 "2.1"）
+# 本地数据契约 v2.8（Listing schema_version 仍为 "2.1"）
 
 本地版本只执行 JP/Japanese/ja，主要面向耗材。用户附件名称任意；本文的编号文件名仅用于任务目录内的中间流程，不限制用户原文件命名；最终交付使用 listing.md、listing.json、report.html。来源库中的历史文件名也不是必交附件。
 
@@ -11,8 +11,8 @@
 - `brand`: 用户品牌字符串或 null；不造品牌。
 - `product_identity`: `{original_name, canonical_name, protected_terms: [目标语言完整核心短语]}`。至少一个必保短语；比较只规范大小写、空白与连字符，不允许拆散名词短语。
 - `facts`: `[{fact_id, field, value, source_ref, status}]`。`status` 为 `confirmed/unknown/conflict`；facts 仅记录本品事实。只有 confirmed 且有来源的事实能支持声明。
-- 适配机型用 `facts.field=compatible_models`，value 为完整机型字符串数组，每个字符串一个型号，不能用系列名、范围、通配符或省略号。可按系列／来源分多条事实，另加可选 `group_label`；保留 source_ref 和 confirmed/unknown/conflict。事实只能支持本品。confirmed 必须有非空完整数组与来源，给定词表中的语义明确的适配对象标识直接按用户依据登记 confirmed；不因缺官网证明标 unknown。实际无法解析或资料冲突仍保留未完成状态。按[清单规则](../references/compatibility-lists.md)在可售商品五点列全确认型号，每条 claims 引用对应 fact_id；完整匹配允许大小写、全半角和连字符字形差异，不允许丢后缀。机器检查缺项／未引用，不证明兼容关系，也不能替代对照原件检查多写与漏录。
-- 购买数量事实使用 field=quantity/package_quantity/unit_count/pack_count/number_of_items，value 为正整数或正整数字符串，必须与配件数量分开。首版机器核对英文 2-Pack、2 count、2 pieces、Pack of 2、Set of 2、Quantity: 2 等表达的数值、范围及事实引用；图片数量声明须在 body_refs 正文引用同一数量事实。其他语言表达和画面实物数量仍需语义复审。随附配件数量用 field=accessory_count/included_quantity/component_count（confirmed 正整数），`4 pcs felt pads` 这类写法据此核对，且不能满足购买数量；`N pieces of <物品>` 视为配件描述，不按购买数量扫描。
+- 适配机型用 `facts.field=compatible_models`，value 为完整机型字符串数组，每个字符串一个型号，不能用系列名、范围、通配符或省略号。可按系列／来源分多条事实，另加可选 `group_label`；保留 source_ref 和 confirmed/unknown/conflict。事实只能支持本品。confirmed 必须有非空完整数组与来源，给定词表中的语义明确的适配对象标识直接按用户依据登记 confirmed；不因缺官网证明标 unknown。实际无法解析或资料冲突仍保留未完成状态。按[清单规则](../references/consumables.md)在可售商品五点列全确认型号，每条 claims 引用对应 fact_id；完整匹配允许大小写、全半角和连字符字形差异，不允许丢后缀。机器检查缺项／未引用，不证明兼容关系，也不能替代对照原件检查多写与漏录。
+- 购买数量事实使用 field=quantity/package_quantity/unit_count/pack_count/number_of_items，value 为正整数或正整数字符串，必须与配件数量分开。首版机器核对英文 2-Pack、2 count、2 pieces、Pack of 2、Set of 2、Quantity: 2 等表达的数值、范围及事实引用；图片数量声明须在 body_refs 正文引用同一数量事实。其他语言表达和画面实物数量仍需内容复核。随附配件数量用 field=accessory_count/included_quantity/component_count（confirmed 正整数），`4 pcs felt pads` 这类写法据此核对，且不能满足购买数量；`N pieces of <物品>` 视为配件描述，不按购买数量扫描。
 - `measurements`: `[{measurement_id, kind, subject, label, value, unit, source_ref, display_value?, display_unit?, display_text?, approximate?}]`。value 是原始十进制数字字符串；kind 为 `length/weight/volume/nominal/size`；subject 为 `product/package/fit`。label 标明 height/width/length/diameter 等。普通长度单位支持 mm/cm/m/in/ft。日本站保留来源单位，由 normalize 生成统一 display_text。公称规格和尺码不换算；禁止质量 oz 与容量 fl oz 混用。缺失值或单位不补造；需要表达的未知参数先补充资料。
 - `images`: `[{image_id, source, applies_to: ["all"]}]`。source 是用户素材路径/URL/附件定位；只引用本品实际素材。
 - `compatibility_basis`: 新任务按选购依据填 `model/specification/none`，另用 `compatibility_reason` 说明判断依据。型号适配、规格适配与无需型号适配的耗材分别组织五点，详见[耗材规则](../references/consumables.md)。旧画像缺此字段仍可读取；不得按编号前缀猜测，规格型与通用耗材不强制未知机型清单。
@@ -38,13 +38,13 @@ fact_id、measurement_id 和 image_id 在本品画像中唯一。所有 applies_
 - `03_kw_filtered.json` 是原始词中 eligible 的字符串数组；`03_kw_removed.json` 是 excluded 的 `{keyword, reason, reason_code, keyword_id, applies_to}` 数组；新增 `03_kw_pending.json` 保存 deferred 并增加 `promotion_condition`。三者只由统一工具导出，补充词不混入原始词统计。
 - `03_keyword_validation.json` 保存当前检查结果；总验收与报告重算数据，不信任此文件的缓存 passed。
 - `04_kw_tagged.json` 保留原 keyword/label/reason；增加 `role`（identity/attribute/intent/synonym）、`intent_group`、`source`、`traffic_percentage`（未知为 null）、`applies_to`。旧 high/relevant 标签用于兼容，不决定核心品名优先级。该数组由统一工具导出，仅含 eligible 原始词及补充词，另有 keyword_id、origin=raw/product、searches、restrictions；未知流量为 null，0 保持真实的 0。
-- `05_title_keywords.json` 保留 `title_keywords: {high: [], relevant: []}` 供原 CLI；增加 `protected_terms`、`placement_plan: [{keyword, target_field, applies_to, reason}]`。这些是候选与实际投放安排，不是全部进标题的配额。title_keywords 同时是 QA 请求词，high+relevant 去重后 ≤ quality_policy.qa_max_keywords（8），超出时 backend_cli 本地拒绝且不发请求。最终 placement_plan 由 `keyword_quality.py coverage --write-placement` 按最终文案的完整短语位置生成（字段如 title、bullets[2]、description）。high/relevant 数组必须存在，placement_plan 非空并逐项填写 keyword/target_field/applies_to/reason；protected_terms 至少覆盖画像中的全部必保词。
+- `05_title_keywords.json`：`title_keywords:{high:[],relevant:[]}` 为候选词数组，无数量上限；`protected_terms` 覆盖画像必保词；`placement_plan:[{keyword,target_field,applies_to,reason}]` 非空，只含可用词。coverage --write-placement 根据最终文案写入实际位置（如 title、bullets[2]），不把候选全塞进标题。
 - `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录实际标题词、指标来源与选择／取舍；item_highlight 说明包装数量及事实依据，未知时说明缺口；bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
-- `06_qa.json` 固定日本站跳过后端问答：status=skipped、site=JP、reason_code=rufus_us_only、qa_pairs=[]。自行整理的买家问题记录为 local_editorial，不冒充后端采集。
+- `06_qa.json` 是初始化工具自动写入的可选兼容标记，日本站跳过后端问答：status=skipped、site=JP、reason_code=rufus_us_only、qa_pairs=[]。自行整理的买家问题记录为 local_editorial，不冒充后端采集。
 
 ### 用户表格导入结构（import_schema_version: "1.0"）
 
-`00_product_input.json.keyword_files` 记录全部用户输入文件的绝对路径；文件名任意，按格式和表头识别；先理解表格的站点／日期含义，不凭文件名决定输入用途或内容。`01_product_profile.json` 不要求竞品 asins；本品 SKU／ASIN 按用户资料保留，可为空。
+原始文件路径与位置由导入快照的 source_files／source 保存；输入文件名任意，不额外要求手写 00 输入快照。`01_product_profile.json` 不要求竞品 asins；本品 SKU／ASIN 按用户资料保留，可为空。
 
 命令：`python3 scripts/import_keywords.py --files FILE1.xlsx FILE2.csv --site SITE --run-dir RUN`。可选 `--sheet NAME`（可重复）、`--keyword-column LABEL`、`--searches-column LABEL` 和 CSV/TSV 的 `--encoding`。工具不使用凭据、不调用网络，也不执行 CLI parse-keywords。旧 XLS 需先转换为 XLSX。
 
@@ -58,7 +58,7 @@ fact_id、measurement_id 和 image_id 在本品画像中唯一。所有 applies_
 - `import_counts`: files、raw_records、unique、duplicates，满足 raw_records=unique+duplicates。空关键词行、表头及明确排除的说明表不计关键词记录，但来源中保留位置。没有任何关键词时失败。
 - `import_policy`: semantic_filtering=false、row_limit=null、deduplicate_input=false、conflicting_metrics=unknown、asin_specific_metrics=per_source_values_plus_max_or_best、extra_metrics_use=ordering_only。不按字符集、流量、流量类型或条数预筛选，完整意图判断统一发生在 03 阶段。
 
-输出原子写入；已有 02 文件时拒绝覆盖。无效或部分失败的导入不能推进筛词。03 的 source_positions 可以精确回溯到本地原文件/工作表/行，审核指纹继续绑定整个 02 快照；输入改变创建新任务，不手改哈希宣称审核有效。示例见 [keyword_import_examples.json](keyword_import_examples.json)。
+输出原子写入；已有 02 文件时拒绝覆盖。无效或部分失败的导入不能推进筛词。03 的 source_positions 可以精确回溯到本地原文件/工作表/行，审核指纹继续绑定整个 02 快照；输入改变创建新任务，不手改哈希宣称审核有效。
 
 report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计数和问题计数，不嵌入逐行 raw_cells，避免报告体积膨胀；完整数据保留在 02 文件中。
 
@@ -94,17 +94,17 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 事实冲突不能引用 unknown/conflict 事实作为已证实反证。user_restriction 必须对应画像中用户明确提供的 forbidden_terms；不能自造禁词。unusable_query 只用于没有有效文字或数字的查询，有有效内容时先修复或暂缓判断。
 
-旧版兼容：可读取 1.0 分类记录，但也须满足当前理由与 decision 一致的要求。旧 03_keyword_review.json 的缺失、过期、结论或格式不参与当前校验及导出；不自动把旧复核结论合入分类记录。沿用历史修正时，将有依据的当前理由明确写回 03_keyword_decisions.json，再导出。旧报告继续可读，缺当前分类或最终文案复审时不能仅凭历史通过状态宣布新版验收完成。
+旧版兼容：可读取 1.0 分类记录，但也须满足当前理由与 decision 一致的要求。旧 03_keyword_review.json 不参与校验和导出；历史修正须有依据地写回当前账本。旧报告继续可读，缺当前分类或最终文案复审时不能仅凭历史通过状态宣布新版验收完成。
 
 三个词池和 04 标注只从当前 decision、reason、reason_code 导出；改变分类时的初次判断与 resolution 保留追溯。自动统计：原始记录数＝唯一词数＋重复记录数；唯一词数＝eligible＋deferred＋excluded；补充词另计。完整任务的关键词阶段还校验导出一致性、05 候选/投放范围、QA 请求词和后台中的完整暂缓/剔除词组。较短歧义短语被有依据的完整词组覆盖时不按子串误伤。
 
-自然正文、图片和后台倒装表达的语义由最终 `keyword_usage` 复审负责，核对实际采用的词及相关同意图表达，不要求将全部未采用或剔除词再审一遍。field_layout 另按新版字段分工逐项复审词位、包装数量、五点开头和规格落点；该复审不通过词袋交集自动认定违规，也不能用程序检查代替语义复核。最终语义复审额外保存 `keyword_fingerprints`，绑定原词、编号角色、分类和 05 投放计划；修改这些文件后须重新复审关键词使用、字段布局及适配对象。
+自然正文、图片和后台倒装表达的语义由最终 `keyword_usage` 复审负责，核对实际采用的词及相关同意图表达，不要求将全部未采用或剔除词再审一遍。field_layout 另按新版字段分工逐项复审词位、包装数量、五点开头和规格落点；该复审不通过词袋交集自动认定违规，也不能用程序检查代替语义复核。最终内容复核额外保存 `keyword_fingerprints`，绑定原词、编号角色、分类和 05 投放计划；修改这些文件后须重新复审关键词使用、字段布局及适配对象。
 
 ## 最终内容：listing.json
 
 公共字段：schema_version、site、listing_language、listing_language_code、brand_name（字符串或 null）、buyer_question_coverage（数组）、excluded_claims（字符串数组）、attribute_suggestions（数组）。
 
-`attribute_suggestions` 每项 `{attribute, value, fact_ids, measurement_ids?, applies_to?, note?}`：后台结构化属性建议（item type、material、target audience、intended use、special feature、included components、number of items 等），值必须引用 confirmed 事实或规格；缺字段给 warning。buyer_question_coverage 少于 6 项给 warning `question_matrix_thin`（5W1H + 品类常见问题）。
+`attribute_suggestions` 每项 `{attribute, value, fact_ids, measurement_ids?, applies_to?, note?}`：后台结构化属性建议（item type、material、target audience、intended use、special feature、included components、number of items 等），值必须引用 confirmed 事实或规格；缺字段给 warning。buyer_question_coverage 按本品关键购买问题填写，不设凑数要求。
 
 `buyer_question_coverage` 每项 `{question, status, location, source?}`；status 使用 covered/partially_covered/not_claimed/not_applicable。location 用中文说明真实覆盖字段或未主张原因。自行整理的问题标 source=local_editorial，不包装成已采集问答。
 
@@ -112,7 +112,7 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 ### 声明与图片引用
 
-本品 `claims` 是数组：`{field, fact_ids: [], measurement_ids: []}`。field 支持 title、item_highlight、bullets[0] 至 bullets[4]、description、search_terms。每个前台文本字段至少有一个声明记录，允许无可核查数值的场景文字用空引用并由语义复审说明；非空引用必须属于本品且已确认。含规格的字段记录 measurement_ids 并复用 display_text，保持维度标签；后台搜索词不强制声明记录。
+本品 `claims` 是数组：`{field, fact_ids: [], measurement_ids: []}`。field 支持 title、item_highlight、bullets[0] 至 bullets[4]、description、search_terms。每个前台文本字段至少有一个声明记录，允许无可核查数值的场景文字用空引用并由内容复核说明；非空引用必须属于本品且已确认。含规格的字段记录 measurement_ids 并复用 display_text，保持维度标签；后台搜索词不强制声明记录。
 
 ### 图片和 A+ 策划
 
@@ -125,7 +125,7 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 - status 为 ready/pending；ready 只表示策划依据具备。缺事实或素材时用 pending 并在 production_notes 说明，验收保持 incomplete；不能宣称已验收不存在的成图。
 - fact_ids、measurement_ids 和 source_image_ids 只引用本品资料。需要实物图但 source_image_ids 为空时保留缺口并使验收 incomplete；纯文字模块不要求实物素材。
 - body_refs 定位本品的 title、item_highlight、bullets[0] 至 bullets[4]、description。图文参数复用 measurement.display_text，并在对应正文中表达和引用同一规格／数量事实。
-- mobile_check 写清手机阅读的文字量、字号层次、主体比例等要求。引用检查只验证已登记数值和范围，语言、画面、场景与兼容性事实仍需语义复审。
+- mobile_check 写清手机阅读的文字量、字号层次、主体比例等要求。引用检查只验证已登记数值和范围，语言、画面、场景与兼容性事实仍需内容复核。
 - 旧 `aplus_plan` 别名仍可读取；与 a_plus_plan 同时存在但不一致时明确报错。
 
 ## 验收与后端适配
@@ -136,7 +136,7 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 `07_keyword_coverage.json`（`keyword_quality.py coverage` 生成，仅供优化参考，不参与验收）：本品 target=single 的可用词数、完整短语覆盖、词级覆盖（大小写与简单英文复数折叠）、按搜索量加权覆盖率、未覆盖高流量词、标题覆盖前 10 词、后台词字节/预算/与标题重复词、暂缓或剔除词的完整短语命中；field_layout 列出标题／小标题字符数、可用前十词的标题零基精确位置（缺失为 null）、每条五点前 80 字符及精确短语命中（不代表同义表达无效或算法权重）；intent_map 表达位置；按搜索量排序的 fact_unlocks（暂缓词晋级条件）与 unsupported 问题。
 
-本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing、question_matrix_thin、compatibility_list_length（已确认型号超普通预算，原文仍须过真实后端／类目检查）。compatibility_unconfirmed 为 incomplete。error：compatibility_model_missing、compatibility_unreferenced、compatible_models_shape、title_banned_character（品牌名中的除外）、search_bytes（JP 预算 499 UTF-8 字节）。
+本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing、compatibility_list_length（已确认型号超普通预算，原文仍须过真实后端／类目检查）。compatibility_unconfirmed 为 incomplete。error：compatibility_model_missing、compatibility_unreferenced、compatible_models_shape、title_banned_character（品牌名中的除外）、search_bytes（JP 预算 499 UTF-8 字节）。
 
 关键词旧任务修复命令：`python3 scripts/keyword_quality.py register-models --run-dir RUN`，修复后再 export、重写文案并重新验收。
 
@@ -145,15 +145,13 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 1. `normalize --profile FILE --output FILE`：计算展示值并输出画像（允许原位原子替换）。
 2. `check --profile FILE --listing FILE [--qa FILE] [--review FILE] [--backend FILE] --output FILE`：只检查，不自动改文案；缺验收为 incomplete，退出非零。
 3. `prepare --profile FILE --listing FILE --output-dir DIR`：检查可确定的结构后，导出 single.json 与 manifest.json，不发送请求。
-4. `review-template --profile FILE --listing FILE [--qa FILE] --output FILE`：生成绑定指纹的 pending 清单，供独立语义复审填写。
+4. `review-template --profile FILE --listing FILE [--qa FILE] --output FILE`：生成绑定指纹的 pending 清单，供内容复核填写。
 5. `backend --profile FILE --listing FILE [--cli CLI_PATH] [--config FILE] [--timeout SECONDS] --output FILE`：生成本品单一 payload，通过 backend_cli.py 统一读取配置并调用原 CLI validate；无需调用者设置环境变量。捕获脱敏业务 JSON 及原进程退出码；启动/配置错误的 exit_code 为 null，并附 error_code、failure_reason。默认超时 120 秒。配置和二进制内容不修改。
 
 后端统一入口 `python3 scripts/backend_cli.py`：
 
-- `qa --keywords-file FILE --site US --output FILE`：仅从 CLI 的完整临时输出读取 JSON，脱敏后原子写入原有结构，不把终端摘要当作原始数据；title_keywords 超过 8 个时本地拒绝且不发请求。本表格版不提供 expand，原词用 import_keywords.py 导入。
-- `validate --listing-file FILE --site SITE [--output FILE]`：原 CLI 单品接口；无 output 时返回的安全摘要含 response。本品验收使用上述 listing_quality.py backend。
-- 两个命令均可选 --config、--cli、--timeout；凭据只能从配置文件读取，无环境变量回退或 token 命令行参数。默认配置相对 Skill 定位，不依赖工作目录；自动选择本 Skill tools/bin 中的 laochen-cli-v2 平台文件。
-- 非零进程退出、无有效 JSON、超时和显式业务失败均返回非零；validate 仍要求 ok=true 且 errors=[]。进程已执行时保留真实 exit_code，未执行/未正常返回时为 null。错误响应可留档，不代表验收通过；无新有效响应时旧文件不覆盖、不视为本次结果。原始进程日志不透传。
+- `validate --listing-file FILE --site JP [--output FILE]`：通过凭据配置调用固定版本 CLI，返回脱敏 JSON 与真实退出码。可选 --config、--cli、--timeout（默认120秒）；凭据不接受命令行参数或环境回退。
+- 通过条件为进程退出0、ok=true、errors=[]。超时、响应无效或业务失败保留真实状态，无有效新响应不覆盖旧文件；不自动重试未知请求。
 
 报告工具 `python3 scripts/render_listing.py --run-dir DIR` 从同一 JSON 生成 listing.md 与 report.html。
 
