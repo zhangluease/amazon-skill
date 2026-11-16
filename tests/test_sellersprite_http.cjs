@@ -14,7 +14,8 @@ async function fixture(check) {
     authorize: () => { throw new Error('An active session must not open authorization'); },
     execute: async (command, args) => {
       calls.push(args);
-      if (args[0].endsWith('amazon_search.py')) return { stdout: JSON.stringify({ status: 'ok', asins_found: 48, pages_loaded: 1 }) };
+      if (args[0].endsWith('amazon_search.py')) return { stdout: JSON.stringify({ status: 'ok', asins_found: 48, pages_loaded: 1,
+        delivery_destination: { country_code: 'US', postal_code: options.amazonZip || '10001', verified: true } }) };
       if (args[0].endsWith('render_product_gallery.py')) return { stdout: '{}' };
       assert.ok(args.includes('--session-file'));
       assert.ok(args.includes('--asins-file'));
@@ -30,6 +31,16 @@ test('valid HTTP sessions search and rank without preparing or opening a browser
   assert.equal(result.authorization_handoffs, 0);
   assert.equal(calls.length, 3);
   assert.equal(result.amazon_asins_found, 48);
+  const search = calls.find(args => args[0].endsWith('amazon_search.py'));
+  assert.equal(search[search.indexOf('--amazon-zip') + 1], '10001');
+  assert.equal(result.amazon_delivery_destination.postal_code, '10001');
+}));
+test('custom US delivery destination reaches the Amazon search subprocess', async () => fixture(async (options, dependencies, calls) => {
+  options.amazonZip = '90001';
+  const result = await run(options, dependencies);
+  const search = calls.find(args => args[0].endsWith('amazon_search.py'));
+  assert.equal(search[search.indexOf('--amazon-zip') + 1], '90001');
+  assert.equal(result.amazon_delivery_destination.postal_code, '90001');
 }));
 test('only a missing/expired session authorizes once and resumes the identical keyword', async () => fixture(async (options, dependencies, calls) => {
   const execute = dependencies.execute;
@@ -74,6 +85,15 @@ test('Amazon verification stops before SellerSprite authorization or any browser
   await assert.rejects(run(options, dependencies), { code: 'AMAZON_HUMAN_VERIFICATION_REQUIRED' });
   const status = JSON.parse(await fs.readFile(path.join(options.out, 'browser-status.json')));
   assert.equal(status.stage, 'amazon_search');
+}));
+test('unconfirmed delivery destination stops before SellerSprite lookup', async () => fixture(async (options, dependencies) => {
+  let calls = 0;
+  dependencies.execute = async () => { calls++; throw { stderr: '{"category":"AMAZON_DESTINATION_NOT_CONFIRMED"}' }; };
+  await assert.rejects(run(options, dependencies), { code: 'AMAZON_DESTINATION_NOT_CONFIRMED' });
+  assert.equal(calls, 1);
+  const status = JSON.parse(await fs.readFile(path.join(options.out, 'browser-status.json')));
+  assert.equal(status.stage, 'amazon_search');
+  assert.ok(status.remedy.includes('Deliver to'));
 }));
 test('confirmed empty Amazon search never queries or authorizes SellerSprite', async () => fixture(async (options, dependencies) => {
   let count = 0;

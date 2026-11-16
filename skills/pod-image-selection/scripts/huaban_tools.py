@@ -252,8 +252,13 @@ def normalize(documents, via='unknown', query='', style='', parent_pin_id=None):
             for key in keys:
                 aliases[key] = index
     result = [value for index, value in enumerate(candidates) if index not in dropped]
+    references = []
+    for item in result:
+        for source in item['source_paths']:
+            if source.get('via') == 'image_search' and source.get('reference_sha256'):
+                append_unique(references, [source])
     return dict(collected_at=dt.datetime.now(dt.timezone.utc).isoformat(), query=query, style=style,
-                seen=total_seen, duplicates=total_seen - len(result), candidates=result)
+                seen=total_seen, duplicates=total_seen - len(result), reference_images=references, candidates=result)
 
 
 def download_image(url, path):
@@ -320,7 +325,9 @@ def render_gallery(document, output, download=False, selected_only=False):
                      (image_tag, number, escape(pin.get('decision', '待看图')), escape(pin.get('title')), escape(dimensions), notes, escape(pin.get('rights_status', '授权待核实')), ' · '.join(links)))
     title = document.get('title') or 'POD 花瓣素材候选'
     css = 'body{margin:0;background:#f3f2ed;color:#202b2a;font:16px/1.55 system-ui,sans-serif}header,main{max-width:1400px;margin:auto;padding:28px}h1{margin:0;font-size:30px}header p{margin:8px 0}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;padding-top:0}article{background:white;border:1px solid #dadfd9;border-radius:14px;overflow:hidden}img{display:block;width:100%;height:340px;object-fit:contain;background:#e9e8e1}.body{padding:18px}h2{font-size:17px;margin:10px 0}.badge{font-size:13px;color:#1c5f51}.meta,.rights{font-size:13px;color:#59635d}a{color:#175b50}a:focus-visible{outline:3px solid #c78720}.empty{height:280px;padding:20px}nav{margin-top:15px}b{font-weight:600}@media print{article{break-inside:avoid}header,main{padding:14px}main{grid-template-columns:repeat(3,1fr)}img{height:230px}}'
-    page = '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>%s</title><style>%s</style><header><h1>%s</h1><p>关键词：%s　风格：%s　共 %d 张</p><p>初筛参考图；印刷原文件、无缝效果及 POD 授权按各图证据核实。外链预览过期可回到采集刷新。</p></header><main>%s</main></html>' % (escape(title), css, escape(title), escape(document.get('query')), escape(document.get('style')), len(items), ''.join(cards))
+    search_label = ('以图搜图：%d 张参考图' % len(document['reference_images'])
+                    if document.get('reference_images') else '关键词：' + str(document.get('query') or ''))
+    page = '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>%s</title><style>%s</style><header><h1>%s</h1><p>%s　风格：%s　共 %d 张</p><p>初筛参考图；印刷原文件、无缝效果及 POD 授权按各图证据核实。外链预览过期可回到采集刷新。</p></header><main>%s</main></html>' % (escape(title), css, escape(title), escape(search_label), escape(document.get('style')), len(items), ''.join(cards))
     output.write_text(page, encoding='utf-8')
     return {'cards': len(items), 'downloaded': downloaded, 'download_failed': failures}
 

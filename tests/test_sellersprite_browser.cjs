@@ -27,6 +27,9 @@ test('query and authorization bounds are validated', () => {
   assert.throws(() => argumentsFor(['login', '--out', '/tmp/out', '--authorization-timeout', '9999']));
   assert.throws(() => argumentsFor(['search', '--query', 'pet house', '--out', '/tmp/out', '--amazon-pages', '0']));
   assert.equal(argumentsFor(['search', '--query', 'pet house', '--out', '/tmp/out']).amazonPages, 1);
+  assert.equal(argumentsFor(['search', '--query', 'pet house', '--out', '/tmp/out']).amazonZip, '10001');
+  assert.equal(argumentsFor(['search', '--query', 'pet house', '--out', '/tmp/out', '--amazon-zip', '90001']).amazonZip, '90001');
+  assert.throws(() => argumentsFor(['search', '--query', 'pet house', '--out', '/tmp/out', '--amazon-zip', 'JP']));
   assert.ok(stateRoot({}, 'linux', '/tmp/person').startsWith('/tmp/person/.local/share/'));
 });
 test('dedicated directory locks and refusal to use a repository/output as a profile', async () => {

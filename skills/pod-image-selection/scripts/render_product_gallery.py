@@ -37,6 +37,9 @@ def render(document):
                   else '来源：卖家精灵插件；查询时间：') + str(document.get('queried_at') or '未知')
     if document.get('sales_precision') == 'plugin_display':
         provenance += '。销量采用插件界面显示值，可能经过缩写或四舍五入。'
+    destination = document.get('amazon_delivery_destination')
+    if isinstance(destination, dict) and destination.get('verified') is True:
+        provenance += '；配送目的地（Deliver to）：' + str(destination.get('page_label') or destination.get('postal_code'))
     return '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>POD 竞品主图选择</title><style>
 *{box-sizing:border-box}body{margin:0;background:#f4f6f8;color:#17232e;font:15px/1.5 system-ui,-apple-system,sans-serif}

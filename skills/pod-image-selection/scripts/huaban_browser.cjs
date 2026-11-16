@@ -5,6 +5,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { ensureEnvironment } = require('./environment.cjs');
 const { createHandoff } = require('./human_verification.cjs');
+const { acquireImageSearchGate } = require('./huaban_image_rate_limit.cjs');
+const { validateImageUrl, readReference, submitReference, imageSearchUrl, imageError,
+  defaultStateFile } = require('./huaban_image_search.cjs');
 
 function argumentsFor(argv) {
   const result = { similar: [], board: [], limit: 40, headed: false };
@@ -12,7 +15,7 @@ function argumentsFor(argv) {
     const key = argv[i].replace(/^--/, '');
     if (key === 'headed') result.headed = true;
     else if (['query', 'out', 'state', 'limit', 'similar', 'board', 'source-file-id', 'browser',
-      'human-verification', 'verification-timeout'].includes(key)) {
+      'human-verification', 'verification-timeout', 'image', 'image-url', 'source-asin'].includes(key)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw Error('参数缺少值');
       if (key === 'similar' || key === 'board') result[key].push(value);
@@ -26,8 +29,13 @@ function argumentsFor(argv) {
   if (!Number.isInteger(result['verification-timeout']) || result['verification-timeout'] < 30
     || result['verification-timeout'] > 900) throw Error('验证等待时间应为 30–900 秒');
   if (result.browser && !['auto', 'chrome', 'chromium'].includes(result.browser)) throw Error('不支持的浏览器');
-  if (!result.out || (!result.query && !result.similar.length && !result.board.length))
-    throw Error('需要 --out 与 --query、--similar 或 --board');
+  if (!result.out || (!result.query && !result.image && !result['image-url'] && !result.similar.length && !result.board.length))
+    throw Error('需要 --out 与 --image、--image-url、--query、--similar 或 --board');
+  if ([result.query, result.image, result['image-url']].filter(Boolean).length > 1)
+    throw Error('--query、--image 与 --image-url 只能选一个');
+  if (result['image-url']) validateImageUrl(result['image-url']);
+  if (result['source-asin'] && (!/^[A-Z0-9]{10}$/.test(result['source-asin']) || !result.image && !result['image-url']))
+    throw Error('--source-asin 需要图片输入和有效 ASIN');
   if (!Number.isInteger(result.limit) || result.limit < 1 || result.limit > 60)
     throw Error('limit 应为 1–60');
   if ([...result.similar, ...result.board, ...(result['source-file-id'] ? [result['source-file-id']] : [])]
@@ -69,6 +77,7 @@ async function collect(options, dependencies = {}) {
   const session = { browser, headless: !options.headed };
   let page;
   let handoff;
+  let imageGate;
   try {
     await fs.mkdir(path.join(output, 'browser-assets'), { recursive: true });
     // Preserve the installed Chrome version and normal Chrome UA in both modes.
@@ -78,8 +87,10 @@ async function collect(options, dependencies = {}) {
       .replace('HeadlessChrome/', 'Chrome/');
     await probe.close();
     let storageState;
-    if (options.state) {
-      const supplied = JSON.parse(await fs.readFile(path.resolve(options.state), 'utf8'));
+    const savedState = defaultStateFile();
+    const stateFile = options.state || (await fs.access(savedState).then(() => savedState).catch(() => null));
+    if (stateFile) {
+      const supplied = JSON.parse(await fs.readFile(path.resolve(stateFile), 'utf8'));
       storageState = {
         cookies: (supplied.cookies || []).filter(c => c.domain.replace(/^\./, '') === 'huaban.com'),
         origins: (supplied.origins || []).filter(o => o.origin === 'https://huaban.com')
@@ -142,6 +153,24 @@ async function collect(options, dependencies = {}) {
     };
     await navigate('https://huaban.com/discovery');
     const targets = [];
+    if (options.image || options['image-url']) {
+      const reference = await readReference(options, dependencies);
+      const target = { via: 'image_search', pins: [], provenance: reference.provenance };
+      imageGate = await acquireImageSearchGate(dependencies.rateLimitDirectory);
+      // Only cache image responses during upload here. Candidate DOM is read after /similar is confirmed.
+      active = target;
+      try { target.url = await submitReference(page, reference); }
+      catch (error) {
+        const current = page.url();
+        // A challenge can resume at the actual result URL without repeating the upload.
+        if (!imageSearchUrl(current) || !await handleVerification(current)) throw error;
+        target.url = current;
+      }
+      target.provenance.search_url = target.url;
+      await handleVerification(target.url);
+      targets.push(target);
+      active = null;
+    }
     if (options.query) targets.push({ via: 'keyword', url: 'https://huaban.com/search?q=' +
       encodeURIComponent(options.query), provenance: { via: 'keyword', query: options.query } });
     for (const id of options.similar) targets.push({ via: 'similar',
@@ -152,8 +181,8 @@ async function collect(options, dependencies = {}) {
       provenance: { via: 'recommended_board', parent_board_id: id,
         ...(options['source-file-id'] ? { source_file_id: options['source-file-id'] } : {}) } });
     for (const target of targets) {
-      active = { ...target, pins: [] };
-      await navigate(target.url);
+      active = { ...target, pins: target.pins || [] };
+      if (target.via !== 'image_search') await navigate(target.url);
       const waitForCards = async () => {
         try {
           await page.locator('a[href*="/pins/"] img').first().waitFor({ state: 'visible', timeout: 10000 });
@@ -164,6 +193,12 @@ async function collect(options, dependencies = {}) {
       };
       await waitForCards();
       if (await handleVerification(target.url)) await waitForCards();
+      if (target.via === 'image_search') {
+        const actual = new URL(page.url()), expected = new URL(target.url);
+        if (!imageSearchUrl(actual.href) || ['bucket', 'key'].some(key =>
+          actual.searchParams.get(key) !== expected.searchParams.get(key)))
+          throw imageError('IMAGE_SEARCH_NOT_CONFIRMED');
+      }
       await page.screenshot({ path: path.join(output, `overview-${documents.length + 1}.jpg`) });
       const dom = await page.locator('a[href*="/pins/"] img').evaluateAll(elements => elements.map(img => {
         const id = img.closest('a')?.getAttribute('href')?.match(/\/pins\/(\d+)/)?.[1];
@@ -185,6 +220,7 @@ async function collect(options, dependencies = {}) {
       for (const pin of dom) ordered.set(String(pin.pin_id), api.get(String(pin.pin_id)));
       for (const [id, pin] of api) if (!ordered.has(id)) ordered.set(id, pin);
       documents.push({ ...target, pins: [...ordered.values()].slice(0, options.limit) });
+      if (target.via === 'image_search') await imageGate.complete();
       active = null;
     }
     const extensions = { 'image/webp': '.webp', 'image/png': '.png', 'image/jpeg': '.jpg',
@@ -208,9 +244,12 @@ async function collect(options, dependencies = {}) {
       }
     }
     const summary = { headless: session.headless, supplied_state: Boolean(options.state),
+      huaban_session_source: options.state ? 'explicit' : stateFile ? 'saved' : 'anonymous',
       browser_engine: environment.report.checks.browser.engine,
       human_verification: handoff.report,
       normal_chrome_ua: true, elapsed_ms: Date.now() - started,
+      search_mode: options.image || options['image-url'] ? 'image_search' : options.query ? 'keyword' : 'expansion',
+      ...(imageGate ? { image_search_rate_limit: imageGate.timing } : {}),
       candidates: documents.reduce((sum, d) => sum + d.pins.length, 0), cached, events };
     await fs.writeFile(path.join(output, 'browser-candidates.json'), JSON.stringify({ documents, summary }, null, 2));
     await fs.writeFile(path.join(output, 'response.json'), JSON.stringify({ pins: documents.flatMap(d => d.pins) }, null, 2));
@@ -225,12 +264,19 @@ async function collect(options, dependencies = {}) {
     await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({
       status: status ? Number(status) : null,
       category: /^HUMAN_VERIFICATION_/.test(error.code || '') ? error.code.toLowerCase()
+        : /^IMAGE_(?:REFERENCE|SEARCH)_/.test(error.code || '') ? error.code.toLowerCase()
         : status ? 'access_blocked' : 'collection_failed',
+      ...(error.code === 'IMAGE_SEARCH_LOGIN_REQUIRED' ? {
+        remedy: '花瓣以图搜图需要登录。请通过--state提供用户授权的花瓣Playwright storageState会话文件，再运行同一图片。'
+      } : {}),
       ...(error.verification ? { verification: error.verification } : {}),
       elapsed_ms: Date.now() - started
     }, null, 2));
     throw error;
-  } finally { await session.browser.close().catch(() => {}); }
+  } finally {
+    try { await imageGate?.release(); }
+    finally { await session.browser.close().catch(() => {}); }
+  }
 }
 
 if (require.main === module) Promise.resolve().then(() => collect(argumentsFor(process.argv.slice(2)))).catch(error => {
@@ -241,6 +287,11 @@ if (require.main === module) Promise.resolve().then(() => collect(argumentsFor(p
   }
   if (/^HUMAN_VERIFICATION_/.test(error.code || '')) {
     console.error(JSON.stringify({ error: error.code, verification: error.verification }));
+    process.exitCode = 3;
+    return;
+  }
+  if (error.code === 'IMAGE_SEARCH_LOGIN_REQUIRED') {
+    console.error('花瓣以图搜图需要登录；请通过 --state 提供有效的花瓣会话文件。本轮未取得以图搜索结果。');
     process.exitCode = 3;
     return;
   }

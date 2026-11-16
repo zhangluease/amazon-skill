@@ -19,6 +19,8 @@ const REMEDIES = {
   AUTHORIZATION_BRIDGE_UNAVAILABLE: '插件账号存在但未取得完整接口会话，请反馈状态并核对插件版本。',
   AMAZON_HUMAN_VERIFICATION_REQUIRED: 'Amazon匿名请求遇到真人验证，本轮已停止；不会自动开浏览器或循环请求。',
   AMAZON_RESULTS_NOT_CONFIRMED: '未读到可确认的Amazon搜索结果，不能用推荐商品或卖家精灵关键词结果代替。',
+  AMAZON_DESTINATION_NOT_CONFIRMED: '未确认Amazon页面顶部Deliver to已切换到目标美国邮编，本轮已停止；请反馈状态文件。',
+  AMAZON_DESTINATION_REJECTED: 'Amazon未接受本次配送目的地设置，请核对--amazon-zip指定的美国邮编；有效邮编仍失败时请反馈状态文件。',
 };
 
 function argumentsFor(argv) {
@@ -27,7 +29,7 @@ function argumentsFor(argv) {
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     if (key === 'headless') { options.headless = true; continue; }
-    if (!['query', 'out', 'extension-dir', 'state-dir', 'authorization-timeout', 'amazon-pages'].includes(key) || !argv[i + 1]) throw fail('INVALID_ARGUMENT');
+    if (!['query', 'out', 'extension-dir', 'state-dir', 'authorization-timeout', 'amazon-pages', 'amazon-zip'].includes(key) || !argv[i + 1]) throw fail('INVALID_ARGUMENT');
     options[key] = argv[++i];
   }
   options.timeout = Number(options['authorization-timeout'] || 300);
@@ -36,6 +38,8 @@ function argumentsFor(argv) {
   options.query = options.query?.trim();
   options.amazonPages = Number(options['amazon-pages'] || 1);
   if (!Number.isInteger(options.amazonPages) || options.amazonPages < 1 || options.amazonPages > 4) throw fail('INVALID_PAGE_COUNT');
+  options.amazonZip = options['amazon-zip'] ?? '10001';
+  if (!/^[0-9]{5}$/.test(options.amazonZip)) throw fail('INVALID_US_POSTAL_CODE');
   if (!options.out) throw fail('MISSING_OUTPUT');
   return options;
 }
@@ -80,7 +84,8 @@ async function run(options, dependencies = {}) {
     try {
       const response = await (dependencies.execute || execute)(python.command, [...python.prefix,
         path.join(__dirname, 'amazon_search.py'), '--query', options.query,
-        '--pages', String(options.amazonPages || 1), '--out', cohortPath], { timeout: 125000, maxBuffer: 1024 * 1024 });
+        '--pages', String(options.amazonPages || 1), '--amazon-zip', options.amazonZip || '10001',
+        '--out', cohortPath], { timeout: ((options.amazonPages || 1) + 3) * 30000 + 5000, maxBuffer: 1024 * 1024 });
       cohort = JSON.parse(response.stdout);
     } catch (error) {
       let category;
@@ -89,7 +94,8 @@ async function run(options, dependencies = {}) {
     }
     if (cohort.status === 'empty' && cohort.asins_found === 0) {
       const result = { status: 'empty', query: options.query, marketplace: 'US', products: [], returned_candidates: 0,
-        source: 'amazon_anonymous_search_http', collection_method: 'independent_http', lookup_performed: false };
+        source: 'amazon_anonymous_search_http', collection_method: 'independent_http', lookup_performed: false,
+        amazon_delivery_destination: cohort.delivery_destination };
       await fs.writeFile(path.join(output, 'ranked-products.json'), JSON.stringify(result, null, 2));
       const summary = { ...result, products: 0 };
       await fs.writeFile(path.join(output, 'browser-status.json'), JSON.stringify(summary, null, 2));
@@ -128,6 +134,7 @@ async function run(options, dependencies = {}) {
     const summary = { ...result, collection_method: 'independent_http', authorization_handoffs: handoffs,
       candidate_source: 'amazon_anonymous_search_http', amazon_asins_found: cohort.asins_found,
       amazon_pages_loaded: cohort.pages_loaded,
+      amazon_delivery_destination: cohort.delivery_destination,
       elapsed_ms: Date.now() - started };
     await fs.writeFile(path.join(output, 'browser-status.json'), JSON.stringify(summary, null, 2));
     return summary;

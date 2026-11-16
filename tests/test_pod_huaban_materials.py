@@ -48,6 +48,20 @@ class HuabanMaterialsTests(unittest.TestCase):
         self.assertEqual(pin['source_paths'][0]['parent_board_id'], '50')
         self.assertEqual(pin['rights_status'], '灵感参考，授权待核实')
 
+    def test_image_search_merges_reference_sources_and_labels_the_gallery(self):
+        first = {'via': 'image_search', 'source_asin': 'B000000001', 'reference_sha256': 'a' * 64,
+                 'reference_image': '/tmp/reference-1.jpg', 'search_url': 'https://huaban.com/similar?key=a'}
+        second = dict(first, source_asin='B000000002', reference_sha256='b' * 64,
+                      reference_image='/tmp/reference-2.jpg')
+        data = hb.normalize([{'pins': [{'pin_id': 11, 'source_paths': [first]}]},
+                             {'pins': [{'pin_id': 11, 'source_paths': [second]}]}], via='image_search')
+        self.assertEqual(len(data['candidates']), 1)
+        self.assertEqual(data['reference_images'], [first, second])
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / 'gallery.html'
+            hb.render_gallery(data, out)
+            self.assertIn('以图搜图：2 张参考图', out.read_text())
+
     def test_dom_preview_does_not_claim_original_resolution_or_change_signed_url(self):
         url = 'https://gd-hbimg-edge.huaban.com/abc-X_fw240webp?auth_key=keep-exact'
         dom = {'pin_id': 11, 'image_url': url, 'dimension_source': 'dom_thumbnail',

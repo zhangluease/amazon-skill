@@ -297,6 +297,7 @@ def normalize_cohort(query, document, cohort):
                    'amazon_pages_requested': cohort.get('pages_requested'),
                    'amazon_pages_loaded': len(cohort.get('pages', [])),
                    'amazon_queried_at': cohort.get('queried_at'),
+                   'amazon_delivery_destination': cohort.get('delivery_destination'),
                    'note': '匿名Amazon美国站本次搜索页ASIN的全部有效候选按父体近30天销量降序展示，不做数量截断；未验证全量全局排名。'})
     result.pop('observed_server_units_desc', None)
     return result, public

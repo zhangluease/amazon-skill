@@ -289,8 +289,10 @@ class SellerSpritePluginTests(unittest.TestCase):
                 'headers': {'auth-token': 'fixture-token', 'auth-fp': 'fixture-fp', 'random-token': 'fixture-random'},
                 'parameters': {'version': '5.0.6'}}))
             cohort = Path(directory) / 'amazon-search.json'
+            destination = {'country_code': 'US', 'postal_code': '10001', 'verified': True, 'page_label': 'New York 10001'}
             cohort.write_text(json.dumps({'format': 'amazon-search-asins-v1', 'marketplace': 'US',
-                'query': 'pet house', 'status': 'ok', 'asins': ['B000000001'], 'pages': [{}], 'pages_requested': 1}))
+                'query': 'pet house', 'status': 'ok', 'asins': ['B000000001'], 'pages': [{}], 'pages_requested': 1,
+                'delivery_destination': destination}))
             out = Path(directory) / 'out'
             with mock.patch.object(plugin, 'request_plugin', return_value=(response(), 10)) as request, \
                     contextlib.redirect_stdout(io.StringIO()):
@@ -301,6 +303,8 @@ class SellerSpritePluginTests(unittest.TestCase):
             ranked = json.loads((out / 'ranked-products.json').read_text())
             self.assertEqual(ranked['candidate_source'], 'amazon_anonymous_search_http')
             self.assertEqual(ranked['amazon_pages_loaded'], 1)
+            self.assertEqual(ranked['amazon_delivery_destination'], destination)
+            self.assertIn('配送目的地（Deliver to）：New York 10001', render(ranked))
             plan = json.loads((out / 'request-plan.json').read_text())
             self.assertEqual(plan['parameters'], {'asins': ['B000000001']})
 
