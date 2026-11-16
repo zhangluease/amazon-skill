@@ -142,6 +142,18 @@ class SellerSpritePluginTests(unittest.TestCase):
                 with self.subTest(changes=changes), self.assertRaises(plugin.ApiError):
                     plugin.load_search_cohort(source, 'pet house')
 
+    def test_country_destination_gallery_distinguishes_selected_country_from_amazon_resolved_city(self):
+        destination = {'country_code': 'US', 'country_name': 'United States', 'postal_code': None,
+                       'selection_type': 'country', 'resolved_postal_code': '66952',
+                       'verified': True, 'page_label': 'Lebanon 66952'}
+        cohort = {'asins': ['B000000001'], 'delivery_destination': destination}
+        result, _ = plugin.normalize_cohort('pet house', response(), cohort)
+        self.assertEqual(result['marketplace'], 'US')
+        self.assertEqual(result['amazon_delivery_destination'], destination)
+        gallery = render(result)
+        self.assertIn('配送目的地（Deliver to）：United States', gallery)
+        self.assertIn('Amazon页面显示：Lebanon 66952', gallery)
+
     def test_normalization_retains_variants_missing_sales_and_ranking_scope(self):
         row = response()['data']['items'][0]
         rows = [dict(row, asin='B000000001', units=None), dict(row, asin='B000000002', units=0),

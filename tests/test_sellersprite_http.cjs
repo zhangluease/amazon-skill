@@ -15,7 +15,7 @@ async function fixture(check) {
     execute: async (command, args) => {
       calls.push(args);
       if (args[0].endsWith('amazon_search.py')) return { stdout: JSON.stringify({ status: 'ok', asins_found: 48, pages_loaded: 1,
-        delivery_destination: { country_code: 'US', postal_code: options.amazonZip || '10001', verified: true } }) };
+        delivery_destination: { country_code: options.amazonCountry || 'US', postal_code: options.amazonZip ?? null, verified: true } }) };
       if (args[0].endsWith('render_product_gallery.py')) return { stdout: '{}' };
       assert.ok(args.includes('--session-file'));
       assert.ok(args.includes('--asins-file'));
@@ -32,8 +32,9 @@ test('valid HTTP sessions search and rank without preparing or opening a browser
   assert.equal(calls.length, 3);
   assert.equal(result.amazon_asins_found, 48);
   const search = calls.find(args => args[0].endsWith('amazon_search.py'));
-  assert.equal(search[search.indexOf('--amazon-zip') + 1], '10001');
-  assert.equal(result.amazon_delivery_destination.postal_code, '10001');
+  assert.equal(search[search.indexOf('--amazon-country') + 1], 'US');
+  assert.equal(search.includes('--amazon-zip'), false);
+  assert.equal(result.amazon_delivery_destination.postal_code, null);
 }));
 test('custom US delivery destination reaches the Amazon search subprocess', async () => fixture(async (options, dependencies, calls) => {
   options.amazonZip = '90001';
@@ -41,6 +42,14 @@ test('custom US delivery destination reaches the Amazon search subprocess', asyn
   const search = calls.find(args => args[0].endsWith('amazon_search.py'));
   assert.equal(search[search.indexOf('--amazon-zip') + 1], '90001');
   assert.equal(result.amazon_delivery_destination.postal_code, '90001');
+}));
+test('delivery country is passed independently of the fixed US marketplace', async () => fixture(async (options, dependencies, calls) => {
+  options.amazonCountry = 'JP';
+  const result = await run(options, dependencies);
+  const search = calls.find(args => args[0].endsWith('amazon_search.py'));
+  assert.equal(search[search.indexOf('--amazon-country') + 1], 'JP');
+  assert.equal(search.includes('--amazon-zip'), false);
+  assert.equal(result.amazon_delivery_destination.country_code, 'JP');
 }));
 test('only a missing/expired session authorizes once and resumes the identical keyword', async () => fixture(async (options, dependencies, calls) => {
   const execute = dependencies.execute;

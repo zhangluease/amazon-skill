@@ -34,7 +34,7 @@ python3 scripts/configure.py status
 
 ## POD 选图
 
-[pod-image-selection](skills/pod-image-selection/SKILL.md) 输入关键词，匿名获取Amazon美国站搜索结果ASIN，用卖家精灵查询父体销量和主图，按销量降序展示全部有效候选；用户多选后直接以主图到花瓣以图搜图，再看图初筛参考素材。花瓣图片上传需要登录，专用会话可复用。默认搜索第一页，页面配送目的地（Deliver to）设为美国邮编10001，可通过 `--amazon-zip` 更换；Amazon和销量取数使用HTTP。
+[pod-image-selection](skills/pod-image-selection/SKILL.md) 输入关键词，匿名获取Amazon美国站搜索结果ASIN，用卖家精灵查询父体销量和主图，按销量降序展示全部有效候选；用户多选后直接以主图到花瓣以图搜图，再看图初筛参考素材。花瓣图片上传需要登录，专用会话可复用。默认搜索第一页，配送目的地（Deliver to）按国家选择美国，不指定邮编；可通过 `--amazon-country JP` 改为配送到日本，搜索站点仍为Amazon.com。需要美国具体地区时可选用 `--amazon-zip`；Amazon和销量取数使用HTTP。
 
 ```text
 请使用 $pod-image-selection，关键词：pet house。
