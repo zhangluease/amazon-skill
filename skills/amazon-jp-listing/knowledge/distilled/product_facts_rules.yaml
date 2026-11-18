@@ -24,7 +24,7 @@ rules:
 - id: measurement_exceptions
   type: required
   source_id: user_unit_localization
-  prompt_fragment: nominal 与 size 保留公称规格和尺码，不换算。oz 不能当 fl oz 用。数量、型号和包装尺寸不能当成产品尺寸。随附配件数量用 accessory_count 登记，与购买数量分开。
+  prompt_fragment: nominal 与 size 保留公称规格和尺码，不换算。oz 不能当 fl oz 用。数量、型号和包装尺寸不能当成产品尺寸。随附配件数量用 accessory_count 登记，与购买数量分开；已知计数单位时用 count_unit 保存，正文和图上数量分别引用对应事实。
 - id: measurement_reuse
   type: required
   source_id: user_unit_localization

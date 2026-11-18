@@ -77,9 +77,10 @@ def identifier_template(profile, raw, policy):
                 entry['source_positions'].append(position)
     for identifier, entry in candidates.items():
         roles = declared.get(identifier, set())
-        negative_only = all(NEGATIVE.search(normalize_model(input_words[p])) for p in entry['source_positions'])
-        role = 'other' if negative_only else next(iter(roles)) if len(roles) == 1 else 'pending'
-        reason = ('原词明确为否定兼容关系' if negative_only else '用户产品资料已明确编号所指对象' if role != 'pending' else '')
+        has_negation = any(NEGATIVE.search(normalize_model(input_words[p])) for p in entry['source_positions'])
+        role = next(iter(roles)) if len(roles) == 1 and not has_negation else 'pending'
+        reason = ('原词含否定表达，须逐对象解释否定范围' if has_negation
+                  else '用户产品资料已明确编号所指对象' if role != 'pending' else '')
         result['records'].append(dict(entry, role=role, reason=reason))
     return result
 
@@ -129,8 +130,8 @@ def collect_models(profile, raw, policy, assignments=None):
         if not isinstance(record.get('reason'), str) or not record['reason'].strip():
             issue('identifier_role_reason', '角色判断须说明标识指向本品、适配对象或其他内容：' + identifier); continue
         if role == 'compatible_model':
-            if any(p in result['negative_rows'] for p in positions):
-                issue('identifier_negative_fit', '明确否定的适配关系不能登记成正向兼容：' + identifier); continue
+            # Explicit per-identifier roles determine scope. A negation elsewhere
+            # in the same row must not invalidate this object's positive relation.
             if identifier not in result['source_positions']:
                 result['models'].append(identifier)
                 result['source_positions'][identifier] = []

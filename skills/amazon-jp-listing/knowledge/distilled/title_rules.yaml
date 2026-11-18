@@ -1,4 +1,4 @@
-version: '2.3'
+version: '2.9'
 domain: title
 contract_ref: ../data_contract.md
 policy_ref: ../quality_policy.json
@@ -29,3 +29,7 @@ rules:
   type: required
   source_id: skill_editorial_v2
   prompt_fragment: 只写有来源的本品事实，给定词中明确的兼容关系按用户依据使用，兼容品牌只描述适配对象，不冒称本品品牌、原装或授权；输入未表达的健康效果等不推导。场景词只在有助于识别和购买判断时使用。
+- id: title_identity_and_relation
+  type: editorial
+  source_id: user_writing_sop_20261118
+  prompt_fragment: 本品品牌已知时放在开头，紧接一个完整核心品名与关键购买识别编号；按已给定指标选择，不列全机型。资料明确为兼容品时写清対応／用／互換品等关系，不把对象品牌冒充本品品牌，也不默认原装。超长先删主观修饰、重复品名、次要功能和次要编号，保留关键版本及完整后缀。

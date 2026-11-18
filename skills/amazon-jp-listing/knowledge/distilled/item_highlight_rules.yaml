@@ -1,4 +1,4 @@
-version: '2.3'
+version: '2.9'
 domain: item_highlight
 contract_ref: ../data_contract.md
 policy_ref: ../quality_policy.json
@@ -16,4 +16,4 @@ rules:
 - id: highlight_purchase_reason
   type: editorial
   source_id: user_mobile_layout_20261112
-  prompt_fragment: 小标题先写有 confirmed 事实支持的实际包装数量与套装组成，单位按耗材使用枚／個／本／袋／巻／組等，再补标题未覆盖的相关词与用途；普通材质和尺寸留给五点正文。不把主商品加配件误写为同品多件装，数量未知不得默认 1 件装或抄竞品数量，记录缺口并使用其他已确认信息。不重复标题整句，不写成长段商品介绍。
+  prompt_fragment: 小标题补足标题未展开的适用对象、2–3个代表型号、部件用途与真实包装数量／组成；数量和组成优先保留，不让型号挤掉实售内容。按真实指标选择代表型号，无指标按相关性选择并说明；少于2个不凑，非型号适配不强造机型。仅从本品确认清单选择并引用，五点仍列全。普通材质尺寸放五点，不整句重复标题，缺数量不猜，主耗材与配件分别计数。

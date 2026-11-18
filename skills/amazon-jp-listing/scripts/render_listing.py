@@ -16,9 +16,12 @@ import sys
 import tempfile
 
 from listing_scope import require_single_product
+from bullet_text import split_bullet
+from policy_rules import rules_fingerprint
 
 
 ROOT = Path(__file__).resolve().parents[1]
+POLICY_PATH = ROOT / "knowledge/quality_policy.json"
 FILES = {
     "profile": "01_product_profile.json", "kw_raw": "02_kw_raw.json",
     "kw_removed": "03_kw_removed.json", "kw_filtered": "03_kw_filtered.json",
@@ -129,9 +132,13 @@ class Document:
             self.md.append("\n".join("- " + md_escape(item).replace("\n", "\n  ") for item in value) or "未提供")
             items = []
             for item in value:
-                text = html.escape(as_text(item))
+                raw_text = as_text(item)
+                text = html.escape(raw_text)
                 if self.report_view:
-                    text = re.sub(r"【([^】]+)】", r'<strong class="k2">【\1】</strong>', text)
+                    parts = split_bullet(raw_text)
+                    if parts:
+                        prefix = raw_text[:len(raw_text) - len(parts[1])]
+                        text = '<strong class="k2">' + html.escape(prefix) + '</strong>' + html.escape(parts[1])
                 items.append("<li>" + text.replace("\n", "<br>") + "</li>")
             self.html.append("<ul>" + "".join(items) + "</ul>")
         elif key == "search_terms" and self.report_view and isinstance(value, str):
@@ -469,6 +476,8 @@ def build_report(run_dir: Path, generated_at=None):
     doc, gaps = render_listing(profile, listing)
     fingerprints = {f"{key}_sha256": hashlib.sha256(snapshots[FILES[key]]).hexdigest() if snapshots[FILES[key]] is not None else None for key in ("profile", "listing", "qa")}
     evidence_fingerprints = {f"{key}_sha256": canonical_fingerprint(data[key]) for key in ("review", "backend")}
+    policy, _ = read_json(POLICY_PATH, required=True)
+    evidence_fingerprints["rules_sha256"] = rules_fingerprint(policy)
     keywords = current_keyword_stage(run_dir)
     evidence_fingerprints["keywords_sha256"] = canonical_fingerprint(keywords)
     validation = effective_status(data["validation"], fingerprints, gaps, evidence_fingerprints)

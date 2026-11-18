@@ -14,12 +14,15 @@ import os
 import re
 import sys
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from listing_scope import require_single_product
 from model_ids import normalize_model, model_pattern, valid_model_list
+from bullet_text import split_bullet
+from policy_rules import rules_fingerprint
 
 _BACKEND_SPEC = importlib.util.spec_from_file_location("listing_backend_cli", Path(__file__).with_name("backend_cli.py"))
 backend_cli = importlib.util.module_from_spec(_BACKEND_SPEC)
@@ -376,12 +379,15 @@ def _check_local(profile, listing, qa=None):
     accessory_fields = {"accessory_count", "included_quantity", "component_count"}
     quantities, accessory_counts = {}, {}
     for fid, (owner_id, fact) in facts.items():
-        if fact.get("field") in quantity_fields and re.fullmatch(r"[1-9]\d*", str(fact.get("value", ""))):
+        if (fact.get("field") in quantity_fields and fact.get("status") == "confirmed" and nonempty(fact.get("source_ref"))
+                and re.fullmatch(r"[1-9]\d*", str(fact.get("value", "")))):
             quantities[fid] = (owner_id, int(fact["value"]))
-        if fact.get("field") in accessory_fields and fact.get("status") == "confirmed" and re.fullmatch(r"[1-9]\d*", str(fact.get("value", ""))):
+        if (fact.get("field") in accessory_fields and fact.get("status") == "confirmed" and nonempty(fact.get("source_ref"))
+                and re.fullmatch(r"[1-9]\d*", str(fact.get("value", "")))):
             accessory_counts[fid] = (owner_id, int(fact["value"]))
     # "N pieces of <item>" describes included parts, not the sellable pack size.
     quantity_token = re.compile(r"\b(\d+)\s*[- ]?\s*(?:packs?|count|pieces?|pcs)\b(?!\s+of\b)|\b(?:pack|set)\s+of\s+(\d+)\b|\bquantity\s*:\s*(\d+)\b", re.I)
+    japanese_quantity_token = re.compile(r"(?<![A-Za-z0-9_.])(\d+)\s*(枚|個|本|袋|巻|組|点)\s*(?:入り|入|セット|パック|組)")
 
     def scan_quantities(text, allowed_owners, path):
         matching_groups = []
@@ -390,12 +396,22 @@ def _check_local(profile, listing, qa=None):
         for match in quantity_token.finditer(text):
             number = int(next(value for value in match.groups() if value is not None))
             own = {fid for fid, (owner_id, value) in quantities.items() if owner_id in allowed_owners and value == number}
-            if not own and re.search(r"pieces?|pcs", match[0], re.I) and any(
-                    owner_id in allowed_owners and value == number for owner_id, value in accessory_counts.values()):
-                continue  # A confirmed included-accessory count, e.g. "4 pcs felt pads".
+            if not own and re.search(r"pieces?|pcs", match[0], re.I):
+                own = {fid for fid, (owner_id, value) in accessory_counts.items()
+                       if owner_id in allowed_owners and value == number}
             if not own:
                 add("quantity_unregistered", path, "Package count must match a registered quantity fact for this product: " + match[0])
             if own:
+                matching_groups.append(own)
+        for match in japanese_quantity_token.finditer(unicodedata.normalize("NFKC", text)):
+            number, unit = int(match[1]), match[2]
+            own = {fid for fid, (owner_id, value) in {**quantities, **accessory_counts}.items()
+                   if owner_id in allowed_owners and value == number
+                   and (facts[fid][1].get("count_unit") is None
+                        or unicodedata.normalize("NFKC", str(facts[fid][1]["count_unit"])).strip() == unit)}
+            if not own:
+                add("quantity_unregistered", path, "Japanese pack count has no matching confirmed count fact: " + match[0])
+            else:
                 matching_groups.append(own)
         return matching_groups
 
@@ -484,10 +500,10 @@ def _check_local(profile, listing, qa=None):
             add("bullets_shape", path + ".bullets", "Exactly five nonempty bullet strings are required")
         valid_bullets = [b for b in _list(bullets) if isinstance(b, str)]
         for index, bullet in enumerate(valid_bullets):
-            label = re.fullmatch(r"【([^】]+)】\s*\S[\s\S]*", bullet)
-            if not label or not label[1].strip() or (spaced_language and _has_lowercase(label[1])):
+            parts = split_bullet(bullet)
+            if not parts or (spaced_language and _has_lowercase(parts[0])):
                 add("bullet_format", path + ".bullets[%d]" % index,
-                    "Use 【search phrase/topic label】 followed by natural target-language copy; preserve Japanese keyword and model spelling")
+                    "Use a short topic followed by ： or : and body text; legacy 【topic】body is also accepted. Preserve Japanese keyword and model spelling")
         editorial_bullets = list(valid_bullets)
         if policy.get("compatibility_lists", {}).get("exclude_verified_model_tokens_from_editorial_budget"):
             allowed = {"all"}
@@ -536,7 +552,7 @@ def _check_local(profile, listing, qa=None):
                     result[key].append(rid)
         return result
 
-    claim_refs, claim_fact_refs = {}, {}
+    claim_refs, claim_fact_refs, claim_quantity_groups = {}, {}, {}
     content_targets = dict(resolved)
     for target, content in content_targets.items():
         allowed = {"all"}
@@ -571,8 +587,9 @@ def _check_local(profile, listing, qa=None):
                 continue
             scan_measurements(value, allowed, "listing." + str(target) + "." + field)
             quantity_groups = scan_quantities(value, allowed, "listing." + str(target) + "." + field)
+            claim_quantity_groups[(target, field)] = quantity_groups
             if any(not group & claim_fact_refs.get((target, field), set()) for group in quantity_groups):
-                add("quantity_unreferenced", "listing." + str(target) + "." + field, "Package count needs a corresponding quantity fact reference")
+                add("quantity_unreferenced", "listing." + str(target) + "." + field, "Count needs its corresponding primary or accessory fact reference")
             for mid, (owner_id, measurement) in measurements.items():
                 shown = measurement.get("display_text")
                 if owner_id in allowed and isinstance(shown, str) and _contains(value, shown) and mid not in claim_refs.get((target, field), set()):
@@ -657,11 +674,9 @@ def _check_local(profile, listing, qa=None):
                 if not any(mid in claim_refs.get((target, field), set()) and isinstance(_field(content, field), str)
                            and _contains(_field(content, field), shown or "") for field in body_refs if isinstance(field, str)):
                     add("plan_body_measurement", path, "Image specification must also appear and be referenced in the applicable Listing body")
-            for fid in set(refs["fact_ids"]) & set(quantities):
-                number = quantities[fid][1]
+            for fid in set(refs["fact_ids"]) & (set(quantities) | set(accessory_counts)):
                 if not any(fid in claim_fact_refs.get((target, field), set()) and any(
-                        int(next(v for v in match.groups() if v is not None)) == number
-                        for match in quantity_token.finditer(_field(content, field) or ""))
+                        fid in group for group in claim_quantity_groups.get((target, field), []))
                         for field in body_refs if field in FRONT_FIELDS):
                     add("plan_body_quantity", path, "Image package quantity must also appear with its fact reference in the applicable body")
         if plan.get("role") != "main":
@@ -767,7 +782,8 @@ def make_review_template(profile_path, listing_path, qa_path=None, previous=None
     kept = {}
     required = {(target, check) for target in targets for check in policy["semantic_checks"]}
     required |= {("media", check) for check in policy["media_checks"]}
-    if isinstance(previous, dict) and isinstance(previous.get("target_fingerprints"), dict):
+    if (isinstance(previous, dict) and isinstance(previous.get("target_fingerprints"), dict)
+            and previous.get("rules_sha256") == rules_fingerprint(policy)):
         old_fps = previous["target_fingerprints"]
         keywords_same = previous.get("keyword_fingerprints") == keyword_fps
         for record in _list(previous.get("records")):
@@ -786,6 +802,7 @@ def make_review_template(profile_path, listing_path, qa_path=None, previous=None
         if guidance:
             record["guidance"] = guidance
     return {"schema_version": "2.1", "fingerprints": file_fingerprints(profile_path, listing_path, qa_path),
+            "rules_sha256": rules_fingerprint(policy),
             "target_fingerprints": current,
             "keyword_fingerprints": keyword_fps,
             "carried_over": len(kept),
@@ -823,6 +840,8 @@ def validate_bundle(profile, listing, qa=None, review=None, backend=None, finger
     elif not isinstance(review, dict):
         add("review_invalid", "semantic", "Semantic review must be an object")
     else:
+        if review.get("rules_sha256") != rules_fingerprint(expected):
+            add("review_rules_stale", "semantic.rules_sha256", "Content review is not bound to the current writing and validation rules; regenerate the checklist and review it", "incomplete")
         stale_targets = set()
         if isinstance(review.get("target_fingerprints"), dict):
             current_targets = target_fingerprints(profile, listing, qa)
@@ -907,7 +926,8 @@ def validate_bundle(profile, listing, qa=None, review=None, backend=None, finger
     return {"schema_version": "2.1", "status": status, "fingerprints": fingerprints,
             "evidence_fingerprints": {"review_sha256": canonical_sha256(review) if review is not None else None,
                                       "backend_sha256": canonical_sha256(backend) if backend is not None else None,
-                                      "keywords_sha256": canonical_sha256(keywords)},
+                                      "keywords_sha256": canonical_sha256(keywords),
+                                      "rules_sha256": rules_fingerprint(expected)},
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "local": {"status": local_status, "error_count": local_errors},
             "semantic": {"status": semantic_status}, "backend": {"status": backend_status},

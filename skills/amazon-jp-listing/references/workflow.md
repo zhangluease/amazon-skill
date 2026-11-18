@@ -40,7 +40,7 @@ export 自带分类与导出检查；三个词池和 04 标注由工具生成，
 
 ## 3. 写作与覆盖
 
-按[日文字段规则](japanese-listing.md)写 `05_title_keywords.json` 和 `listing.json`。05 记录候选、必保词、实际投放与 field_strategy；候选数量按实际需要安排。文案还包含属性建议、本品关键买家问题及图片／A+ 策划；资料没有答案时记未声明，不凑问答数量。
+按[日文字段规则](japanese-listing.md)写 `05_title_keywords.json` 和 `listing.json`。05 记录候选、必保词、实际投放与 field_strategy；候选数量按实际需要安排。主题采用SOP默认顺序，遇长适配名单或资料缺口则调整并在exceptions说明；小标题记录代表型号选择与实售内容的依据。仅使用已给定竞品结论辅助选题，不追加调研前置条件。文案还包含属性建议、本品关键买家问题及图片／A+ 策划；资料没有答案时记未声明，不凑问答数量。
 
 ```sh
 python3 "SKILL/scripts/keyword_quality.py" coverage --run-dir "RUN" --write-placement
@@ -63,7 +63,7 @@ python3 "SKILL/scripts/listing_quality.py" backend --profile "RUN/01_product_pro
 python3 "SKILL/scripts/listing_quality.py" review-template --profile "RUN/01_product_profile.json" --listing "RUN/listing.json" --qa "RUN/06_qa.json" --output "RUN/08_semantic_review.json"
 ```
 
-对照原资料和最终内容填写复核依据：品名、语言、事实、实际用词、字段布局、适配清单与画面。确有未解决问题时保持 pending／fail，不机械填 pass；独立复审者按需要使用。后端通过要求退出码 0、ok=true、errors=[]。
+对照原资料和最终内容填写复核依据：品名、语言、事实、实际用词、字段布局、适配清单与画面，以及七个前台位置的数量／关系一致性、性能／更换／品质声明的依据、模板占位符和教学文字清理。确有未解决问题时保持 pending／fail，不机械填 pass；独立复审者按需要使用。后端通过要求退出码 0、ok=true、errors=[]。
 
 ```sh
 python3 "SKILL/scripts/listing_quality.py" check --profile "RUN/01_product_profile.json" --listing "RUN/listing.json" --qa "RUN/06_qa.json" --review "RUN/08_semantic_review.json" --backend "RUN/08_backend_validation.json" --output "RUN/08_validation.json"
@@ -77,4 +77,4 @@ python3 "SKILL/scripts/render_listing.py" --run-dir "RUN"
 - `listing_environment.py config-status` 查看脱敏配置。用户提供 token 时，用 configure 从标准输入更新公共配置，保留其他字段；凭据不放入命令参数、报告或 Git。固定版本 CLI 按需准备，见[上游适配](upstream.md)。
 - 画像变更后先 `keyword_quality.py rebind --run-dir RUN`，只处理工具列出的受影响词，再用 `rebind --reviewed` 绑定。原词变更新建任务，保留旧快照。
 - 编号上下文变化时先将旧角色记录移出 RUN，运行 register-models 生成当前候选并重新解释，再 register-models、export。旧任务仅因缺外部证明而暂缓的适配对象可由 register-models 修正，保留原结论和修正依据。
-- 文案、来源或词位改动后重新完成受影响的覆盖、检查和复核，不复用过期的通过状态。
+- 文案、来源或词位改动后重新完成受影响的覆盖、检查和复核；写作或校验规则变更时同步 quality_policy，其变化会使旧复核和报告过期，不复用旧通过状态。仅改日期／版本元数据不要求重审。

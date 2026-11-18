@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from listing_scope import require_single_product
+from bullet_text import split_bullet
 from trusted_keywords import FACT_ID, trusted_input, collect_models, bind_models, registration_issues, identifier_template, fingerprint
 import re
 import sys
@@ -127,6 +128,9 @@ def accept_model_records(records, inventory, profile):
     for record in records:
         if not positions.intersection(record.get("source_positions", [])):
             continue
+        if (record.get("decision") in ("deferred", "excluded")
+                and record.get("reason_code") in ("fact_conflict", "user_restriction", "identity_conflict")):
+            continue  # Registration repairs missing-proof deferrals, not concrete input conflicts.
         if any(contains_phrase(record["keyword"], term) for term in profile.get("forbidden_terms", []) if nonempty(term)):
             continue  # An explicit user restriction is a real input conflict, not missing external proof.
         previous = record.get("decision")
@@ -825,7 +829,7 @@ def coverage(run, write_placement=False):
                                                      if row["keyword"] in fields.get("title", "") else None)}
                                  for row in rows[:10]],
                 "bullet_openings": [
-                    {"field": "bullets[%d]" % index, "opening": bullet[:80],
+                    {"field": "bullets[%d]" % index, "heading": (split_bullet(bullet) or ("", ""))[0], "opening": bullet[:80],
                      "exact_keyword_hits": [row["keyword"] for row in rows
                                             if contains_phrase(bullet[:80], row["keyword"])]}
                     for index, bullet in enumerate(content.get("bullets", [])) if isinstance(bullet, str)],

@@ -1,4 +1,4 @@
-# 本地数据契约 v2.8（Listing schema_version 仍为 "2.1"）
+# 本地数据契约 v2.9（Listing schema_version 仍为 "2.1"）
 
 本地版本只执行 JP/Japanese/ja，主要面向耗材。用户附件名称任意；本文的编号文件名仅用于任务目录内的中间流程，不限制用户原文件命名；最终交付使用 listing.md、listing.json、report.html。来源库中的历史文件名也不是必交附件。
 
@@ -12,7 +12,7 @@
 - `product_identity`: `{original_name, canonical_name, protected_terms: [目标语言完整核心短语]}`。至少一个必保短语；比较只规范大小写、空白与连字符，不允许拆散名词短语。
 - `facts`: `[{fact_id, field, value, source_ref, status}]`。`status` 为 `confirmed/unknown/conflict`；facts 仅记录本品事实。只有 confirmed 且有来源的事实能支持声明。
 - 适配机型用 `facts.field=compatible_models`，value 为完整机型字符串数组，每个字符串一个型号，不能用系列名、范围、通配符或省略号。可按系列／来源分多条事实，另加可选 `group_label`；保留 source_ref 和 confirmed/unknown/conflict。事实只能支持本品。confirmed 必须有非空完整数组与来源，给定词表中的语义明确的适配对象标识直接按用户依据登记 confirmed；不因缺官网证明标 unknown。实际无法解析或资料冲突仍保留未完成状态。按[清单规则](../references/consumables.md)在可售商品五点列全确认型号，每条 claims 引用对应 fact_id；完整匹配允许大小写、全半角和连字符字形差异，不允许丢后缀。机器检查缺项／未引用，不证明兼容关系，也不能替代对照原件检查多写与漏录。
-- 购买数量事实使用 field=quantity/package_quantity/unit_count/pack_count/number_of_items，value 为正整数或正整数字符串，必须与配件数量分开。首版机器核对英文 2-Pack、2 count、2 pieces、Pack of 2、Set of 2、Quantity: 2 等表达的数值、范围及事实引用；图片数量声明须在 body_refs 正文引用同一数量事实。其他语言表达和画面实物数量仍需内容复核。随附配件数量用 field=accessory_count/included_quantity/component_count（confirmed 正整数），`4 pcs felt pads` 这类写法据此核对，且不能满足购买数量；`N pieces of <物品>` 视为配件描述，不按购买数量扫描。
+- 购买数量事实使用 field=quantity/package_quantity/unit_count/pack_count/number_of_items，value 为正整数或正整数字符串；随附配件用 accessory_count/included_quantity/component_count，分别登记。已知计数单位时附 count_unit（如枚、個、袋），防止不同对象或单位的数值混用。机器检查英文 2-Pack／2 count／2 pieces／Pack of 2，以及日文「N枚／個／本／袋／巻／組／点＋入り／入／セット／パック／組」的常见包装表达，日文支持全半角数字；匹配 confirmed 且有来源的数量事实并要求字段引用。配件数量引用自己的事实，不与主品相加。裸数量、汉字数词及复杂修饰关系仍由内容复核确认。图上数量还须在 body_refs 正文表达并引用同一事实。
 - `measurements`: `[{measurement_id, kind, subject, label, value, unit, source_ref, display_value?, display_unit?, display_text?, approximate?}]`。value 是原始十进制数字字符串；kind 为 `length/weight/volume/nominal/size`；subject 为 `product/package/fit`。label 标明 height/width/length/diameter 等。普通长度单位支持 mm/cm/m/in/ft。日本站保留来源单位，由 normalize 生成统一 display_text。公称规格和尺码不换算；禁止质量 oz 与容量 fl oz 混用。缺失值或单位不补造；需要表达的未知参数先补充资料。
 - `images`: `[{image_id, source, applies_to: ["all"]}]`。source 是用户素材路径/URL/附件定位；只引用本品实际素材。
 - `compatibility_basis`: 新任务按选购依据填 `model/specification/none`，另用 `compatibility_reason` 说明判断依据。型号适配、规格适配与无需型号适配的耗材分别组织五点，详见[耗材规则](../references/consumables.md)。旧画像缺此字段仍可读取；不得按编号前缀猜测，规格型与通用耗材不强制未知机型清单。
@@ -25,11 +25,11 @@ fact_id、measurement_id 和 image_id 在本品画像中唯一。所有 applies_
 
 `02_kw_raw.json.source_kind=user_spreadsheets` 的给定词默认可信，不要求外部二次核验；来源列为官网、竞品或Amazon联想不降低信任。原词分组与角色仍留账，不重新以缺独立证明为由剔除。给定词本身可支持其明确表达的含义，不能由泛词推出未给出的数值、性能或认证。
 
-`prepare` 生成 `02_identifier_roles.json`：`{schema_version:"1.0", raw_fingerprint, context_fingerprint, records}`。指纹由工具生成，records 每条 `{identifier, role, source_positions, reason}`；role 为 product_part／compatible_model／other／pending，source_positions 是 02.keywords 零基位置。按本品身份、字段标签和完整语义解释编号；脚本只发现中立候选和核对原文，不按前缀、长度或字母数字形式分类。可补纯名称、带空格、非拉丁文字的完整标识。同一标识在不同原词中角色不同可拆记录，同一行不重复分配；完整名称可覆盖其中的候选片段。未完成角色记录报 identifier_role_pending／identifier_role_missing，不要求外部验证。
+`prepare` 生成 `02_identifier_roles.json`：`{schema_version:"1.0", raw_fingerprint, context_fingerprint, records}`。指纹由工具生成，records 每条 `{identifier, role, source_positions, reason}`；role 为 product_part／compatible_model／other／pending，source_positions 是 02.keywords 零基位置。按本品身份、字段标签和完整语义解释编号；脚本只发现中立候选和核对原文，不按前缀、长度或字母数字形式分类。可补纯名称、带空格、非拉丁文字的完整标识。同一标识在不同原词中角色不同可拆记录，同一行不重复分配；完整名称可覆盖其中的候选片段。同一行同时有适配和非适配对象时，逐对象解释否定范围；出现否定词的行不自动分配角色。negative_rows 只提示复核，不能把该行所有对象一并视为不适配，也不能把明确否定的对象标为 compatible_model。未完成角色记录报 identifier_role_pending／identifier_role_missing，不要求外部验证。
 
 完成角色后执行 `register-models --run-dir RUN`，追加／更新 `fact_id=trusted-keyword-models` 的 compatible_models confirmed 事实；confirmation_basis=user_provided_keywords，source_ref 指向原词与角色记录，keyword_source_positions 为 `{完整标识:[keywords零基位置,...]}`。重复来源全部保留，适配对象去重，完整后缀保留，本品／替代件标识和规格数值不进入适配数组。可直接解决的 unknown 占位事实转为 confirmed，保留原值和历史；不伪称独立验证。明确否定的适配关系不反转为正向兼容。
 
-`register-models` 可修复旧任务中仅因缺网站证明而暂缓的适配对象，保留 initial_decision／initial_reason 并写 resolution。角色未完成或失效时不修改事实和账本；角色修改后重新登记，同步派生事实与受影响词。账本的 identifier_roles_fingerprint 绑定当前角色记录。画像另有未绑定修改时先 rebind；原词变化新建任务，不覆盖原始快照。修复后 export、更新五点并复审，不复用旧验收。检查对照原词及角色记录独立检查漏登（trusted_keyword_model_missing）和错误隔离（trusted_model_quarantined）；缺少整份 compatible_models 也不能绕过检查。角色判断的语义准确性仍须复审。
+`register-models` 可修复旧任务中仅因缺网站证明而暂缓的适配对象，保留 initial_decision／initial_reason 并写 resolution；已有 fact_conflict／user_restriction／identity_conflict 的具体冲突结论不自动改为可用，须先处理原问题。角色未完成或失效时不修改事实和账本；角色修改后重新登记，同步派生事实与受影响词。账本的 identifier_roles_fingerprint 绑定当前角色记录。画像另有未绑定修改时先 rebind；原词变化新建任务，不覆盖原始快照。修复后 export、更新五点并复审，不复用旧验收。检查对照原词及角色记录独立检查漏登（trusted_keyword_model_missing）和错误隔离（trusted_model_quarantined）；缺少整份 compatible_models 也不能绕过检查。角色判断的语义准确性仍须复审。
 
 ## 关键词与问题：02—06
 
@@ -39,7 +39,7 @@ fact_id、measurement_id 和 image_id 在本品画像中唯一。所有 applies_
 - `03_keyword_validation.json` 保存当前检查结果；总验收与报告重算数据，不信任此文件的缓存 passed。
 - `04_kw_tagged.json` 保留原 keyword/label/reason；增加 `role`（identity/attribute/intent/synonym）、`intent_group`、`source`、`traffic_percentage`（未知为 null）、`applies_to`。旧 high/relevant 标签用于兼容，不决定核心品名优先级。该数组由统一工具导出，仅含 eligible 原始词及补充词，另有 keyword_id、origin=raw/product、searches、restrictions；未知流量为 null，0 保持真实的 0。
 - `05_title_keywords.json`：`title_keywords:{high:[],relevant:[]}` 为候选词数组，无数量上限；`protected_terms` 覆盖画像必保词；`placement_plan:[{keyword,target_field,applies_to,reason}]` 非空，只含可用词。coverage --write-placement 根据最终文案写入实际位置（如 title、bullets[2]），不把候选全塞进标题。
-- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录实际标题词、指标来源与选择／取舍；item_highlight 说明包装数量及事实依据，未知时说明缺口；bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
+- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录实际标题词、指标来源与选择／取舍；item_highlight 说明实售数量／组成、适用对象和代表型号的选择依据，未知指标或信息缺口明示；bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，如长名单占多条、缺性能／更换依据或规格型耗材调整主题，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
 - `06_qa.json` 是初始化工具自动写入的可选兼容标记，日本站跳过后端问答：status=skipped、site=JP、reason_code=rufus_us_only、qa_pairs=[]。自行整理的买家问题记录为 local_editorial，不冒充后端采集。
 
 ### 用户表格导入结构（import_schema_version: "1.0"）
@@ -108,9 +108,11 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 `buyer_question_coverage` 每项 `{question, status, location, source?}`；status 使用 covered/partially_covered/not_claimed/not_applicable。location 用中文说明真实覆盖字段或未主张原因。自行整理的问题标 source=local_editorial，不包装成已采集问答。
 
-单品继续使用顶层 `title/item_highlight/bullets/description/search_terms`；item_highlight 永远是字符串，bullets 是 5 条 `【相关搜索词／主题标签】正文` 字符串，开头自然承接相关可用词，正文展开事实，不强行大写。适配型耗材通常连续2–3条按系列列全已确认机型（短名单可1条），不强求五个不同主题。普通材质尺寸默认在其余五点正文，小标题优先真实数量与组成；标题／小标题分别 ≤75／125 字符，含空格。另加 claims、image_plan、a_plus_plan。
+单品继续使用顶层 `title/item_highlight/bullets/description/search_terms`；item_highlight 永远是字符串，bullets 是 5 条 `相关词／短主题：具体说明` 字符串（支持全角／半角冒号，旧稿 `【主题】正文` 仍可读），开头自然承接相关可用词，正文展开事实，不强行大写。适配型耗材通常连续2–3条按系列列全已确认机型（短名单可1条），不强求五个不同主题。普通材质尺寸默认在其余五点正文，小标题补真实数量／组成、适用对象及代表型号（有资料时通常2–3个），不代替五点完整适配名单；标题／小标题分别 ≤75／125 字符，含空格。另加 claims、image_plan、a_plus_plan。
 
 ### 声明与图片引用
+
+默认主题与灵活调整见[日文写作规则](../references/japanese-listing.md#五点的默认组织)，不新增固定五主题或代表型号数量的机器配额。
 
 本品 `claims` 是数组：`{field, fact_ids: [], measurement_ids: []}`。field 支持 title、item_highlight、bullets[0] 至 bullets[4]、description、search_terms。每个前台文本字段至少有一个声明记录，允许无可核查数值的场景文字用空引用并由内容复核说明；非空引用必须属于本品且已确认。含规格的字段记录 measurement_ids 并复用 display_text，保持维度标签；后台搜索词不强制声明记录。
 
@@ -130,11 +132,11 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 ## 验收与后端适配
 
-- `08_semantic_review.json`: 复审记录。新版写 `target_fingerprints`（每个 target 与 media 依赖内容的规范 JSON SHA-256；重新格式化文件不失效）和 `carried_over`；review-template 遇到已有复审文件时保留内容未变 target 的结论（keyword_usage、field_layout 还要求关键词指纹未变），只把变化的 target 置为 pending（--fresh 可全部重置）。旧版只有文件级 fingerprints 时按文件 SHA-256 绑定。目标仅 single 和 media。每项 `{target, check, status: pass/fail/not_applicable/pending, evidence}`。文本检查 identity/readability/factual_support/language/qa_relevance/keyword_usage/field_layout/compatibility_models；media 检查 image_truth。not_applicable 需要原因；pending/fail 或缺项不能交付通过。compatibility_models 按原始适配资料核对画像录入及五点的完整性、额外机型、后缀、分组、来源和本品一致性；无适配需求可说明原因记 not_applicable，待核实清单不能冒充不适用。不得为了过关机械填 pass。
+- `08_semantic_review.json`: 复审记录。新版写 `rules_sha256`（quality_policy 中实际校验和内容复核规则的指纹，排除顶层版本号、日期等元数据）和 `target_fingerprints`（每个 target 与 media 依赖内容的规范 JSON SHA-256；重新格式化文件不失效）和 `carried_over`；review-template 只在规则未变时保留内容未变 target 的结论（keyword_usage、field_layout 还要求关键词指纹未变），只把变化的 target 置为 pending（--fresh 可全部重置）。旧记录缺 rules_sha256 或规则已变时须重新填写内容复核；日期／版本元数据变化不单独触发失效。目标仅 single 和 media。每项 `{target, check, status: pass/fail/not_applicable/pending, evidence}`。文本检查 identity/readability/factual_support/language/qa_relevance/keyword_usage/field_layout/compatibility_models；media 检查 image_truth。not_applicable 需要原因；pending/fail 或缺项不能交付通过。compatibility_models 按原始适配资料核对画像录入及五点的完整性、额外机型、后缀、分组、来源和本品一致性；无适配需求可说明原因记 not_applicable，待核实清单不能冒充不适用。不得为了过关机械填 pass。
 - `08_backend_validation.json`: `{records: [{target, payload_sha256, exit_code, response, reused}]}`；重跑 backend 时，本品 payload 未变且已通过时沿用旧记录（reused=true），--no-reuse 强制重新请求。target 固定为 single；response 保留后端 JSON，仅 `ok=true` 且 `errors=[]`、退出码为 0 才通过。响应或 payload 指纹缺失/过期不通过。
-- `08_validation.json`: 汇总本地、关键词审查、语义、后端检查（local/keywords/semantic/backend）；`status` 为 passed/failed/incomplete；fingerprints 绑定 profile/listing/qa 原文件 SHA-256，evidence_fingerprints 的 review_sha256/backend_sha256 绑定复审与后端文件的规范 JSON SHA-256，keywords_sha256 绑定重新计算的关键词阶段结果 SHA-256（UTF-8、ensure_ascii=False、sort_keys=True、separators=(',',':')）。报告核对原验收文件存在且指纹匹配；缺失、过期为 incomplete，不以生成了文件代替完成。
+- `08_validation.json`: 汇总本地、关键词审查、语义、后端检查（local/keywords/semantic/backend）；`status` 为 passed/failed/incomplete；fingerprints 绑定 profile/listing/qa 原文件 SHA-256，evidence_fingerprints 的 review_sha256/backend_sha256 绑定复审与后端文件的规范 JSON SHA-256，rules_sha256 绑定当前实际规则、keywords_sha256 绑定重新计算的关键词阶段结果 SHA-256（UTF-8、ensure_ascii=False、sort_keys=True、separators=(',',':')）。报告核对原验收文件存在且指纹匹配；缺失、过期为 incomplete，不以生成了文件代替完成。
 
-`07_keyword_coverage.json`（`keyword_quality.py coverage` 生成，仅供优化参考，不参与验收）：本品 target=single 的可用词数、完整短语覆盖、词级覆盖（大小写与简单英文复数折叠）、按搜索量加权覆盖率、未覆盖高流量词、标题覆盖前 10 词、后台词字节/预算/与标题重复词、暂缓或剔除词的完整短语命中；field_layout 列出标题／小标题字符数、可用前十词的标题零基精确位置（缺失为 null）、每条五点前 80 字符及精确短语命中（不代表同义表达无效或算法权重）；intent_map 表达位置；按搜索量排序的 fact_unlocks（暂缓词晋级条件）与 unsupported 问题。
+`07_keyword_coverage.json`（`keyword_quality.py coverage` 生成，仅供优化参考，不参与验收）：本品 target=single 的可用词数、完整短语覆盖、词级覆盖（大小写与简单英文复数折叠）、按搜索量加权覆盖率、未覆盖高流量词、标题覆盖前 10 词、后台词字节/预算/与标题重复词、暂缓或剔除词的完整短语命中；field_layout 列出标题／小标题字符数、可用前十词的标题零基精确位置（缺失为 null）、每条五点的 heading（从短主题冒号或旧式括号提取）、前 80 字符及精确短语命中（不代表同义表达无效或算法权重）；intent_map 表达位置；按搜索量排序的 fact_unlocks（暂缓词晋级条件）与 unsupported 问题。
 
 本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing、compatibility_list_length（已确认型号超普通预算，原文仍须过真实后端／类目检查）。compatibility_unconfirmed 为 incomplete。error：compatibility_model_missing、compatibility_unreferenced、compatible_models_shape、title_banned_character（品牌名中的除外）、search_bytes（JP 预算 499 UTF-8 字节）。
 

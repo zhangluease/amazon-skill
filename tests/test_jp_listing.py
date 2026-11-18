@@ -234,6 +234,36 @@ class JapaneseListingTests(unittest.TestCase):
         self.assertFalse(keywords.register_models(self.run)["profile_changed"])
         self.assertEqual((self.run / "01_product_profile.json").read_bytes(), before)
 
+    def test_register_models_preserves_concrete_input_conflicts(self):
+        self.import_device_keywords()
+        keywords.prepare(self.run)
+        decisions = json.loads((self.run / "03_keyword_decisions.json").read_text())
+        decisions["records"][0].update(decision="excluded", reason_code="fact_conflict", fact_ids=["material"],
+                                       reason="合成测试：本品资料存在明确冲突", resolution="按具体冲突保留问题")
+        decisions["records"][1].update(decision="deferred", reason_code="identity_conflict", reason="合成测试：身份冲突",
+                                       promotion_condition="解决具体身份冲突", resolution="按身份冲突保留问题")
+        original = copy.deepcopy(decisions["records"][:2])
+        write(self.run, "03_keyword_decisions.json", decisions)
+        keywords.register_models(self.run)
+        current = json.loads((self.run / "03_keyword_decisions.json").read_text())
+        self.assertEqual(current["records"][:2], original)
+
+    def test_negation_is_resolved_per_model_instead_of_per_keyword_row(self):
+        raw = {"source_kind": "user_spreadsheets", "keywords": [{"keyword": "PX-21対応、PX-22非対応"}]}
+        profile = copy.deepcopy(self.profile)
+        profile["facts"].append({"fact_id": "fit", "field": "compatible_models", "value": ["PX-21", "PX-22"],
+                                  "status": "confirmed", "source_ref": "synthetic:roles"})
+        policy = json.loads(quality.POLICY_PATH.read_text())
+        assignments = keywords.identifier_template(profile, raw, policy)
+        self.assertTrue(all(r["role"] == "pending" for r in assignments["records"]))
+        for record in assignments["records"]:
+            record.update(role="compatible_model" if record["identifier"] == "PX-21" else "other",
+                          reason="原词逐对象含义：PX-21适配，非対応仅修饰PX-22")
+        inventory = keywords.collect_models(profile, raw, policy, assignments)
+        self.assertFalse(inventory["issues"], inventory["issues"])
+        self.assertEqual(inventory["models"], ["PX-21"])
+        self.assertEqual(inventory["negative_rows"], [0])
+
     def test_trusted_models_cannot_be_parked_pending_for_missing_website_proof(self):
         raw = self.import_device_keywords()
         decisions = keywords.prepare(self.run)
@@ -495,6 +525,53 @@ class JapaneseListingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             quality.normalize_profile(self.profile)
 
+    def test_japanese_pack_counts_match_facts_and_require_references(self):
+        for unit in ("枚", "個", "本", "袋", "巻", "組", "点"):
+            with self.subTest(unit=unit):
+                profile = copy.deepcopy(self.profile)
+                profile["facts"].append({"fact_id": "pack", "field": "quantity", "value": 2, "count_unit": unit,
+                                          "status": "confirmed", "source_ref": "synthetic:pack"})
+                listing = copy.deepcopy(self.listing)
+                listing["item_highlight"] = "２" + unit + "入り"
+                self.assertIn("quantity_unreferenced", {i["code"] for i in quality.check_local(profile, listing)})
+                next(c for c in listing["claims"] if c["field"] == "item_highlight")["fact_ids"].append("pack")
+                self.assertFalse([i for i in quality.check_local(profile, listing) if i["severity"] == "error"])
+                listing["item_highlight"] = "３" + unit + "セット"
+                self.assertIn("quantity_unregistered", {i["code"] for i in quality.check_local(profile, listing)})
+
+    def test_japanese_primary_and_accessory_counts_keep_their_units_and_references(self):
+        profile = copy.deepcopy(self.profile)
+        profile["facts"] += [
+            {"fact_id": "pack", "field": "quantity", "value": 2, "count_unit": "枚", "status": "confirmed", "source_ref": "synthetic:pack"},
+            {"fact_id": "extra", "field": "accessory_count", "value": 1, "count_unit": "個", "status": "confirmed", "source_ref": "synthetic:pack"}]
+        listing = copy.deepcopy(self.listing)
+        listing["item_highlight"] = "本体2枚入り、付属品1個入り"
+        claim = next(c for c in listing["claims"] if c["field"] == "item_highlight")
+        claim["fact_ids"] += ["pack", "extra"]
+        self.assertFalse([i for i in quality.check_local(profile, listing) if i["severity"] == "error"])
+        claim["fact_ids"].remove("extra")
+        self.assertIn("quantity_unreferenced", {i["code"] for i in quality.check_local(profile, listing)})
+        claim["fact_ids"].append("extra")
+        listing["item_highlight"] = "本体2個入り"
+        self.assertIn("quantity_unregistered", {i["code"] for i in quality.check_local(profile, listing)})
+        listing["item_highlight"] = "3本の繊維を使用、型番PX-3は例示です"
+        self.assertNotIn("quantity_unregistered", {i["code"] for i in quality.check_local(profile, listing)})
+
+    def test_japanese_image_counts_reuse_the_corresponding_body_counts(self):
+        profile = copy.deepcopy(self.profile)
+        profile["facts"] += [
+            {"fact_id": "pack", "field": "quantity", "value": 2, "count_unit": "枚", "status": "confirmed", "source_ref": "synthetic:pack"},
+            {"fact_id": "extra", "field": "accessory_count", "value": 1, "count_unit": "個", "status": "confirmed", "source_ref": "synthetic:pack"}]
+        listing = copy.deepcopy(self.listing)
+        listing["item_highlight"] = "本体2枚入り、付属品1個入り"
+        next(c for c in listing["claims"] if c["field"] == "item_highlight")["fact_ids"] += ["pack", "extra"]
+        plan = listing["image_plan"][1]
+        plan.update(overlay_text="本体２枚入り、付属品１個入り", body_refs=["item_highlight"])
+        plan["fact_ids"] += ["pack", "extra"]
+        self.assertFalse([i for i in quality.check_local(profile, listing) if i["severity"] == "error"])
+        listing["item_highlight"] = "本体2枚入り"
+        self.assertIn("plan_body_quantity", {i["code"] for i in quality.check_local(profile, listing)})
+
     def test_new_title_and_highlight_limits_count_spaces_and_fullwidth_once(self):
         for field, limit in (("title", 75), ("item_highlight", 125)):
             with self.subTest(field=field):
@@ -509,6 +586,48 @@ class JapaneseListingTests(unittest.TestCase):
     def test_japanese_bullet_labels_preserve_latin_keyword_spelling(self):
         self.listing["bullets"][0] = "【Ag+ フィルター】表記の確認用ソフトウェアテストです。"
         self.assertNotIn("bullet_format", {i["code"] for i in quality.check_local(self.profile, self.listing)})
+
+    def test_sop_colon_bullets_validate_render_and_preserve_upload_text(self):
+        self.listing["bullets"] = [
+            "ペン立て セット内容：本体の仕様をご確認ください。",
+            "ペン立て 用途: 文具を収納するための製品です。",
+            "ペン立て 素材：ステンレス製です。",
+            "ペン立て 確認事項：写真で形状をご確認ください。",
+            "Ag+ フィルター 表記：<script>bad()</script>はソフトウェアテスト用の文字列です。"]
+        self.assertFalse([i for i in quality.check_local(self.profile, self.listing) if i["severity"] == "error"])
+        payload = quality.build_payloads(self.profile, self.listing)[0]["payload"]
+        self.assertEqual(payload["bullets"], self.listing["bullets"])
+        doc, _ = renderer.render_listing(self.profile, self.listing, report_view=True)
+        markdown, page = doc.result()
+        self.assertIn('<strong class="k2">ペン立て セット内容：</strong>', page)
+        self.assertIn('<strong class="k2">ペン立て 用途: </strong>', page)
+        self.assertIn("&lt;script&gt;bad()&lt;/script&gt;", page)
+        self.assertNotIn("<script>bad()</script>", page)
+        self.assertIn("セット内容", markdown)
+
+    def test_bullet_format_requires_both_a_short_heading_and_body(self):
+        for text in ("説明だけの文章です。", "：本文です。", "用途：   ", "【用途】", "【】本文です。"):
+            with self.subTest(text=text):
+                listing = copy.deepcopy(self.listing)
+                listing["bullets"][0] = text
+                self.assertIn("bullet_format", {i["code"] for i in quality.check_local(self.profile, listing)})
+
+    def test_sop_colon_lists_keep_all_compatible_models_and_budget_exception(self):
+        profile, listing, groups = jp_compatibility_fixture()
+        listing["bullets"] = [bullet.replace("【", "", 1).replace("】", "：", 1) for bullet in listing["bullets"]]
+        issues = quality.check_local(profile, listing)
+        self.assertFalse([i for i in issues if i["severity"] == "error"], issues)
+        self.assertIn("compatibility_list_length", {i["code"] for i in issues})
+        text = " ".join(quality.build_payloads(profile, listing)[0]["payload"]["bullets"])
+        self.assertTrue(all(model in text for group in groups for model in group))
+
+    def test_colon_heading_appears_in_keyword_feedback(self):
+        self.import_and_classify()
+        self.listing["bullets"][0] = "ペン立て 素材：ステンレス製です。"
+        write(self.run, "listing.json", self.listing)
+        feedback = keywords.coverage(self.run)["targets"]["single"]["field_layout"]["bullet_openings"][0]
+        self.assertEqual(feedback["heading"], "ペン立て 素材")
+        self.assertIn("ペン立て", feedback["exact_keyword_hits"])
 
     def test_long_compatibility_lists_pass_local_budget_and_preserve_full_payload(self):
         profile, listing, groups = jp_compatibility_fixture()
@@ -621,6 +740,41 @@ class JapaneseListingTests(unittest.TestCase):
         self.assertEqual(checks["keyword_usage"]["status"], "pending")
         self.assertEqual(checks["factual_support"]["status"], "pass")
         self.assertTrue(checks["field_layout"]["guidance"])
+
+    def test_rule_changes_reset_content_review_and_invalidate_cached_report(self):
+        self.import_and_classify()
+        (self.run / "06_qa.json").unlink()
+        pp, lp = self.run / "01_product_profile.json", self.run / "listing.json"
+        review = quality.make_review_template(pp, lp)
+        for record in review["records"]:
+            record.update(status="pass", evidence="synthetic:reviewed content")
+        unchanged = quality.make_review_template(pp, lp, previous=review)
+        self.assertEqual(unchanged["carried_over"], len(review["records"]))
+        policy = json.loads(quality.POLICY_PATH.read_text())
+        policy["checked_at"] = "2099-01-01"
+        policy["version"] = "metadata-only"
+        new_policy = write(self.root, "policy.json", policy)
+        with patch.object(quality, "POLICY_PATH", new_policy):
+            self.assertEqual(quality.make_review_template(pp, lp, previous=review)["carried_over"], len(review["records"]))
+        with patch.object(quality.backend_cli, "run_cli", return_value={"exit_code": 0, "response": {"ok": True, "errors": []}}):
+            backend_result = quality.run_backend(self.profile, self.listing)
+        kwargs = dict(review=review, backend=backend_result, fingerprints=quality.file_fingerprints(pp, lp), keywords=keywords.check_run(self.run))
+        validation = quality.validate_bundle(self.profile, self.listing, **kwargs)
+        self.assertEqual(validation["status"], "passed", validation["issues"])
+        write(self.run, "08_semantic_review.json", review)
+        write(self.run, "08_backend_validation.json", backend_result)
+        write(self.run, "08_validation.json", validation)
+        self.assertEqual(renderer.build_report(self.run)[2], "passed")
+        policy["semantic_guidance"]["field_layout"] += " 合成测试的新布局要求"
+        write(self.root, "policy.json", policy)
+        with patch.object(quality, "POLICY_PATH", new_policy):
+            changed = quality.make_review_template(pp, lp, previous=review)
+            self.assertEqual(changed["carried_over"], 0)
+            self.assertTrue(all(r["status"] == "pending" for r in changed["records"]))
+            stale = quality.validate_bundle(self.profile, self.listing, **kwargs)
+            self.assertIn("review_rules_stale", {i["code"] for i in stale["issues"]})
+        with patch.object(renderer, "POLICY_PATH", new_policy):
+            self.assertEqual(renderer.build_report(self.run)[2], "incomplete")
 
     def test_actual_cli_coverage_review_and_html_cannot_claim_missing_backend_passed(self):
         self.import_and_classify()

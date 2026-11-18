@@ -1,4 +1,4 @@
-version: '2.4'
+version: '2.9'
 domain: bullets
 contract_ref: ../data_contract.md
 policy_ref: ../quality_policy.json
@@ -13,27 +13,22 @@ rules:
   - default_limits.bullet_max_chars
   - default_limits.bullets_total_max_chars
 - id: bullets_format
-  type: required
-  source_id: user_delivery_media_v21
-  prompt_fragment: 格式为【相关搜索词／主题标签】正文，优先让标签包含该主题的 eligible 搜索词；标签过长时将词自然放到首句开头。日文标签保留真实关键词和型号写法，含 Ag+ 等拉丁字母也不强制大写。不用 ™ ® © 或 emoji（warning），不写退款保证、联系方式或 ASIN。
+  type: editorial
+  source_id: user_writing_sop_20261118
+  prompt_fragment: 使用自然日语的「短主题：具体说明」，可用全角或半角冒号；兼容旧稿【主题】正文。相关可用搜索词自然放在短主题或首句开头，型号和Ag+等写法不强制大写。去除模板占位符和教学文字，不写退款／无条件保证、联系方式、价格或促销；不以夸张品质口号代替客观信息。
 - id: bullets_decision_order
   type: editorial
-  source_id: user_mobile_layout_20261112
-  prompt_fragment: 每条开头优先相关流量词，再接真实卖点或购买问题。按对象型号选购的耗材以完整机型清单优先，通常占 2–3 条，短名单可占 1 条，允许同一适配主题按系列分多条；开头结合相关词与対応機種①／②／③，不强求五种不同卖点。其余条目容纳材质、尺寸、包装和保养。非机型清单条目继续避免无意义重复、通用空标签及虚构用途。
+  source_id: user_writing_sop_20261118
+  prompt_fragment: 默认顺序为型号与套装、性能与使用价值、适配、更换条件、品质与购买事项。按本品资料和购买判断调整；长适配名单仍可连续占2–3条并合并其余主题，完整性优先；缺乏某主题依据时以其他真实购买信息替代，记录缺口，不虚构卖点。已有竞品结论只用于选题，不强制重新调研。
 - id: bullets_complete_compatibility
   type: required
   source_id: user_compatibility_lists_20261112
   prompt_fragment: 有适配资料的配件／耗材须按 references/consumables.md 在五点完整列出所有已确认 compatible_models。每个型号保持完整，含所有实际后缀；按系列／来源组分配 2–3 条，不用シリーズなど、省略号、范围或仅热门型号替代，不把完整名单只放长描或图片。型号是事实枚举，不须逐个具有关键词流量。核对本品清单的缺失、额外机型、来源和范围，五点 claims 引用对应机型事实。
-- id: bullets_intent_relations
-  type: editorial
-  source_id: cosmo_paper
-  prompt_fragment: 适配清单条目直接分组逐项列出机型，不强套能力／场景句式；其他卖点写清"能力 → 依据 → 适用场景"，并用自然语句带出 intent_map 中的关系：用途（for …）、人群（ideal for …）、地点（in the …）、时节或场合、搭配（pairs
-    with …）、身体部位。COSMO 用这类产品与意图的关系做相关性、导航和推荐；"写出来就加分"是推断，所以只写已确认的关系。
 - id: bullets_evidence_benefit
   type: required
-  source_id: user_product_identity
-  prompt_fragment: 说明真实属性如何支持合理的使用价值。不能从铝材推出承重、从可调角度推出缓解颈痛、从棉质推出耐洗。含数字或规格时引用 confirmed 事实或 measurement_ids，缺证据就不写承诺。
+  source_id: user_writing_sop_20261118
+  prompt_fragment: 已确认结构／规格／测试结果解释对应用途或价值，有什么依据写到什么强度；用途不升级为性能，设备效果或竞品评价不变成本品效果。更换迹象、周期、寿命和品质检验只写给定资料明示的内容；未知时记录缺口。数字规格引用事实或measurement_ids，实际数量、配件数量和套数分开。
 - id: bullets_questions
   type: editorial
-  source_id: amazon_rufus_attributes
-  prompt_fragment: 优先回答 question_reviews 中相关且有事实支持的问题，以及 5W1H 中最关键的问题；相关但无答案资料的问题记为 unsupported，不补造答案。
+  source_id: user_writing_sop_20261118
+  prompt_fragment: 每条回答具体购买问题，避免重复介绍身份或空泛确认。品质／购买信任用前文未展开的真实规格、检验或安装信息承接，不编售后承诺。竞品评论用于发现问题，本品资料和可信关键词决定答案；未表达的事实不补造。
