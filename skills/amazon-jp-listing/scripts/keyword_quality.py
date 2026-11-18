@@ -821,15 +821,19 @@ def coverage(run, write_placement=False):
             # Unknown metrics remain null and semantic relevance still needs review.
             "field_layout": {
                 "title_chars": len(fields.get("title", "")),
+                "title_opening": fields.get("title", "")[:policy["editorial_targets"]["title_opening_chars"][1]],
+                "title_opening_target_chars": policy["editorial_targets"]["title_opening_chars"],
                 "item_highlight_chars": len(fields.get("item_highlight", "")),
                 "title_max_chars": policy["default_limits"]["title_max_chars"],
                 "item_highlight_max_chars": policy["default_limits"]["item_highlight_max_chars"],
+                "bullet_max_chars": policy["default_limits"]["bullet_max_chars"],
                 "top_keywords": [{"keyword": row["keyword"], "searches": row["searches"],
                                   "title_position": (fields.get("title", "").find(row["keyword"])
                                                      if row["keyword"] in fields.get("title", "") else None)}
                                  for row in rows[:10]],
                 "bullet_openings": [
-                    {"field": "bullets[%d]" % index, "heading": (split_bullet(bullet) or ("", ""))[0], "opening": bullet[:80],
+                    {"field": "bullets[%d]" % index, "heading": (split_bullet(bullet) or ("", ""))[0],
+                     "chars": len(bullet), "opening": bullet[:80],
                      "exact_keyword_hits": [row["keyword"] for row in rows
                                             if contains_phrase(bullet[:80], row["keyword"])]}
                     for index, bullet in enumerate(content.get("bullets", [])) if isinstance(bullet, str)],

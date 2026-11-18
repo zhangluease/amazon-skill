@@ -5,9 +5,9 @@ policy_ref: ../quality_policy.json
 sources_ref: ../sources.json
 rules:
 - id: bullets_budget
-  type: editorial
-  source_id: skill_editorial_v2
-  prompt_fragment: 固定交付 5 条。普通文案每条 250、合计 1250 字符是本技能编辑预算；引用了已确认 compatible_models 事实的型号及清单分隔符另计，不为此删型号。上架原文完整提交后端，真实类目字段限制仍须核对；冲突时保留完整稿及真实失败状态，不把本地预算例外当成平台无限长许可。
+  type: required
+  source_id: user_listing_screenshot_layout
+  prompt_fragment: 固定交付 5 条，每条全文最多 250 字符，合计 1250 字符。短主题、型号、空格、标点及分隔符均计入。长名单重新分组并保留完整编号。五条仍放不下时保留完整草稿并标为超限，满足本地预算后再验证后端与类目限制。
   limit_refs:
   - default_limits.bullets_count
   - default_limits.bullet_max_chars
@@ -19,7 +19,7 @@ rules:
 - id: bullets_decision_order
   type: editorial
   source_id: user_writing_sop_20261118
-  prompt_fragment: 默认顺序为型号与套装、性能与使用价值、适配、更换条件、品质与购买事项。按本品资料和购买判断调整；长适配名单仍可连续占2–3条并合并其余主题，完整性优先；缺乏某主题依据时以其他真实购买信息替代，记录缺口，不虚构卖点。已有竞品结论只用于选题，不强制重新调研。
+  prompt_fragment: 默认顺序为型号与套装、性能与使用价值、适配、更换条件、品质与购买事项。按本品资料和购买判断调整；长适配名单按每条 250 字符分组，通常占 2–3 条。位置不足时优先合并或省略独立性能点，保留完整名单和适配限制；缺乏某主题依据时以其他真实购买信息替代，记录缺口，不虚构卖点。已有竞品结论只用于选题，不强制重新调研。
 - id: bullets_complete_compatibility
   type: required
   source_id: user_compatibility_lists_20261112

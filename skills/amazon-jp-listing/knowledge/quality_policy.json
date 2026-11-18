@@ -1,5 +1,5 @@
 {
-  "version": "2.9",
+  "version": "2.10",
   "checked_at": "2026-11-18",
   "default_limits": {
     "title_max_chars": 75,
@@ -8,6 +8,12 @@
     "bullet_max_chars": 250,
     "bullets_total_max_chars": 1250,
     "search_terms_max_bytes": 249
+  },
+  "editorial_targets": {
+    "title_opening_chars": [
+      35,
+      40
+    ]
   },
   "limit_provenance": {
     "title_max_chars": {
@@ -24,18 +30,24 @@
       "note": "本 skill 固定交付 5 条，不声称全类目统一平台数量"
     },
     "bullet_max_chars": {
-      "kind": "skill_default",
-      "source_id": "skill_editorial_v2",
-      "note": "普通文案每条250字符为内部预算；正确引用的已确认机型清单另计，实际平台类目要求另验。"
+      "kind": "user_requirement",
+      "source_id": "user_listing_screenshot_layout",
+      "note": "每条全文最多250字符，含短主题、空格、标点、型号和分隔符。"
     },
     "bullets_total_max_chars": {
       "kind": "editorial_budget",
-      "note": "普通文案合计1250字符为内部预算；正确引用的已确认型号及清单分隔符另计。"
+      "note": "五条全文合计最多1250字符。",
+      "source_id": "user_listing_screenshot_layout"
     },
     "search_terms_max_bytes": {
       "kind": "skill_default",
       "source_id": "skill_editorial_v2",
       "note": "JP 默认 499 UTF-8 字节；执行真实任务时核对日本站目标类目当前要求。"
+    },
+    "title_opening_chars": {
+      "kind": "editorial_target",
+      "source_id": "user_listing_screenshot_layout",
+      "note": "尽量在标题开头35–40字符内交代本品身份、核心品名、关键编号和必要兼容关系。"
     }
   },
   "sites": {
@@ -80,7 +92,7 @@
     }
   },
   "semantic_guidance": {
-    "field_layout": "对照05.field_strategy与七个前台位置：标题用本品品牌、一个完整核心品名与关键编号说明身份／兼容关系，相关流量表达靠前；小标题补适用对象、2–3个有依据的代表型号及真实数量／组成，不整句重复标题或挤掉实售内容。代表型号来自完整适配事实，指标缺失不称热门。五点默认按型号与套装、性能价值、适配、更换条件、品质与购买事项组织；长名单可连续分组，缺依据或非型号适配可调整主题并说明。每条开头自然结合相关词、短主题和具体说明，材质尺寸在正文。核对品牌、编号、范围、主品／配件数量、规格的一致性，不能用字数或覆盖率代替判断。 主品与配件数量分别对应事实，已知时记录count_unit，并核对日文包装表达及图文引用。",
+    "field_layout": "对照05.field_strategy与七个前台位置：标题尽量在前35–40字符用本品品牌、完整核心品名及关键编号交代身份与必要兼容关系；小标题补适用对象、2–3个有依据的代表型号及真实数量／组成，不整句重复标题或挤掉实售内容。代表型号来自完整适配事实，指标缺失不称热门。五点默认按型号与套装、性能价值、适配、更换条件、品质与购买事项组织；长名单先按每条全文250字符分组，位置不足时优先让出独立性能点；缺依据或非型号适配可调整主题并说明。每条开头自然结合相关词、短主题和具体说明，材质尺寸在正文。核对品牌、编号、范围、主品／配件数量、规格的一致性，不能用字数或覆盖率代替判断。 主品与配件数量分别对应事实，已知时记录count_unit，并核对日文包装表达及图文引用。",
     "compatibility_models": "根据本品选购依据检查：型号适配须完整登记并在五点列全给定对象；规格适配说明真实条件；无需型号适配时不强制清单。编号角色由本品身份、字段和完整语义决定，不按前缀猜测，区分本品／替代件标识、适配对象、规格与其他数值。给定词表本身可信，只核对文字、完整后缀、来源和范围；不要求外部二次核验。仅原文无法解析、明确否定或直接冲突时记录具体问题。 同一原词有多个对象时逐项解释否定范围，不以整行含非対応丢弃其他正向适配对象；具体输入冲突结论保留至解决。",
     "qa_relevance": "核对本品关键购买问题的实际覆盖位置及答案依据；缺事实记未声明，不为凑数量编问题或答案。",
     "factual_support": "给定关键词默认可信，无需独立核验；具体属性只支持原文已表达的含义。结构／用途不自动证明性能、效率或健康效果；不把设备效果、竞品卖点或评论变成本品承诺。核对更换迹象、周期／寿命、质量检验和包装声明的具体依据；资料缺失就不声明，不能编造售后或原装同等。",
@@ -89,9 +101,8 @@
   },
   "compatibility_lists": {
     "fact_field": "compatible_models",
-    "exclude_verified_model_tokens_from_editorial_budget": true,
     "source_id": "user_compatibility_lists_20261112",
-    "note": "适配型耗材须在五点完整列出已确认机型，通常占2–3条。例外仅限本地编辑预算；原文完整提交后端，类目限制另验。"
+    "note": "完整列出已确认机型及后缀，通常分2–3条。每条全文计数，先压缩说明和分组，必要时让出独立性能点。五条仍容纳不下时保留完整草稿并标为超限。"
   },
   "keyword_inputs": {
     "trust_provided_keywords": true,

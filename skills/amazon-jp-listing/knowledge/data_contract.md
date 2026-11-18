@@ -1,4 +1,4 @@
-# 本地数据契约 v2.9（Listing schema_version 仍为 "2.1"）
+# 本地数据契约 v2.10（Listing schema_version 仍为 "2.1"）
 
 本地版本只执行 JP/Japanese/ja，主要面向耗材。用户附件名称任意；本文的编号文件名仅用于任务目录内的中间流程，不限制用户原文件命名；最终交付使用 listing.md、listing.json、report.html。来源库中的历史文件名也不是必交附件。
 
@@ -39,7 +39,7 @@ fact_id、measurement_id 和 image_id 在本品画像中唯一。所有 applies_
 - `03_keyword_validation.json` 保存当前检查结果；总验收与报告重算数据，不信任此文件的缓存 passed。
 - `04_kw_tagged.json` 保留原 keyword/label/reason；增加 `role`（identity/attribute/intent/synonym）、`intent_group`、`source`、`traffic_percentage`（未知为 null）、`applies_to`。旧 high/relevant 标签用于兼容，不决定核心品名优先级。该数组由统一工具导出，仅含 eligible 原始词及补充词，另有 keyword_id、origin=raw/product、searches、restrictions；未知流量为 null，0 保持真实的 0。
 - `05_title_keywords.json`：`title_keywords:{high:[],relevant:[]}` 为候选词数组，无数量上限；`protected_terms` 覆盖画像必保词；`placement_plan:[{keyword,target_field,applies_to,reason}]` 非空，只含可用词。coverage --write-placement 根据最终文案写入实际位置（如 title、bullets[2]），不把候选全塞进标题。
-- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录实际标题词、指标来源与选择／取舍；item_highlight 说明实售数量／组成、适用对象和代表型号的选择依据，未知指标或信息缺口明示；bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，如长名单占多条、缺性能／更换依据或规格型耗材调整主题，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
+- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录实际标题词、指标来源及前 35–40 字符内的身份和关键编号安排；item_highlight 说明实售数量／组成、适用对象和代表型号的选择依据，未知指标或信息缺口明示；bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，如长名单占多条、为适配让出独立性能点、缺性能／更换依据或规格型耗材调整主题，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
 - `06_qa.json` 是初始化工具自动写入的可选兼容标记，日本站跳过后端问答：status=skipped、site=JP、reason_code=rufus_us_only、qa_pairs=[]。自行整理的买家问题记录为 local_editorial，不冒充后端采集。
 
 ### 用户表格导入结构（import_schema_version: "1.0"）
@@ -136,9 +136,9 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 - `08_backend_validation.json`: `{records: [{target, payload_sha256, exit_code, response, reused}]}`；重跑 backend 时，本品 payload 未变且已通过时沿用旧记录（reused=true），--no-reuse 强制重新请求。target 固定为 single；response 保留后端 JSON，仅 `ok=true` 且 `errors=[]`、退出码为 0 才通过。响应或 payload 指纹缺失/过期不通过。
 - `08_validation.json`: 汇总本地、关键词审查、语义、后端检查（local/keywords/semantic/backend）；`status` 为 passed/failed/incomplete；fingerprints 绑定 profile/listing/qa 原文件 SHA-256，evidence_fingerprints 的 review_sha256/backend_sha256 绑定复审与后端文件的规范 JSON SHA-256，rules_sha256 绑定当前实际规则、keywords_sha256 绑定重新计算的关键词阶段结果 SHA-256（UTF-8、ensure_ascii=False、sort_keys=True、separators=(',',':')）。报告核对原验收文件存在且指纹匹配；缺失、过期为 incomplete，不以生成了文件代替完成。
 
-`07_keyword_coverage.json`（`keyword_quality.py coverage` 生成，仅供优化参考，不参与验收）：本品 target=single 的可用词数、完整短语覆盖、词级覆盖（大小写与简单英文复数折叠）、按搜索量加权覆盖率、未覆盖高流量词、标题覆盖前 10 词、后台词字节/预算/与标题重复词、暂缓或剔除词的完整短语命中；field_layout 列出标题／小标题字符数、可用前十词的标题零基精确位置（缺失为 null）、每条五点的 heading（从短主题冒号或旧式括号提取）、前 80 字符及精确短语命中（不代表同义表达无效或算法权重）；intent_map 表达位置；按搜索量排序的 fact_unlocks（暂缓词晋级条件）与 unsupported 问题。
+`07_keyword_coverage.json`（`keyword_quality.py coverage` 生成，仅供优化参考，不参与验收）：本品 target=single 的可用词数、完整短语覆盖、词级覆盖（大小写与简单英文复数折叠）、按搜索量加权覆盖率、未覆盖高流量词、标题覆盖前 10 词、后台词字节/预算/与标题重复词、暂缓或剔除词的完整短语命中；field_layout 列出标题／小标题字符数、标题前 40 字符预览及编辑目标区间、五点单条全文上限、可用前十词的标题零基精确位置（缺失为 null）、每条五点的 heading（从短主题冒号或旧式括号提取）、全文字符数、前 80 字符及精确短语命中（不代表同义表达无效或算法权重）；intent_map 表达位置；按搜索量排序的 fact_unlocks（暂缓词晋级条件）与 unsupported 问题。
 
-本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing、compatibility_list_length（已确认型号超普通预算，原文仍须过真实后端／类目检查）。compatibility_unconfirmed 为 incomplete。error：compatibility_model_missing、compatibility_unreferenced、compatible_models_shape、title_banned_character（品牌名中的除外）、search_bytes（JP 预算 499 UTF-8 字节）。
+本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing。compatibility_unconfirmed 为 incomplete。error：bullets_length（每条全文最多 250 字符，合计最多 1250 字符，均包括型号及分隔符）、compatibility_model_missing、compatibility_unreferenced、compatible_models_shape、title_banned_character（品牌名中的除外）、search_bytes（JP 预算 499 UTF-8 字节）。
 
 关键词旧任务修复命令：`python3 scripts/keyword_quality.py register-models --run-dir RUN`，修复后再 export、重写文案并重新验收。
 

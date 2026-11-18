@@ -88,12 +88,13 @@ def jp_fixture():
     return profile, listing
 
 
-def jp_compatibility_fixture():
+def jp_compatibility_fixture(models_per_group=18):
     """Synthetic long lists cover omissions, suffixes, scope and payload preservation."""
     profile, listing = jp_fixture()
-    groups = [["HD-%dA" % n for n in range(5000, 5060)] + ["HD-5016E4"],
-              ["HD-RX%d" % n for n in range(5000, 5060)],
-              ["HD-RXT%dE9" % n for n in range(5000, 5060)]]
+    numbers = range(5000, 5000 + models_per_group)
+    groups = [["HD-%dA" % n for n in numbers] + ["HD-5016E4"],
+              ["HD-RX%d" % n for n in numbers],
+              ["HD-RXT%dE9" % n for n in numbers]]
     for index, models in enumerate(groups):
         fid = "fit-%d" % index
         profile["facts"].append({"fact_id": fid, "field": "compatible_models", "value": models,
@@ -612,12 +613,21 @@ class JapaneseListingTests(unittest.TestCase):
                 listing["bullets"][0] = text
                 self.assertIn("bullet_format", {i["code"] for i in quality.check_local(self.profile, listing)})
 
-    def test_sop_colon_lists_keep_all_compatible_models_and_budget_exception(self):
+    def test_regrouping_colon_bullets_preserves_all_models_within_full_text_limit(self):
         profile, listing, groups = jp_compatibility_fixture()
         listing["bullets"] = [bullet.replace("【", "", 1).replace("】", "：", 1) for bullet in listing["bullets"]]
+        merged = copy.deepcopy(listing)
+        merged["bullets"][0] = "対応機種：" + "、".join(groups[0] + groups[1])
+        merged["claims"][2]["fact_ids"].append("fit-1")
+        merged["bullets"][1] = "購入前の確認：本体の型番をご確認ください。"
+        merged["claims"][3]["fact_ids"].remove("fit-1")
+        merged_issues = quality.check_local(profile, merged)
+        self.assertTrue(any(i["code"] == "bullets_length" and i["path"] == "listing.single.bullets[0]"
+                            and i["severity"] == "error" for i in merged_issues), merged_issues)
+        self.assertNotIn("compatibility_model_missing", {i["code"] for i in merged_issues})
+
         issues = quality.check_local(profile, listing)
         self.assertFalse([i for i in issues if i["severity"] == "error"], issues)
-        self.assertIn("compatibility_list_length", {i["code"] for i in issues})
         text = " ".join(quality.build_payloads(profile, listing)[0]["payload"]["bullets"])
         self.assertTrue(all(model in text for group in groups for model in group))
 
@@ -629,15 +639,15 @@ class JapaneseListingTests(unittest.TestCase):
         self.assertEqual(feedback["heading"], "ペン立て 素材")
         self.assertIn("ペン立て", feedback["exact_keyword_hits"])
 
-    def test_long_compatibility_lists_pass_local_budget_and_preserve_full_payload(self):
-        profile, listing, groups = jp_compatibility_fixture()
+    def test_over_budget_compatibility_lists_fail_and_keep_full_draft(self):
+        profile, listing, groups = jp_compatibility_fixture(models_per_group=60)
         self.assertGreater(sum(map(len, listing["bullets"])), 1250)
         self.assertTrue(all(len(b) > 250 for b in listing["bullets"][:3]))
-        issues = quality.check_local(profile, listing)
-        self.assertFalse([i for i in issues if i["severity"] == "error"], issues)
-        self.assertIn("compatibility_list_length", {i["code"] for i in issues})
-        payload = quality.build_payloads(profile, listing)[0]["payload"]
-        self.assertEqual(payload["bullets"], listing["bullets"])
+        with patch.object(quality.backend_cli, "run_cli") as run_cli:
+            result = quality.run_backend(profile, listing)
+            run_cli.assert_not_called()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("bullets_length", {i["code"] for i in result["issues"]})
         doc, _ = renderer.render_listing(profile, listing, report_view=True)
         _, page = doc.result()
         for group in groups:
@@ -662,13 +672,13 @@ class JapaneseListingTests(unittest.TestCase):
         listing["bullets"][0] = listing["bullets"][0].replace("HD-5016E4", "HD-5016")
         self.assertIn("compatibility_model_missing", {i["code"] for i in quality.check_local(profile, listing)})
 
-    def test_uncited_model_lists_cannot_bypass_editorial_limits(self):
+    def test_models_still_require_fact_references_within_length_limit(self):
         profile, listing, _ = jp_compatibility_fixture()
         for claim in listing["claims"]:
             claim["fact_ids"] = [fid for fid in claim["fact_ids"] if not fid.startswith("fit-")]
         codes = {i["code"] for i in quality.check_local(profile, listing)}
         self.assertIn("compatibility_unreferenced", codes)
-        self.assertIn("bullets_length", codes)
+        self.assertNotIn("bullets_length", codes)
 
     def test_overlapping_sources_do_not_require_repeating_the_same_model(self):
         profile, listing, groups = jp_compatibility_fixture()
@@ -676,12 +686,16 @@ class JapaneseListingTests(unittest.TestCase):
                                   "source_ref": "synthetic-test:second-source", "status": "confirmed"})
         self.assertFalse([i for i in quality.check_local(profile, listing) if i["severity"] == "error"])
 
-    def test_compatibility_exception_does_not_exempt_long_prose(self):
+    def test_full_bullet_character_boundary_includes_heading_and_spaces(self):
         profile, listing, _ = jp_compatibility_fixture()
-        listing["bullets"][0] += "説明" * 140
-        self.assertIn("bullets_length", {i["code"] for i in quality.check_local(profile, listing)})
+        listing["bullets"][0] += "。" + "補" * (249 - len(listing["bullets"][0]))
+        self.assertNotIn("bullets_length", {i["code"] for i in quality.check_local(profile, listing)})
+        listing["bullets"][0] += " "
+        issues = quality.check_local(profile, listing)
+        self.assertTrue(any(i["code"] == "bullets_length" and i["path"] == "listing.single.bullets[0]"
+                            and "251" in i["message"] for i in issues), issues)
 
-    def test_unknown_or_unsourced_compatibility_cannot_enable_length_exception(self):
+    def test_compatibility_requires_confirmed_and_sourced_facts(self):
         for change, expected in (({"status": "unknown"}, "compatibility_unconfirmed"),
                                  ({"source_ref": ""}, "fact_source")):
             with self.subTest(change=change):
@@ -689,7 +703,6 @@ class JapaneseListingTests(unittest.TestCase):
                 profile["facts"][1].update(change)
                 issues = quality.check_local(profile, listing)
                 self.assertIn(expected, {i["code"] for i in issues})
-                self.assertIn("bullets_length", {i["code"] for i in issues})
 
     def test_model_fact_requires_individual_full_identifiers(self):
         profile, listing, _ = jp_compatibility_fixture()
@@ -699,7 +712,7 @@ class JapaneseListingTests(unittest.TestCase):
 
     def test_field_layout_feedback_is_advisory_and_keeps_metrics_unknown(self):
         self.import_and_classify()
-        self.listing["title"] = "テスト ペン立て"
+        self.listing["title"] = "テスト ペン立て " + "文" * 35
         self.listing["item_highlight"] = "文具収納用"
         self.listing["bullets"][0] = "【ペン立て】ステンレス製。高さ15 cm。"
         write(self.run, "listing.json", self.listing)
@@ -707,6 +720,9 @@ class JapaneseListingTests(unittest.TestCase):
         result = keywords.coverage(self.run, write_placement=True)
         layout = result["targets"]["single"]["field_layout"]
         self.assertEqual((layout["title_chars"], layout["item_highlight_chars"]), (len(self.listing["title"]), 5))
+        self.assertEqual(layout["title_opening_target_chars"], [35, 40])
+        self.assertEqual(layout["title_opening"], self.listing["title"][:40])
+        self.assertEqual(layout["bullet_openings"][0]["chars"], len(self.listing["bullets"][0]))
         self.assertEqual(len(layout["bullet_openings"]), 5)
         self.assertIn("ペン立て", layout["bullet_openings"][0]["exact_keyword_hits"])
         metrics = {r["keyword"]: r for r in layout["top_keywords"]}

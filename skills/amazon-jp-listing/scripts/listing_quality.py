@@ -498,36 +498,28 @@ def _check_local(profile, listing, qa=None):
         bullets = content.get("bullets")
         if not isinstance(bullets, list) or len(bullets) != limits["bullets_count"] or any(not nonempty(b) for b in _list(bullets)):
             add("bullets_shape", path + ".bullets", "Exactly five nonempty bullet strings are required")
-        valid_bullets = [b for b in _list(bullets) if isinstance(b, str)]
-        for index, bullet in enumerate(valid_bullets):
+        bullet_limit = limits["bullet_max_chars"]
+        total_chars = 0
+        for index, bullet in enumerate(_list(bullets)):
+            if not isinstance(bullet, str):
+                continue
+            bullet_path = path + ".bullets[%d]" % index
             parts = split_bullet(bullet)
             if not parts or (spaced_language and _has_lowercase(parts[0])):
-                add("bullet_format", path + ".bullets[%d]" % index,
-                    "Use a short topic followed by ： or : and body text; legacy 【topic】body is also accepted. Preserve Japanese keyword and model spelling")
-        editorial_bullets = list(valid_bullets)
-        if policy.get("compatibility_lists", {}).get("exclude_verified_model_tokens_from_editorial_budget"):
-            allowed = {"all"}
-            for index, bullet in enumerate(valid_bullets):
-                referenced = {fid for claim in _list(content.get("claims")) if isinstance(claim, dict)
-                              and claim.get("field") == "bullets[%d]" % index
-                              for fid in _list(claim.get("fact_ids")) if isinstance(fid, str)}
-                models = [model for fid, (owner, fact) in facts.items() if fid in referenced and owner in allowed
-                          and fact.get("field") == "compatible_models" and fact.get("status") == "confirmed"
-                          and nonempty(fact.get("source_ref")) and valid_model_list(fact.get("value"))
-                          for model in fact["value"]]
-                pattern = model_pattern(models)
-                if pattern:
-                    editorial_bullets[index] = re.sub(pattern.pattern + r"[\s、,，;；/／・|]*", "", bullet, flags=re.I)
-            if (editorial_bullets != valid_bullets and (any(len(b) > limits["bullet_max_chars"] for b in valid_bullets)
-                    or sum(map(len, valid_bullets)) > limits["bullets_total_max_chars"])):
-                add("compatibility_list_length", path + ".bullets",
-                    "Verified model IDs are excluded only from local editorial budgets; full bullets remain unchanged for backend/category validation (raw %d chars, prose %d chars)"
-                    % (sum(map(len, valid_bullets)), sum(map(len, editorial_bullets))), "warning")
-        if any(len(b) > limits["bullet_max_chars"] for b in editorial_bullets) or sum(map(len, editorial_bullets)) > limits["bullets_total_max_chars"]:
-            add("bullets_length", path + ".bullets", "Bullet or combined editorial budget exceeded")
-        for index, bullet in enumerate(valid_bullets):
+                add("bullet_format", bullet_path,
+                    "Use a short topic followed by ： or : and body text. Legacy 【topic】body is also accepted.")
+            length = len(bullet)
+            total_chars += length
+            if length > bullet_limit:
+                add("bullets_length", bullet_path,
+                    "Full bullet uses %d characters (limit %d, including models and separators). Regroup complete models and shorten prose."
+                    % (length, bullet_limit))
             if PROHIBITED_BULLET_SYMBOLS.search(bullet):
-                add("bullet_prohibited_symbol", path + ".bullets[%d]" % index, "Amazon bullet guidelines disallow ™ ® © and emoji", "warning")
+                add("bullet_prohibited_symbol", bullet_path, "Amazon bullet guidelines disallow ™ ® © and emoji", "warning")
+        total_limit = limits["bullets_total_max_chars"]
+        if total_chars > total_limit:
+            add("bullets_length", path + ".bullets",
+                "All bullets use %d characters (combined limit %d)" % (total_chars, total_limit))
         for field in FRONT_FIELDS + ("search_terms",):
             value = _field(content, field)
             if isinstance(value, str):
