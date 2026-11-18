@@ -53,6 +53,27 @@ def write_json(path, data):
         staging.replace(path)
 
 
+def prepare_package(dependency, packages):
+    if not packages.is_dir():
+        packages.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with TemporaryDirectory(prefix=".package-", dir=packages.parent) as directory:
+            staging = Path(directory) / "packages"
+            command = [sys.executable, "-m", "pip", "install", "--quiet",
+                       "--disable-pip-version-check", "--no-input", "--only-binary=:all:",
+                       "--target", str(staging), dependency]
+            try:
+                subprocess.run(command, check=True, timeout=120,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except (OSError, subprocess.SubprocessError):
+                raise SetupError(f"Could not install {dependency}. Check pip and package network access.") from None
+            try:
+                staging.rename(packages)
+            except OSError:
+                if not packages.is_dir():
+                    raise
+    sys.path.insert(0, str(packages))
+
+
 def prepare_excel():
     try:
         import_module("openpyxl")
@@ -60,26 +81,7 @@ def prepare_excel():
     except ModuleNotFoundError as error:
         if error.name != "openpyxl":
             raise SetupError("The current Python has an incomplete openpyxl installation.") from None
-
-    packages = CACHE / "python" / EXCEL_DEPENDENCY.replace("==", "-")
-    if not packages.is_dir():
-        packages.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with TemporaryDirectory(prefix=".excel-", dir=packages.parent) as directory:
-            staging = Path(directory) / "packages"
-            command = [sys.executable, "-m", "pip", "install", "--quiet",
-                       "--disable-pip-version-check", "--no-input", "--only-binary=:all:",
-                       "--target", str(staging), EXCEL_DEPENDENCY]
-            try:
-                subprocess.run(command, check=True, timeout=120,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except (OSError, subprocess.SubprocessError):
-                raise SetupError("Could not prepare Excel export. Check pip and package network access.") from None
-            try:
-                staging.rename(packages)
-            except OSError:
-                if not packages.is_dir():
-                    raise
-    sys.path.insert(0, str(packages))
+    prepare_package(EXCEL_DEPENDENCY, CACHE / "python" / EXCEL_DEPENDENCY.replace("==", "-"))
 
 
 def upstream_locations():
