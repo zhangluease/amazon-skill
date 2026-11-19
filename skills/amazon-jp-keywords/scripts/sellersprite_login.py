@@ -22,6 +22,16 @@ class LoginError(Exception):
     """Login failure that can be shown without revealing browser state."""
 
 
+def close_owned_browser(browser, error_type):
+    """Finish each context before closing this script's isolated browser."""
+    try:
+        for context in browser.contexts:
+            with suppress(error_type):
+                context.close()
+    finally:
+        browser.close()
+
+
 def launch_browser(chromium, error_type, packages, *, prepare):
     for channel in ("chrome", "msedge"):
         try:
@@ -77,7 +87,7 @@ def desktop_browser(*, prepare):
                 raise LoginError("SELLERSPRITE_BROWSER_PAGE_FAILED") from None
             finally:
                 with suppress(Error):
-                    browser.close()
+                    close_owned_browser(browser, Error)
     except (Error, OSError):
         raise LoginError("SELLERSPRITE_PLAYWRIGHT_DRIVER_FAILED") from None
     finally:
