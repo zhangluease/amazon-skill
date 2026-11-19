@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { ensureEnvironment } = require('./environment.cjs');
+const { closeOwnedBrowser } = require('./browser_lifecycle.cjs');
 const { createHandoff } = require('./human_verification.cjs');
 const { acquireImageSearchGate } = require('./huaban_image_rate_limit.cjs');
 const { validateImageUrl, readReference, submitReference, imageSearchUrl, imageError,
@@ -275,7 +276,7 @@ async function collect(options, dependencies = {}) {
     throw error;
   } finally {
     try { await imageGate?.release(); }
-    finally { await session.browser.close().catch(() => {}); }
+    finally { await closeOwnedBrowser(session.browser).catch(() => {}); }
   }
 }
 

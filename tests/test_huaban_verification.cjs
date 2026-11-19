@@ -50,14 +50,18 @@ async function fixture(t, options = {}) {
   let closed = false, connected = true;
   const page = { async screenshot() {}, async bringToFront() { calls.push('bringToFront'); },
     async goto() { calls.push('goto'); }, isClosed() { return closed; } };
-  const visible = { async newContext(state) {
+  const visibleContext = { async newPage() { return page; }, async close() {} };
+  const visible = { contexts: () => [visibleContext], async newContext(state) {
     calls.push(state.storageState);
-    return { async newPage() { return page; } };
+    return visibleContext;
   }, isConnected() { return connected; }, async close() { connected = false; } };
-  const original = { async close() { calls.push('close_original'); }, isConnected() { return true; } };
-  const session = { browser: original, page, context: { async storageState() {
+  const originalContext = { async close() { calls.push('close_original_context'); }, async storageState() {
     return { cookies: [{ name: 'fixture-session', value: 'DO_NOT_LOG' }], origins: [] };
-  } }, headless: true, contextOptions: { locale: 'zh-CN' } };
+  } };
+  const original = { contexts: () => [originalContext], async close() { calls.push('close_original'); },
+    isConnected() { return true; } };
+  const session = { browser: original, page, context: originalContext,
+    headless: true, contextOptions: { locale: 'zh-CN' } };
   let inspected = 0;
   const handoff = createHandoff({ session, output, onPage() { calls.push('onPage'); },
     inspect: async () => ++inspected === 1 ? challenge : normal,
@@ -74,6 +78,7 @@ test('a challenge opens one visible session, transfers only in-memory state and 
   assert.equal(f.session.headless, false);
   assert.equal(f.calls.filter(x => x === 'launch').length, 1);
   assert.ok(f.calls.includes('close_original'));
+  assert.ok(f.calls.indexOf('close_original_context') < f.calls.indexOf('close_original'));
   assert.equal(f.calls.find(x => typeof x === 'object').cookies[0].value, 'DO_NOT_LOG');
   assert.equal((await f.report()).status, 'completed');
   assert.equal(JSON.stringify(f.events).includes('DO_NOT_LOG'), false);

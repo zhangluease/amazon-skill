@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { ensureEnvironment } = require('./environment.cjs');
+const { closeOwnedBrowser } = require('./browser_lifecycle.cjs');
 const { desktopAvailability } = require('./human_verification.cjs');
 const { defaultStateFile } = require('./huaban_image_search.cjs');
 const { inside } = require('./sellersprite_session.cjs');
@@ -66,7 +67,7 @@ async function login(options = {}) {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
     throw Error('HUABAN_LOGIN_TIMEOUT');
-  } finally { await browser.close().catch(() => {}); }
+  } finally { await closeOwnedBrowser(browser).catch(() => {}); }
 }
 
 if (require.main === module) Promise.resolve().then(async () => {

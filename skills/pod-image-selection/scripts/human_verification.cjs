@@ -4,6 +4,7 @@ const syncFs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { setTimeout: delay } = require('node:timers/promises');
+const { closeOwnedBrowser } = require('./browser_lifecycle.cjs');
 
 const HUMAN = /确认.{0,4}(?:您|你).{0,4}真人|验证.{0,4}(?:您|你).{0,4}(?:真人|人类)|人机验证|请完成.{0,8}验证|verify.{0,30}(?:human|not a robot)|confirm.{0,20}human|checking your browser|security verification|captcha/i;
 const SECURITY = /安全验证|访问验证|访问校验|安全检查|security check/i;
@@ -105,9 +106,9 @@ function createHandoff({ session, output, onPage, mode = 'auto', timeoutMs = 300
         const previous = session.browser;
         Object.assign(session, { browser: visible, context, page, headless: false });
         onPage(page);
-        await previous.close();
+        await closeOwnedBrowser(previous);
       } catch {
-        if (visible && visible !== session.browser) await visible.close().catch(() => {});
+        if (visible && visible !== session.browser) await closeOwnedBrowser(visible).catch(() => {});
         await publish({ status: 'browser_open_failed', desktop: access,
           message: '无法打开可见浏览器。请检查本机桌面或使用平台的远程浏览器接管入口。' });
         throw handoffError('HUMAN_VERIFICATION_REQUIRED', report.message, report);

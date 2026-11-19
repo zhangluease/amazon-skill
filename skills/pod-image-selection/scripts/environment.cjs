@@ -8,6 +8,7 @@ const { createRequire } = require('node:module');
 const { execFile, spawnSync } = require('node:child_process');
 const { promisify } = require('node:util');
 const { desktopAvailability } = require('./human_verification.cjs');
+const { closeOwnedBrowser } = require('./browser_lifecycle.cjs');
 const execute = promisify(execFile);
 const SKILL = path.resolve(__dirname, '..');
 const VERSION = require('../package.json').dependencies.playwright;
@@ -125,7 +126,7 @@ async function launchAvailable(playwright, { preference = 'auto', headless = tru
       await page.close();
       return { browser, engine, attempts };
     } catch (error) {
-      if (browser) await browser.close().catch(() => {});
+      if (browser) await closeOwnedBrowser(browser).catch(() => {});
       attempts.push({ engine, category: /executable.*(?:exist|found)|not found|distribution.*not found/i.test(String(error.message))
         ? 'browser_missing' : 'browser_launch_failed' });
     }
@@ -223,7 +224,7 @@ async function ensureEnvironment(options = {}) {
   report.report_path = path.join(output, 'environment.json');
   try { await fs.writeFile(report.report_path, JSON.stringify(report, null, 2) + '\n'); }
   catch { report.ready = false; report.checks.output.status = 'error'; }
-  if (launched?.browser && (!options.keepBrowser || !report.ready)) await launched.browser.close();
+  if (launched?.browser && (!options.keepBrowser || !report.ready)) await closeOwnedBrowser(launched.browser);
   return { report, browser: report.ready && options.keepBrowser ? launched?.browser : null,
     playwright: runtime.playwright, python };
 }

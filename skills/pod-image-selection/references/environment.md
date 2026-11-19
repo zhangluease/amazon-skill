@@ -36,6 +36,8 @@ Playwright 浏览器的下载和启动共用 `~/.amazon-skill/config.json` 的 `
 
 ## 独立排障
 
+浏览器收尾只针对脚本自己启动的实例：先等待各个 `BrowserContext.close()` 完成，再调用 `Browser.close()`；正常完成和进入 `finally` 的失败路径使用同一收尾逻辑。卖家精灵的持久化授权窗口使用 `context.close()`。复用用户当前浏览器查看 PODQHY 效果时，按确认流程保留页面，不退出用户的整个浏览器。不要用 `killall`、`pkill`、强制结束进程或修改浏览器“正常退出”标记来隐藏恢复提示。外部强制终止、驱动崩溃或系统关机可能使收尾无法完成，不能保证所有退出方式都不会触发恢复提示。
+
 卖家精灵用 `sellersprite_browser.cjs check/prepare --out ...` 检查或准备授权环境；花瓣用 `environment.cjs check/prepare --out ...`。普通search/采集入口已包含所需检查。
 
 `POD_HUABAN_PYTHON` 可指定Python；`POD_HUABAN_CACHE_DIR` 可指定运行库缓存。默认缓存目录名为pod-huaban-materials。check/prepare仅检查环境，不证明站点连接或账号有效。
