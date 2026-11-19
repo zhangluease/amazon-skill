@@ -49,7 +49,7 @@ python3 scripts/configure.py status
 
 将完整文件夹交给Agent安装即可。入口自动处理依赖和会话；需要真人登录时按提示操作。详见[竞品查询](skills/pod-image-selection/references/sellersprite-access.md)、[花瓣初筛](skills/pod-image-selection/references/huaban-workflow.md)和[环境与人工接管](skills/pod-image-selection/references/environment.md)。完整取数与自动授权的真实账号流程仍在试用验证中。
 
-选图后可继续制作 [PODQHY 成衣预览](skills/pod-image-selection/references/podqhy-workflow.md)：先沿用用户已指定的产品编号/SKU 或商品链接；未指定时主动询问并等待选择，再通过接口读取该产品全部设计面尺寸，用 Pillow 适配图片、检测空白与透明度、处理透明底，再放入产品检查前后效果。P16900 仅为测试案例，不作为默认产品。当前模板和原图读取使用 HTTP，带登录态的上传和效果预览复用可见页面；需要登录时交给用户完成。最终展示真实效果截图，等待用户确认后再继续保存等操作。
+选图后可继续制作 [PODQHY 成衣预览](skills/pod-image-selection/references/podqhy-workflow.md)：先沿用用户已指定的产品编号/SKU 或商品链接；未指定时主动询问并等待选择，再通过接口读取该产品全部设计面尺寸，用 Pillow 适配图片、检测空白与透明度、处理透明底，再放入产品检查前后效果。P16900 仅为测试案例，不作为默认产品。当前模板和原图读取使用 HTTP，带登录态的上传和效果预览复用可见页面；需要登录时交给用户完成。最终逐张交付实际列表中全部视角的纯效果图，不带缩略图栏、放大按钮等页面控件，同时提供完整图库 `effects.html` 和数量清单，等待用户确认后再继续保存等操作。
 
 ## 日本站关键词查找
 
