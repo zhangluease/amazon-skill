@@ -76,7 +76,7 @@ python3 "SKILL/scripts/amazon_jp_autocomplete.py" \
 python3 "SKILL/scripts/sellersprite_keyword_miner.py" search --out "RUN" "スピーカー"
 ```
 
-会话缺失或失效时，脚本自动打开卖家精灵登录页。请用户在弹出的窗口完成登录，脚本会保存会话并从当前页继续。登录取消或失败时保留已取得的页面，继续其他渠道。查询结果和覆盖信息保存为 `sellersprite-keywords.json` 和 `sellersprite-keywords.xlsx`，已取得的原词保留，月搜索量、购买量和 PPC 竞价按来源单列。
+会话缺失或失效时，脚本按需准备浏览器并打开卖家精灵登录页。请用户在弹出的窗口完成登录，保持同一搜索进程运行，脚本会保存会话并从当前页继续。未弹窗且脚本返回浏览器错误时，执行[浏览器检查](references/sellersprite-keyword-miner.md#浏览器检查)。登录取消或失败时保留已取得的页面，继续其他渠道。查询结果和覆盖信息保存为 `sellersprite-keywords.json` 和 `sellersprite-keywords.xlsx`，已取得的原词保留，月搜索量、购买量和 PPC 竞价按来源单列。
 
 ### 厂家官网
 

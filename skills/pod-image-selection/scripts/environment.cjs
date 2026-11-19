@@ -71,6 +71,16 @@ function findNpm() {
   return null;
 }
 
+async function readBrowserConfig(python) {
+  const { stdout } = await execute(python.command, [...python.prefix,
+    path.join(__dirname, 'amazon_config.py'), 'browser-status'],
+  { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 5000, windowsHide: true });
+  const settings = JSON.parse(stdout);
+  if (typeof settings.cache_dir !== 'string' || !path.isAbsolute(settings.cache_dir))
+    throw Error('Invalid browser cache directory');
+  return settings;
+}
+
 function findPlaywright(roots = [SKILL, cacheRoot()]) {
   const rejected = [];
   for (const root of roots) {
@@ -153,9 +163,24 @@ async function ensureEnvironment(options = {}) {
   report.checks.npm = npm ? { status: 'ok', version: npm.version, required: false } : {
     status: 'missing', required: false, remedy: '需要准备依赖时，请修复 Node.js 附带的 npm。' };
   report.checks.output = await outputCheck(output);
-  let runtime = findPlaywright();
   const basicsReady = ['node', 'python', 'output'].every(key => report.checks[key].status === 'ok');
-  if (!runtime.playwright && options.prepare && basicsReady && npm) {
+  if (basicsReady) {
+    try {
+      const settings = await readBrowserConfig(python);
+      // Playwright resolves its browser registry on import. Future launches and
+      // the install subprocess must inherit the same directory.
+      process.env.PLAYWRIGHT_BROWSERS_PATH = settings.cache_dir;
+      report.checks.browser_config = { status: 'ok', ...settings };
+    } catch {
+      report.checks.browser_config = { status: 'error',
+        remedy: '检查公共配置文件能否读取，以及 browser.cache_dir 是否为本机绝对路径。' };
+    }
+  }
+  const configured = report.checks.browser_config?.status === 'ok';
+  const desktopRequired = options.headless === false && !report.checks.human_handoff.available;
+  const canLaunch = basicsReady && configured && !desktopRequired;
+  let runtime = canLaunch ? findPlaywright() : { rejected: [] };
+  if (!runtime.playwright && options.prepare && canLaunch && npm) {
     try {
       process.stderr.write('正在为花瓣 skill 准备私有 Playwright 运行环境…\n');
       await installPlaywright(npm, report.runtime_cache);
@@ -166,14 +191,17 @@ async function ensureEnvironment(options = {}) {
         remedy: '检查 npm 软件源、代理或网络后重试；本次安装已停止，不会修改全局 npm 包。' };
     }
   }
-  report.checks.playwright = runtime.playwright ? { status: 'ok', version: runtime.version, package_path: runtime.packagePath }
+  report.checks.playwright = !canLaunch ? { status: 'skipped' }
+    : runtime.playwright ? { status: 'ok', version: runtime.version, package_path: runtime.packagePath }
     : { status: runtime.rejected.length ? 'version_mismatch' : 'missing', expected: VERSION,
       rejected: runtime.rejected, remedy: '运行 environment.cjs prepare，按需安装到用户缓存目录。' };
   let launched;
-  if (basicsReady && runtime.playwright) {
+  if (canLaunch && runtime.playwright) {
     launched = await launchAvailable(runtime.playwright, { preference: options.browserPreference || 'auto',
       headless: options.headless !== false });
-    if (!launched.browser && options.prepare && options.browserPreference !== 'chrome') {
+    const chromiumMissing = launched.attempts.some(attempt =>
+      attempt.engine === 'chromium' && attempt.category === 'browser_missing');
+    if (!launched.browser && options.prepare && chromiumMissing) {
       try {
         process.stderr.write('正在准备 Playwright 管理的 Chromium 浏览器…\n');
         await installChromium(runtime);
@@ -185,10 +213,12 @@ async function ensureEnvironment(options = {}) {
       }
     }
     report.checks.browser = launched.browser ? { status: 'ok', engine: launched.engine,
-      version: launched.browser.version(), launch_verified: true } : {
+      version: launched.browser.version(), launch_verified: true, headed: options.headless === false } : {
       status: 'error', attempts: launched.attempts,
       remedy: '运行 prepare；若仍无法启动，检查系统运行库、浏览器安装或企业执行策略。' };
-  } else report.checks.browser = { status: 'skipped', remedy: '先解决 Node、Python、输出目录或 Playwright 问题。' };
+  } else if (desktopRequired) report.checks.browser = { status: 'error', category: 'desktop_required',
+    remedy: '请在用户能看到窗口的桌面进程中执行。' };
+  else report.checks.browser = { status: 'skipped', remedy: '先解决环境报告中的前置检查。' };
   report.ready = ['node', 'python', 'output', 'playwright', 'browser'].every(key => report.checks[key].status === 'ok');
   report.report_path = path.join(output, 'environment.json');
   try { await fs.writeFile(report.report_path, JSON.stringify(report, null, 2) + '\n'); }
@@ -203,6 +233,7 @@ function parseArguments(argv) {
   if (!['check', 'prepare', 'smoke'].includes(command)) throw Error('Unknown environment command');
   const options = { command, query: '狗 动漫', limit: 3 };
   for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--headed') { options.headed = true; continue; }
     const key = argv[i].replace(/^--/, ''), value = argv[++i];
     if (!['out', 'query', 'limit', 'browser'].includes(key) || !value) throw Error('Invalid environment option');
     options[key] = value;
@@ -219,7 +250,7 @@ async function main(argv = process.argv.slice(2)) {
     const out = path.resolve(options.out || path.join(process.cwd(), 'reports', 'pod-materials', 'environment-smoke'));
     try {
       const summary = await require('./huaban_browser.cjs').collect({ query: options.query, limit: options.limit,
-        similar: [], board: [], out, quiet: true, browser: options.browser || 'auto' });
+        similar: [], board: [], out, quiet: true, browser: options.browser || 'auto', headed: options.headed });
       const passed = summary.candidates > 0 && summary.cached === summary.candidates;
       const result = { ready: passed, network_tested: true, command: 'smoke', summary, output: out };
       await fs.writeFile(path.join(out, 'smoke.json'), JSON.stringify(result, null, 2));
@@ -236,7 +267,7 @@ async function main(argv = process.argv.slice(2)) {
     }
   }
   const { report } = await ensureEnvironment({ out: options.out, browserPreference: options.browser || 'auto',
-    prepare: options.command === 'prepare' });
+    prepare: options.command === 'prepare', headless: !options.headed });
   console.log(JSON.stringify({ command: options.command, ...report }));
   return report.ready ? 0 : 2;
 }

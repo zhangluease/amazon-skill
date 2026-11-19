@@ -2,6 +2,8 @@
 
 普通竞品查询需要Node.js18+、Python3.9+标准库；直接运行search，由入口检查依赖。卖家精灵授权和花瓣采集按需准备package.json锁定版本的Playwright及浏览器。缺依赖只准备一次，账号或网站错误不反复重装。
 
+Playwright 浏览器的下载和启动共用 `~/.amazon-skill/config.json` 的 `browser.cache_dir`，与日本站关键词技能使用同一规则。未配置时读取绝对路径 `PLAYWRIGHT_BROWSERS_PATH`，或使用当前系统用户的 `ms-playwright` 默认缓存。不同 Playwright 版本可在该目录保存各自需要的浏览器，在版本兼容时复用。
+
 ## 卖家精灵会话
 
 固定复用以下专用目录：
@@ -37,3 +39,5 @@
 卖家精灵用 `sellersprite_browser.cjs check/prepare --out ...` 检查或准备授权环境；花瓣用 `environment.cjs check/prepare --out ...`。普通search/采集入口已包含所需检查。
 
 `POD_HUABAN_PYTHON` 可指定Python；`POD_HUABAN_CACHE_DIR` 可指定运行库缓存。默认缓存目录名为pod-huaban-materials。check/prepare仅检查环境，不证明站点连接或账号有效。
+
+排查登录窗口没有出现时，可在本机桌面执行 `node scripts/environment.cjs check --headed --out "RUN/environment"`。需要补齐依赖时使用 `prepare --headed`。卖家精灵插件授权可加 `--browser chromium` 检查其指定的浏览器。输出中的 `checks.browser_config` 是实际缓存路径，`checks.browser` 记录启动测试。

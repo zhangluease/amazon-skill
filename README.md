@@ -22,6 +22,9 @@ python3 scripts/configure.py status
   "aba_mcp": {
     "url": "https://spapi-mcp.bamboost.info/mcp",
     "access_token": ""
+  },
+  "browser": {
+    "cache_dir": ""
   }
 }
 ```
@@ -30,7 +33,11 @@ python3 scripts/configure.py status
 
 公共文件保存在当前操作系统用户的主目录，macOS/Linux 为 `~/.amazon-skill/config.json`，Windows 为 `%USERPROFILE%\.amazon-skill\config.json`。这里只使用新配置，不迁移或搜索旧技能配置；每个新系统用户需配置一次。J-PlatPat、花瓣的专属访问方式见各自技能说明。
 
-公共读取逻辑维护在 `shared/amazon_config.py`，两个相关技能随包包含同版本副本，因此单独安装一个技能也能使用公共文件。修改公共逻辑后运行 `python3 scripts/sync_shared_config.py`；`--check` 检查发布副本是否同步。
+关键词挖掘和 POD 选图从 `browser.cache_dir` 读取共享的 Playwright 浏览器缓存目录。留空时沿用已设置的绝对路径 `PLAYWRIGHT_BROWSERS_PATH`，否则使用当前用户的默认缓存。在 Windows 上通常是 `%LOCALAPPDATA%\ms-playwright`，macOS 是 `~/Library/Caches/ms-playwright`，Linux 是 `$XDG_CACHE_HOME/ms-playwright` 或 `~/.cache/ms-playwright`。改目录时向 `configure` 的标准输入传入 `{"browser":{"cache_dir":"本机绝对路径"}}`。同一系统用户下的各项目共用该目录，相同的浏览器版本会复用。站点登录会话各自保存。
+
+`python3 scripts/configure.py browser-status` 查看生效路径。验证浏览器能实际启动，使用[关键词浏览器检查](skills/amazon-jp-keywords/references/sellersprite-keyword-miner.md#浏览器检查)或 [POD 环境检查](skills/pod-image-selection/references/environment.md#独立排障)。
+
+公共读取逻辑维护在 `shared/amazon_config.py`，三个相关技能随包包含同版本副本，因此单独安装一个技能也能使用公共文件。修改公共逻辑后运行 `python3 scripts/sync_shared_config.py`，用 `--check` 检查发布副本是否同步。
 
 ## POD 选图
 

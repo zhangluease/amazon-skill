@@ -14,7 +14,7 @@ STATE = Path.home() / ".amazon-skill"
 BACKEND_URL = "https://mcp.yixunkuajing.com"
 ABA_URL = "https://spapi-mcp.bamboost.info/mcp"
 DEFAULT_CONFIG = {"backend_url": BACKEND_URL, "backend_token": "",
-                  "aba_mcp": {"url": ABA_URL, "access_token": ""}}
+                  "aba_mcp": {"url": ABA_URL, "access_token": ""}, "browser": {"cache_dir": ""}}
 
 
 def config_path():
@@ -68,6 +68,49 @@ def aba_settings(config):
     return {"url": url, "access_token": token or None, "source": "aba_mcp" if token else None}
 
 
+def browser_cache_path(value):
+    if (not isinstance(value, str) or value != value.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise ValueError("BROWSER_CACHE_DIR_INVALID")
+    if not value:
+        return None
+    try:
+        path = Path(value).expanduser()
+    except RuntimeError:
+        raise ValueError("BROWSER_CACHE_DIR_INVALID") from None
+    if not path.is_absolute():
+        raise ValueError("BROWSER_CACHE_DIR_ABSOLUTE_REQUIRED")
+    return path
+
+
+def browser_settings(config):
+    section = config.get("browser", {})
+    if not isinstance(section, dict):
+        raise ValueError("BROWSER_CONFIG_INVALID")
+    directory = browser_cache_path(section.get("cache_dir", ""))
+    if directory is not None:
+        return {"cache_dir": str(directory), "source": "config"}
+    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if override and override != "0":
+        return {"cache_dir": str(browser_cache_path(override)), "source": "environment"}
+    home = Path.home()
+    if sys.platform == "win32":
+        default = home / "AppData" / "Local"
+        base = Path(os.environ.get("LOCALAPPDATA") or default)
+    elif sys.platform == "darwin":
+        base = default = home / "Library" / "Caches"
+    else:
+        default = home / ".cache"
+        base = Path(os.environ.get("XDG_CACHE_HOME") or default)
+    return {"cache_dir": str((base if base.is_absolute() else default) / "ms-playwright"),
+            "source": "platform_default"}
+
+
+def browser_status(root=STATE):
+    path = Path(root) / "config.json"
+    return browser_settings(read_config(path) if path.exists() or path.is_symlink() else {})
+
+
 def _write_config(root, config):
     root = Path(root)
     path = root / "config.json"
@@ -102,9 +145,9 @@ def init_config(root=STATE):
 
 
 def configure(root, payload):
-    """Update supplied service fields once for every installed Amazon skill."""
+    """Update supplied fields once for every installed Amazon skill."""
     if (not isinstance(payload, dict) or not payload
-            or set(payload) - {"backend_url", "backend_token", "aba_mcp"}):
+            or set(payload) - {"backend_url", "backend_token", "aba_mcp", "browser"}):
         raise ValueError("EXPECTED_SHARED_SERVICE_FIELDS")
     if "backend_url" in payload:
         validate_backend_url(payload["backend_url"])
@@ -116,6 +159,11 @@ def configure(root, payload):
                 or set(section) - {"url", "access_token"}):
             raise ValueError("EXPECTED_ABA_MCP_ACCESS_TOKEN")
         aba_settings(payload)
+    if "browser" in payload:
+        section = payload["browser"]
+        if not isinstance(section, dict) or set(section) != {"cache_dir"}:
+            raise ValueError("EXPECTED_BROWSER_CACHE_DIR")
+        browser_cache_path(section["cache_dir"])
     root = Path(root)
     path = root / "config.json"
     config = read_config(path) if path.exists() or path.is_symlink() else copy.deepcopy(DEFAULT_CONFIG)
@@ -131,6 +179,9 @@ def configure(root, payload):
             raise ValueError("ABA_MCP_CONFIG_INVALID")
         config["aba_mcp"] = {**previous, **payload["aba_mcp"]}
         config["aba_mcp"].setdefault("url", ABA_URL)
+    if "browser" in payload:
+        previous = config.get("browser")
+        config["browser"] = {**(previous if isinstance(previous, dict) else {}), **payload["browser"]}
     _write_config(root, config)
     return {"status": "completed", "config_file": str(path), "updated": sorted(payload)}
 
@@ -160,15 +211,23 @@ def config_status(root=STATE):
     except ValueError as error:
         aba_error = str(error)
         settings = {"access_token": None, "source": None}
+    browser = None
+    browser_error = None
+    try:
+        browser = browser_settings(config)
+    except ValueError as error:
+        browser_error = str(error)
     return {"config_file": str(path), "exists": path.is_file(),
             "backend_token_configured": backend_configured, "backend_config_error": backend_error,
             "aba_mcp_access_token_configured": settings["access_token"] is not None,
-            "aba_mcp_config_source": settings["source"], "aba_mcp_config_error": aba_error}
+            "aba_mcp_config_source": settings["source"], "aba_mcp_config_error": aba_error,
+            "browser": browser, "browser_config_error": browser_error}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "status", "configure", "headers"), nargs="?", default="status")
+    parser.add_argument("command", choices=("init", "status", "configure", "headers", "browser-status"),
+                        nargs="?", default="status")
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
@@ -177,6 +236,8 @@ def main(argv=None):
             result = configure(STATE, json.load(sys.stdin))
         elif args.command == "headers":
             result = aba_headers()
+        elif args.command == "browser-status":
+            result = browser_status()
         else:
             result = config_status()
     except (OSError, ValueError, TypeError, UnicodeError):

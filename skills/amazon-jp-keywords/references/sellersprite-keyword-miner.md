@@ -6,7 +6,7 @@
 
 已有有效会话时，脚本直接通过 HTTP 查词。首次使用、会话失效或查词遇到 HTTP 401／403 时，脚本自动打开[卖家精灵官网登录页](https://www.sellersprite.com/cn/w/user/login)。请在弹出的浏览器窗口自行完成登录和页面要求的验证。脚本确认当前页能查询后会保存会话、关闭登录窗口并继续取余下的页。
 
-登录只需本机桌面能打开窗口。脚本在需要登录时自动准备浏览器组件。每次执行最多弹窗一次，窗口关闭或等待 5 分钟后结束本渠道，保留已取得的页并继续其他渠道。执行搜索命令时允许等待用户完成登录。
+先执行本技能的 `search` 脚本。搜索命令应在用户能看到窗口的桌面进程中运行。出现登录提示后，保持同一进程运行并等待用户完成登录。脚本自动准备 Python Playwright，依次尝试本机 Chrome、Edge 和由 Playwright 管理的 Chromium。缺少配套 Chromium 时按需下载到[公共浏览器缓存目录](client-config.md#写入与检查)。每次执行最多弹窗一次，窗口关闭或等待 5 分钟后结束本渠道，保留已取得的页并继续其他渠道。
 
 会话仅存于 `~/.amazon-skill/cache/keywords/sellersprite-keyword-session.json`，仅当前用户可读写。后续查询复用该会话。登录窗口使用独立浏览器会话。
 
@@ -16,6 +16,16 @@
 python3 "SKILL/scripts/sellersprite_keyword_miner.py" import-session \
   --curl-file "本机私有请求文件绝对路径"
 ```
+
+## 浏览器检查
+
+没有弹窗时，先检查 `search` 的终端摘要或结果 JSON。有效会话下会直接查词。遇到浏览器错误时可执行以下命令，实际打开一个测试窗口并自动关闭。加 `--prepare` 可先准备缺失的依赖。Windows 上可将 `python3` 换为 `py -3` 或 `python`。
+
+```sh
+python3 "SKILL/scripts/sellersprite_keyword_miner.py" browser-check --prepare
+```
+
+成功时输出生效目录、浏览器版本及 `launch_verified`。失败时根据错误码检查桌面、公共配置、Python Playwright、浏览器下载或启动权限。检查在本地完成，无需登录卖家精灵，查询是否授权由原搜索命令验证。
 
 ## 查询与结果
 

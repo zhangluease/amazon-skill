@@ -6,7 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = (ROOT / "skills/amazon-jp-keywords/scripts/amazon_config.py",
-           ROOT / "skills/amazon-jp-listing/scripts/amazon_config.py")
+           ROOT / "skills/amazon-jp-listing/scripts/amazon_config.py",
+           ROOT / "skills/pod-image-selection/scripts/amazon_config.py")
 
 
 def main():

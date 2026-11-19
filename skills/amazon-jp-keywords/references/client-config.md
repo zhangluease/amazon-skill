@@ -9,6 +9,9 @@
   "aba_mcp": {
     "url": "https://spapi-mcp.bamboost.info/mcp",
     "access_token": ""
+  },
+  "browser": {
+    "cache_dir": ""
   }
 }
 ```
@@ -36,6 +39,8 @@ python3 "SKILL/scripts/environment.py" config-status
 ```
 
 空的 `backend_token` 表示易逊尚未配置，不影响已配置的 ABA 渠道。
+
+浏览器缓存可单独更新。向 `configure` 传入 `{"browser":{"cache_dir":"本机绝对路径"}}`，留空沿用环境变量或系统用户默认缓存。关键词和 POD 选图共用缓存路径，按各自 Playwright 所需的版本检查实际启动。配置状态和登录状态分别核对，见[浏览器检查](sellersprite-keyword-miner.md#浏览器检查)。
 
 ## MCP 客户端读取
 

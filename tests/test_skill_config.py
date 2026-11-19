@@ -86,6 +86,31 @@ class SkillConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ABA_MCP_ACCESS_TOKEN_MISSING"):
             MODULE.aba_headers(self.root)
 
+    def test_installed_browser_consumers_share_override_without_exposing_credentials(self):
+        self.configure({"backend_token": BACKEND_TOKEN, "aba_mcp": {"access_token": TOKEN}})
+        cache = self.home / "浏览器缓存 with spaces"
+        self.configure({"browser": {"cache_dir": str(cache)}})
+        self.environment["PLAYWRIGHT_BROWSERS_PATH"] = str(self.home / "environment-fallback")
+
+        for skill in ("amazon-jp-keywords", "pod-image-selection"):
+            entry = ROOT / "skills" / skill / "scripts" / "amazon_config.py"
+            result = self.run_script(entry, "browser-status")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {"cache_dir": str(cache), "source": "config"})
+            self.assertNotIn(BACKEND_TOKEN, result.stdout)
+            self.assertNotIn(TOKEN, result.stdout)
+        self.assertEqual(self.read()["backend_token"], BACKEND_TOKEN)
+        self.assertEqual(self.read()["aba_mcp"]["access_token"], TOKEN)
+        with self.assertRaisesRegex(ValueError, "BROWSER_CACHE_DIR_ABSOLUTE_REQUIRED"):
+            self.configure({"browser": {"cache_dir": "./project-local"}})
+        self.assertEqual(self.read()["browser"]["cache_dir"], str(cache))
+
+        self.configure({"browser": {"cache_dir": ""}})
+        result = self.run_script(ROOT / "scripts/configure.py", "browser-status")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "cache_dir": self.environment["PLAYWRIGHT_BROWSERS_PATH"], "source": "environment"})
+
     def test_permissions_atomic_replacement_and_no_sidecar_files(self):
         self.configure({"aba_mcp": {"access_token": TOKEN}})
         if os.name == "posix":

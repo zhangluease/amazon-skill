@@ -14,7 +14,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from environment import CACHE, SetupError, write_json
 from export_xlsx import write_xlsx
-from sellersprite_login import LoginError, ORIGIN, login_and_fetch
+from sellersprite_login import LoginError, ORIGIN, check_browser, login_and_fetch
 
 
 ENDPOINT = ORIGIN + "/v3/api/keyword-miner"
@@ -253,6 +253,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     setup = commands.add_parser("import-session", help="Import one Japan keyword-miner request copied as cURL")
     setup.add_argument("--curl-file", required=True, type=Path)
+    check = commands.add_parser("browser-check", help="Verify a visible browser opens without signing in")
+    check.add_argument("--prepare", action="store_true", help="Install missing browser dependencies before checking")
     search = commands.add_parser("search", help="Collect up to 3 pages per seed")
     search.add_argument("seeds", nargs="+")
     search.add_argument("--pages", type=int, choices=(1, 2, 3), default=3)
@@ -264,10 +266,13 @@ def main(argv=None):
         if args.command == "import-session":
             import_session(args.curl_file)
             result = {"status": "completed"}
+        elif args.command == "browser-check":
+            print(json.dumps(check_browser(prepare=args.prepare)))
+            return 0
         else:
             result = collect(args.seeds, args.pages, args.out.resolve())
-    except (QueryError, OSError, ValueError) as error:
-        code = str(error) if isinstance(error, QueryError) else "LOCAL_INPUT_OR_OUTPUT_ERROR"
+    except (QueryError, LoginError, OSError, ValueError) as error:
+        code = str(error) if isinstance(error, (QueryError, LoginError)) else "LOCAL_INPUT_OR_OUTPUT_ERROR"
         print(json.dumps({"status": "failed", "error_code": code}))
         return 1
     print(json.dumps(result, ensure_ascii=False))

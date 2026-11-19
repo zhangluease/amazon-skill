@@ -4,5 +4,8 @@
   "aba_mcp": {
     "url": "https://spapi-mcp.bamboost.info/mcp",
     "access_token": ""
+  },
+  "browser": {
+    "cache_dir": ""
   }
 }
