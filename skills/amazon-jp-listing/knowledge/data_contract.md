@@ -1,6 +1,6 @@
-# 本地数据契约 v2.11（Listing schema_version 仍为 "2.1"）
+# 本地数据契约 v2.12（Listing schema_version 仍为 "2.1"）
 
-本地版本只执行 JP/Japanese/ja，主要面向耗材。用户附件名称任意；本文的编号文件名仅用于任务目录内的中间流程，不限制用户原文件命名；最终交付使用 listing.md、listing.json、report.html。来源库中的历史文件名也不是必交附件。
+本地版本执行 JP/Japanese/ja，适用于耗材、配件及独立商品。用户附件名称任意；本文的编号文件名仅用于任务目录内的中间流程，不限制用户原文件命名；最终交付使用 listing.md、listing.json、report.html。来源库中的历史文件名也不是必交附件。
 
 本文是新增字段的唯一结构定义。已有单品字段继续有效；新生成内容使用 `schema_version: "2.1"`。每次只生成一个商品，多个商品使用独立任务目录；旧内容不能因可读取而被宣布通过当前验收。所有 JSON 使用 UTF-8。
 
@@ -13,10 +13,10 @@
 - `facts`: `[{fact_id, field, value, source_ref, status}]`。`status` 为 `confirmed/unknown/conflict`；facts 仅记录本品事实。只有 confirmed 且有来源的事实能支持声明。
 - 主要目标品番用 `facts.field=target_part_number`，`value` 为一个完整编号字符串，并登记来源和状态。仅在明确该编号是本品的主要购买识别品番时填写，包括确实要替换的主品番。confirmed 时须紧跟本品品牌，未提供品牌时置顶。其他替换品番和设备型号仍分开登记。
 - 适配机型用 `facts.field=compatible_models`，value 为完整机型字符串数组，每个字符串一个型号，不能用系列名、范围、通配符或省略号。可按系列／来源分多条事实，另加可选 `group_label`；保留 source_ref 和 confirmed/unknown/conflict。事实只能支持本品。confirmed 必须有非空完整数组与来源，给定词表中的语义明确的适配对象标识直接按用户依据登记 confirmed；不因缺官网证明标 unknown。实际无法解析或资料冲突仍保留未完成状态。按[清单规则](../references/consumables.md)在可售商品五点列全确认型号，每条 claims 引用对应 fact_id；完整匹配允许大小写、全半角和连字符字形差异，不允许丢后缀。机器检查缺项／未引用，不证明兼容关系，也不能替代对照原件检查多写与漏录。
-- 购买数量事实使用 field=quantity/package_quantity/unit_count/pack_count/number_of_items，value 为正整数或正整数字符串；随附配件用 accessory_count/included_quantity/component_count，分别登记。已知计数单位时附 count_unit（如枚、個、袋），防止不同对象或单位的数值混用。机器检查英文 2-Pack／2 count／2 pieces／Pack of 2，以及日文「N枚／個／本／袋／巻／組／点＋入り／入／セット／パック／組」的常见包装表达，日文支持全半角数字；匹配 confirmed 且有来源的数量事实并要求字段引用。配件数量引用自己的事实，不与主品相加。裸数量、汉字数词及复杂修饰关系仍由内容复核确认。图上数量还须在 body_refs 正文表达并引用同一事实。
+- 购买数量事实使用 field=quantity/package_quantity/unit_count/pack_count/number_of_items，value 为正整数或正整数字符串；随附配件用 accessory_count/included_quantity/component_count，分别登记。已知计数单位时按本品附 count_unit 字符串，防止不同对象或单位的数值混用。机器检查英文 2-Pack／2 count／2 pieces／Pack of 2，以及日文「N枚／個／本／袋／巻／組／点＋入り／入／セット／パック／組」的常见包装表达，日文支持全半角数字及本品已登记的其他 count_unit；匹配 confirmed 且有来源的数量事实并要求字段引用。配件数量引用自己的事实，不与主品相加。裸数量、汉字数词及复杂修饰关系仍由内容复核确认。图上数量还须在 body_refs 正文表达并引用同一事实。
 - `measurements`: `[{measurement_id, kind, subject, label, value, unit, source_ref, display_value?, display_unit?, display_text?, approximate?}]`。value 是原始十进制数字字符串；kind 为 `length/weight/volume/nominal/size`；subject 为 `product/package/fit`。label 标明 height/width/length/diameter 等。普通长度单位支持 mm/cm/m/in/ft。日本站保留来源单位，由 normalize 生成统一 display_text。公称规格和尺码不换算；禁止质量 oz 与容量 fl oz 混用。缺失值或单位不补造；需要表达的未知参数先补充资料。
 - `images`: `[{image_id, source, applies_to: ["all"]}]`。source 是用户素材路径/URL/附件定位；只引用本品实际素材。
-- `compatibility_basis`: 新任务按选购依据填 `model/specification/none`，另用 `compatibility_reason` 说明判断依据。型号适配、规格适配与无需型号适配的耗材分别组织五点，详见[耗材规则](../references/consumables.md)。旧画像缺此字段仍可读取；不得按编号前缀猜测，规格型与通用耗材不强制未知机型清单。
+- `compatibility_basis`: 新任务按选购依据填 `model/specification/none`，另用 `compatibility_reason` 说明判断依据。型号适配、规格适配与独立使用的商品分别组织五点，详见[选购与编号规则](../references/consumables.md)。旧画像缺此字段仍可读取；不得按编号前缀猜测，规格型与通用耗材不强制未知机型清单。
 - `forbidden_terms`: 用户禁用词数组，可为空。
 - `intent_map`: `[{relation, expression, fact_ids?, measurement_ids?, applies_to?}]`。relation 取 function/capability/activity/audience/location/season/body_part/companion/product_type/interest（COSMO 关系的精简映射）；expression 是目标语言的自然表达；引用必须 confirmed 且范围匹配（结构错误为 error）。表达未出现在任何可索引字段时给 warning `intent_unexpressed`；缺少 intent_map 给 warning。
 
@@ -40,7 +40,7 @@ fact_id、measurement_id 和 image_id 在本品画像中唯一。所有 applies_
 - `03_keyword_validation.json` 保存当前检查结果；总验收与报告重算数据，不信任此文件的缓存 passed。
 - `04_kw_tagged.json` 保留原 keyword/label/reason；增加 `role`（identity/attribute/intent/synonym）、`intent_group`、`source`、`traffic_percentage`（未知为 null）、`applies_to`。旧 high/relevant 标签用于兼容，不决定核心品名优先级。该数组由统一工具导出，仅含 eligible 原始词及补充词，另有 keyword_id、origin=raw/product、searches、restrictions；未知流量为 null，0 保持真实的 0。
 - `05_title_keywords.json`：`title_keywords:{high:[],relevant:[]}` 为候选词数组，无数量上限；`protected_terms` 覆盖画像必保词；`placement_plan:[{keyword,target_field,applies_to,reason}]` 非空，只含可用词。coverage --write-placement 根据最终文案写入实际位置（如 title、bullets[2]），不把候选全塞进标题。
-- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录品牌和目标品番的来源、排列、完整部件名、适用对象及兼容关系。item_highlight 说明 3 个代表机型和实售数量／组成的依据及包装末尾安排，机型少于 3 个时记录实情或取舍。bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，如长名单占多条、为适配让出独立性能点、缺性能／更换依据或规格型耗材调整主题，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
+- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录已确认品牌、适用的目标品番、完整商品名及用途或适配关系的依据。item_highlight 说明本品选购条件及已知包装安排。按型号选购时记录代表型号的选择依据和实际取舍。bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，如长名单占多条、为适配让出独立性能点、缺性能／更换依据或规格型耗材调整主题，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
 - `06_qa.json` 是初始化工具自动写入的可选兼容标记，日本站跳过后端问答：status=skipped、site=JP、reason_code=rufus_us_only、qa_pairs=[]。自行整理的买家问题记录为 local_editorial，不冒充后端采集。
 
 ### 用户表格导入结构（import_schema_version: "1.0"）
@@ -109,7 +109,7 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 `buyer_question_coverage` 每项 `{question, status, location, source?}`；status 使用 covered/partially_covered/not_claimed/not_applicable。location 用中文说明真实覆盖字段或未主张原因。自行整理的问题标 source=local_editorial，不包装成已采集问答。
 
-单品继续使用顶层 `title/item_highlight/bullets/description/search_terms`；item_highlight 永远是字符串，bullets 是 5 条 `相关词／短主题：具体说明` 字符串（支持全角／半角冒号，旧稿 `【主题】正文` 仍可读），开头自然承接相关可用词，正文展开事实，不强行大写。适配型耗材通常连续2–3条按系列列全已确认机型（短名单可1条），不强求五个不同主题。普通材质尺寸默认在其余五点正文，小标题补适用对象和有依据的 3 个代表机型，包装数量与组成优先预留字数并集中放在末尾，五点列完整适配名单；标题／小标题分别 ≤75／125 字符，含空格。另加 claims、image_plan、a_plus_plan。
+单品继续使用顶层 `title/item_highlight/bullets/description/search_terms`；item_highlight 永远是字符串，bullets 是 5 条 `相关词／短主题：具体说明` 字符串（支持全角／半角冒号，旧稿 `【主题】正文` 仍可读），开头自然承接相关可用词，正文展开事实，不强行大写。适配型耗材通常连续2–3条按系列列全已确认机型（短名单可1条），不强求五个不同主题。普通材质尺寸默认在其余五点正文，小标题按选购条件补充代表型号、规格或用途，已知包装数量与组成优先预留字数并集中放在末尾，五点列完整适配名单；标题／小标题分别 ≤75／125 字符，含空格。另加 claims、image_plan、a_plus_plan。
 
 ### 声明与图片引用
 

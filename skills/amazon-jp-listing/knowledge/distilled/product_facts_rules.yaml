@@ -38,7 +38,7 @@ rules:
   type: required
   source_id: user_product_identity
   prompt_fragment: 每个前台字段都要有 claims 记录：含规格的列 measurement_ids，其他可核查声明列 confirmed 且有来源的 fact_ids。引用为空的普通场景文字由语义复审说明。
-- id: consumable_selection_basis
+- id: product_selection_basis
   type: required
   source_id: user_consumables_generalization_20261112
-  prompt_fragment: 记录 compatibility_basis=model／specification／none 和 compatibility_reason，依据给定内容决定按适配对象型号、规格条件或通用用途组织五点。编号按语义区分 product_part／compatible_model／other，不限定编号形式，不按前缀分类。规格型及通用耗材不强制机型表；一次性耗材不套用清洗复用规则。输入文件名任意，按内容识别资料角色。
+  prompt_fragment: 记录 compatibility_basis=model／specification／none 和 compatibility_reason，依据本品资料决定按适配对象型号、规格条件或独立用途组织五点。编号按语义区分 product_part／compatible_model／other，不限定编号形式，不按前缀分类。有适配名单时按实际对象记录。主要品番、替换关系、更换与维护信息仅在适用且有资料支持时填写。按内容识别任意命名的输入附件。

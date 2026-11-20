@@ -527,7 +527,7 @@ class JapaneseListingTests(unittest.TestCase):
             quality.normalize_profile(self.profile)
 
     def test_japanese_pack_counts_match_facts_and_require_references(self):
-        for unit in ("枚", "個", "本", "袋", "巻", "組", "点"):
+        for unit in ("枚", "個", "本", "袋", "巻", "組", "点", "箱", "カートン"):
             with self.subTest(unit=unit):
                 profile = copy.deepcopy(self.profile)
                 profile["facts"].append({"fact_id": "pack", "field": "quantity", "value": 2, "count_unit": unit,

@@ -273,9 +273,9 @@ def _check_local(profile, listing, qa=None):
         if basis not in ("model", "specification", "none"):
             add("compatibility_basis", "profile.compatibility_basis", "Use model, specification or none according to the supplied product context")
         if not nonempty(profile.get("compatibility_reason")):
-            add("compatibility_reason", "profile.compatibility_reason", "Explain how buyers select this consumable from the supplied information", "incomplete")
+            add("compatibility_reason", "profile.compatibility_reason", "Explain how buyers select this product from the supplied information", "incomplete")
         if basis == "model" and not any(isinstance(f, dict) and f.get("field") == "compatible_models" for f in _list(profile.get("facts"))):
-            add("compatibility_unconfirmed", "profile.facts", "Model-dependent consumables need supplied fit identifiers; record the actual missing input", "incomplete")
+            add("compatibility_unconfirmed", "profile.facts", "Products selected by model fit need supplied fit identifiers; record the actual missing input", "incomplete")
     if "a_plus_plan" in listing and "aplus_plan" in listing and listing["a_plus_plan"] != listing["aplus_plan"]:
         add("aplus_alias_conflict", "listing.a_plus_plan", "a_plus_plan and legacy aplus_plan contain conflicting content")
     a_plus_key = "a_plus_plan" if "a_plus_plan" in listing else "aplus_plan"
@@ -387,7 +387,16 @@ def _check_local(profile, listing, qa=None):
             accessory_counts[fid] = (owner_id, int(fact["value"]))
     # "N pieces of <item>" describes included parts, not the sellable pack size.
     quantity_token = re.compile(r"\b(\d+)\s*[- ]?\s*(?:packs?|count|pieces?|pcs)\b(?!\s+of\b)|\b(?:pack|set)\s+of\s+(\d+)\b|\bquantity\s*:\s*(\d+)\b", re.I)
-    japanese_quantity_token = re.compile(r"(?<![A-Za-z0-9_.])(\d+)\s*(枚|個|本|袋|巻|組|点)\s*(?:入り|入|セット|パック|組)")
+    package_counts = {**quantities, **accessory_counts}
+    count_units = {
+        fid: unicodedata.normalize("NFKC", facts[fid][1]["count_unit"]).strip()
+        for fid in package_counts if nonempty(facts[fid][1].get("count_unit"))
+    }
+    counters = set("枚個本袋巻組点") | set(count_units.values())
+    counter_pattern = "|".join(re.escape(unit) for unit in sorted(counters, key=lambda unit: (-len(unit), unit)))
+    japanese_quantity_token = re.compile(
+        r"(?<![A-Za-z0-9_.])(\d+)\s*(" + counter_pattern + r")\s*(?:入り|入|セット|パック|組)"
+    )
 
     def scan_quantities(text, allowed_owners, path):
         matching_groups = []
@@ -405,10 +414,9 @@ def _check_local(profile, listing, qa=None):
                 matching_groups.append(own)
         for match in japanese_quantity_token.finditer(unicodedata.normalize("NFKC", text)):
             number, unit = int(match[1]), match[2]
-            own = {fid for fid, (owner_id, value) in {**quantities, **accessory_counts}.items()
+            own = {fid for fid, (owner_id, value) in package_counts.items()
                    if owner_id in allowed_owners and value == number
-                   and (facts[fid][1].get("count_unit") is None
-                        or unicodedata.normalize("NFKC", str(facts[fid][1]["count_unit"])).strip() == unit)}
+                   and (fid not in count_units or count_units[fid] == unit)}
             if not own:
                 add("quantity_unregistered", path, "Japanese pack count has no matching confirmed count fact: " + match[0])
             else:

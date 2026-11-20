@@ -23,7 +23,7 @@ python3 "SKILL/scripts/listing_quality.py" normalize --profile "RUN/01_product_p
 python3 "SKILL/scripts/keyword_quality.py" prepare --run-dir "RUN"
 ```
 
-prepare 已生成 `03_keyword_view.tsv` 和编号候选。按[耗材规则](consumables.md)完成 `02_identifier_roles.json` 的语义角色与理由，可补完整名称型标识；角色待填或有新增适配对象时运行：
+prepare 已生成 `03_keyword_view.tsv` 和编号候选。按[选购与编号规则](consumables.md)完成 `02_identifier_roles.json` 的语义角色与理由，可补完整名称型标识；角色待填或有新增适配对象时运行：
 
 ```sh
 python3 "SKILL/scripts/keyword_quality.py" register-models --run-dir "RUN"
@@ -40,7 +40,7 @@ export 自带分类与导出检查；三个词池和 04 标注由工具生成，
 
 ## 3. 写作与覆盖
 
-按[日文字段规则](japanese-listing.md)写 `05_title_keywords.json` 和 `listing.json`。05 记录候选、必保词、实际投放与 field_strategy；候选数量按实际需要安排。主题采用SOP默认顺序，长适配名单按每条全文 250 字符分组，位置不足时优先让出独立性能点，并在 exceptions 记录取舍。若五条仍超限，保留完整草稿和失败状态。标题记录本品品牌、前置目标品番、完整部件名、适用对象和兼容关系的依据。小标题先为包装内容预留字数，记录所选 3 个已确认机型，末尾集中一次写装数与组成。仅使用已给定竞品结论辅助选题，不追加调研前置条件。文案还包含属性建议、本品关键买家问题及图片／A+ 策划；资料没有答案时记未声明，不凑问答数量。
+按[日文字段规则](japanese-listing.md)写 `05_title_keywords.json` 和 `listing.json`。05 记录候选、必保词、实际投放与 field_strategy；候选数量按实际需要安排。主题按本品购买问题选取，长适配名单按每条全文 250 字符分组，位置不足时优先让出独立性能点，并在 exceptions 记录取舍。若五条仍超限，保留完整草稿和失败状态。标题记录已确认品牌、适用的目标品番、完整品名及用途或适配关系。小标题按本品选购条件安排机型、规格或用途，已知装数与组成集中放在末尾。仅使用已给定竞品结论辅助选题，不追加调研前置条件。文案还包含属性建议、本品关键买家问题及图片／A+ 策划；资料没有答案时记未声明，不凑问答数量。
 
 ```sh
 python3 "SKILL/scripts/keyword_quality.py" coverage --run-dir "RUN" --write-placement
