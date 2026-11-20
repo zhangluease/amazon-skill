@@ -437,10 +437,27 @@ def _check_local(profile, listing, qa=None):
     site_policy = policy["sites"].get(site, {}) if isinstance(policy["sites"].get(site), dict) else {}
     search_bytes_limit = site_policy.get("search_terms_max_bytes", limits["search_terms_max_bytes"])
     title_policy = policy.get("title_compliance", {})
+    product_brand = profile.get("brand")
     brand_names = [b for b in (profile.get("brand"), listing.get("brand_name")) if nonempty(b)]
     spaced_language = profile.get("listing_language_code") not in ("ja", "zh")
+    target_parts = [fact["value"] for _, fact in facts.values()
+                    if fact.get("field") == "target_part_number" and fact.get("status") == "confirmed"
+                    and nonempty(fact.get("source_ref")) and valid_model_list([fact.get("value")])]
+    target_pattern = model_pattern(target_parts)
 
     def check_title_compliance(value, path):
+        prefix = value.lstrip()
+        if nonempty(product_brand):
+            brand = product_brand.strip()
+            brand_match = re.match(re.escape(brand) + r"(?=\s|$)", prefix)
+            if not brand_match:
+                add("title_brand_prefix", path, "Start with the supplied product brand followed by a space: " + brand)
+            else:
+                prefix = prefix[brand_match.end():].lstrip()
+        if target_pattern and not target_pattern.match(prefix):
+            add("title_target_part_prefix", path, "Put the complete confirmed target part number immediately after the product brand or at the start: "
+                + " / ".join(dict.fromkeys(target_parts)))
+
         # Jan 2025 Amazon title rules: banned characters (unless part of the brand) and
         # no word more than twice (articles, prepositions and conjunctions excepted).
         unbranded = value
@@ -599,9 +616,13 @@ def _check_local(profile, listing, qa=None):
             for model in dict.fromkeys(fact["value"]):
                 entry = expected_models.setdefault(normalize_model(model), {"model": model, "fact_ids": set()})
                 entry["fact_ids"].add(fid)
+        highlight = content.get("item_highlight")
+        highlight_models = 0
         for entry in expected_models.values():
             model = entry["model"]
             pattern = model_pattern([model])
+            if isinstance(highlight, str) and pattern.search(highlight):
+                highlight_models += 1
             locations = [field for field, text in bullet_fields if pattern.search(text)]
             if not locations:
                 add("compatibility_model_missing", "listing." + str(target) + ".bullets",
@@ -609,6 +630,12 @@ def _check_local(profile, listing, qa=None):
             elif not any(entry["fact_ids"] & claim_fact_refs.get((target, field), set()) for field in locations):
                 add("compatibility_unreferenced", "listing." + str(target) + ".bullets",
                     "Model requires an applicable compatibility fact reference in the containing bullet: " + model)
+        if basis == "model" and expected_models and nonempty(highlight):
+            representative_count = min(len(expected_models), policy["editorial_targets"]["highlight_representative_models"])
+            if highlight_models != representative_count:
+                add("highlight_model_count", "listing." + str(target) + ".item_highlight",
+                    "Found %d distinct confirmed model IDs (target %d). Reserve space for the pack contents first."
+                    % (highlight_models, representative_count), "warning")
 
     plan_ids, main_coverage = {}, set()
 

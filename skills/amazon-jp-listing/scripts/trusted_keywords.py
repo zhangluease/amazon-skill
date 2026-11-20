@@ -38,7 +38,8 @@ def identifier_template(profile, raw, policy):
     Agents may add named models or split a repeated ID by its actual row context.
     """
     declared = {}
-    own_fields = {'part_number', 'part_numbers', 'product_model', 'model_number', 'replacement_part_number'}
+    own_fields = {'part_number', 'part_numbers', 'product_model', 'model_number', 'replacement_part_number',
+                  'target_part_number'}
     for fact in profile.get('facts', []):
         if fact.get('confirmation_basis') == 'user_provided_keywords' or fact.get('status') in ('unknown', 'conflict'):
             continue  # A derived registration cannot classify its own original input.

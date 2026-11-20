@@ -584,6 +584,45 @@ class JapaneseListingTests(unittest.TestCase):
                 issues = quality.check_local(self.profile, listing)
                 self.assertTrue(any(i["code"] == "field_length" and i["path"].endswith("." + field) for i in issues), issues)
 
+    def test_title_starts_with_supplied_brand_and_complete_target_part(self):
+        profile, listing = jp_fixture()
+        profile["facts"].append({"fact_id": "target", "field": "target_part_number", "value": "PX-21A",
+                                 "status": "confirmed", "source_ref": "synthetic:part"})
+        for title, expected in (
+            ("テスト PX-21A ペン立て", set()),
+            ("PX-21A ペン立て テスト", {"title_brand_prefix"}),
+            ("テスト ペン立て PX-21A", {"title_target_part_prefix"}),
+            ("テスト PX-21AB ペン立て", {"title_target_part_prefix"}),
+            ("テスト ペン立て", {"title_target_part_prefix"}),
+        ):
+            with self.subTest(title=title):
+                listing["title"] = title
+                codes = {issue["code"] for issue in quality.check_local(profile, listing) if issue["severity"] == "error"}
+                self.assertEqual(codes, expected)
+        profile["brand"] = listing["brand_name"] = None
+        listing["title"] = "PX-21A ペン立て"
+        self.assertFalse([issue for issue in quality.check_local(profile, listing) if issue["severity"] == "error"])
+
+    def test_highlight_representative_count_uses_distinct_confirmed_device_models(self):
+        profile, listing, groups = jp_compatibility_fixture()
+        profile.update(compatibility_basis="model", compatibility_reason="synthetic: device model fit")
+        first, second, third, fourth = groups[0][:4]
+        for ids, expected_count in (
+            ([first, second, third], None),
+            ([first, first, second, "HD-9999"], 2),
+            ([first, second, third, fourth], 4),
+        ):
+            with self.subTest(ids=ids):
+                listing["item_highlight"] = "交換フィルター " + "・".join(ids) + "対応"
+                issues = quality.check_local(profile, listing)
+                counts = [issue for issue in issues if issue["code"] == "highlight_model_count"]
+                if expected_count is None:
+                    self.assertEqual(counts, [], issues)
+                else:
+                    self.assertEqual(len(counts), 1, issues)
+                    self.assertIn("Found %d distinct confirmed model IDs" % expected_count, counts[0]["message"])
+                    self.assertEqual(counts[0]["severity"], "warning")
+
     def test_japanese_bullet_labels_preserve_latin_keyword_spelling(self):
         self.listing["bullets"][0] = "【Ag+ フィルター】表記の確認用ソフトウェアテストです。"
         self.assertNotIn("bullet_format", {i["code"] for i in quality.check_local(self.profile, self.listing)})

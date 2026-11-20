@@ -1,4 +1,4 @@
-# 本地数据契约 v2.10（Listing schema_version 仍为 "2.1"）
+# 本地数据契约 v2.11（Listing schema_version 仍为 "2.1"）
 
 本地版本只执行 JP/Japanese/ja，主要面向耗材。用户附件名称任意；本文的编号文件名仅用于任务目录内的中间流程，不限制用户原文件命名；最终交付使用 listing.md、listing.json、report.html。来源库中的历史文件名也不是必交附件。
 
@@ -8,9 +8,10 @@
 
 保留 `site/listing_language/listing_language_code/category/audience/materials/functions/scenes/specs/limitations/pain_points`。新增：
 
-- `brand`: 用户品牌字符串或 null；不造品牌。
+- `brand` 为有来源的本品品牌字符串或 null。已确认的品牌以原样出现在标题开头，并用空格和后续内容分隔。
 - `product_identity`: `{original_name, canonical_name, protected_terms: [目标语言完整核心短语]}`。至少一个必保短语；比较只规范大小写、空白与连字符，不允许拆散名词短语。
 - `facts`: `[{fact_id, field, value, source_ref, status}]`。`status` 为 `confirmed/unknown/conflict`；facts 仅记录本品事实。只有 confirmed 且有来源的事实能支持声明。
+- 主要目标品番用 `facts.field=target_part_number`，`value` 为一个完整编号字符串，并登记来源和状态。仅在明确该编号是本品的主要购买识别品番时填写，包括确实要替换的主品番。confirmed 时须紧跟本品品牌，未提供品牌时置顶。其他替换品番和设备型号仍分开登记。
 - 适配机型用 `facts.field=compatible_models`，value 为完整机型字符串数组，每个字符串一个型号，不能用系列名、范围、通配符或省略号。可按系列／来源分多条事实，另加可选 `group_label`；保留 source_ref 和 confirmed/unknown/conflict。事实只能支持本品。confirmed 必须有非空完整数组与来源，给定词表中的语义明确的适配对象标识直接按用户依据登记 confirmed；不因缺官网证明标 unknown。实际无法解析或资料冲突仍保留未完成状态。按[清单规则](../references/consumables.md)在可售商品五点列全确认型号，每条 claims 引用对应 fact_id；完整匹配允许大小写、全半角和连字符字形差异，不允许丢后缀。机器检查缺项／未引用，不证明兼容关系，也不能替代对照原件检查多写与漏录。
 - 购买数量事实使用 field=quantity/package_quantity/unit_count/pack_count/number_of_items，value 为正整数或正整数字符串；随附配件用 accessory_count/included_quantity/component_count，分别登记。已知计数单位时附 count_unit（如枚、個、袋），防止不同对象或单位的数值混用。机器检查英文 2-Pack／2 count／2 pieces／Pack of 2，以及日文「N枚／個／本／袋／巻／組／点＋入り／入／セット／パック／組」的常见包装表达，日文支持全半角数字；匹配 confirmed 且有来源的数量事实并要求字段引用。配件数量引用自己的事实，不与主品相加。裸数量、汉字数词及复杂修饰关系仍由内容复核确认。图上数量还须在 body_refs 正文表达并引用同一事实。
 - `measurements`: `[{measurement_id, kind, subject, label, value, unit, source_ref, display_value?, display_unit?, display_text?, approximate?}]`。value 是原始十进制数字字符串；kind 为 `length/weight/volume/nominal/size`；subject 为 `product/package/fit`。label 标明 height/width/length/diameter 等。普通长度单位支持 mm/cm/m/in/ft。日本站保留来源单位，由 normalize 生成统一 display_text。公称规格和尺码不换算；禁止质量 oz 与容量 fl oz 混用。缺失值或单位不补造；需要表达的未知参数先补充资料。
@@ -39,7 +40,7 @@ fact_id、measurement_id 和 image_id 在本品画像中唯一。所有 applies_
 - `03_keyword_validation.json` 保存当前检查结果；总验收与报告重算数据，不信任此文件的缓存 passed。
 - `04_kw_tagged.json` 保留原 keyword/label/reason；增加 `role`（identity/attribute/intent/synonym）、`intent_group`、`source`、`traffic_percentage`（未知为 null）、`applies_to`。旧 high/relevant 标签用于兼容，不决定核心品名优先级。该数组由统一工具导出，仅含 eligible 原始词及补充词，另有 keyword_id、origin=raw/product、searches、restrictions；未知流量为 null，0 保持真实的 0。
 - `05_title_keywords.json`：`title_keywords:{high:[],relevant:[]}` 为候选词数组，无数量上限；`protected_terms` 覆盖画像必保词；`placement_plan:[{keyword,target_field,applies_to,reason}]` 非空，只含可用词。coverage --write-placement 根据最终文案写入实际位置（如 title、bullets[2]），不把候选全塞进标题。
-- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录实际标题词、指标来源及前 35–40 字符内的身份和关键编号安排；item_highlight 说明实售数量／组成、适用对象和代表型号的选择依据，未知指标或信息缺口明示；bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，如长名单占多条、为适配让出独立性能点、缺性能／更换依据或规格型耗材调整主题，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
+- `05.field_strategy`: 仅含 target=single 一项的数组；每项 `{target, title, item_highlight, bullet_openings, specifications, exceptions}`。title 为非空中文说明，记录品牌和目标品番的来源、排列、完整部件名、适用对象及兼容关系。item_highlight 说明 3 个代表机型和实售数量／组成的依据及包装末尾安排，机型少于 3 个时记录实情或取舍。bullet_openings 为逐条列出开头词与主题的 5 个非空字符串；specifications 说明材质尺寸在对应五点的落点或缺失依据，适配型耗材同时记录机型事实、分组、预期数量和对应的清单条目；exceptions 为例外及具体依据的字符串数组，如长名单占多条、为适配让出独立性能点、缺性能／更换依据或规格型耗材调整主题，无例外为空。只作为内部布局解释，不进入上架字段。coverage --write-placement 保留此说明，但改文案后须同步更新，再做 field_layout 复审。
 - `06_qa.json` 是初始化工具自动写入的可选兼容标记，日本站跳过后端问答：status=skipped、site=JP、reason_code=rufus_us_only、qa_pairs=[]。自行整理的买家问题记录为 local_editorial，不冒充后端采集。
 
 ### 用户表格导入结构（import_schema_version: "1.0"）
@@ -108,11 +109,11 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 `buyer_question_coverage` 每项 `{question, status, location, source?}`；status 使用 covered/partially_covered/not_claimed/not_applicable。location 用中文说明真实覆盖字段或未主张原因。自行整理的问题标 source=local_editorial，不包装成已采集问答。
 
-单品继续使用顶层 `title/item_highlight/bullets/description/search_terms`；item_highlight 永远是字符串，bullets 是 5 条 `相关词／短主题：具体说明` 字符串（支持全角／半角冒号，旧稿 `【主题】正文` 仍可读），开头自然承接相关可用词，正文展开事实，不强行大写。适配型耗材通常连续2–3条按系列列全已确认机型（短名单可1条），不强求五个不同主题。普通材质尺寸默认在其余五点正文，小标题补真实数量／组成、适用对象及代表型号（有资料时通常2–3个），不代替五点完整适配名单；标题／小标题分别 ≤75／125 字符，含空格。另加 claims、image_plan、a_plus_plan。
+单品继续使用顶层 `title/item_highlight/bullets/description/search_terms`；item_highlight 永远是字符串，bullets 是 5 条 `相关词／短主题：具体说明` 字符串（支持全角／半角冒号，旧稿 `【主题】正文` 仍可读），开头自然承接相关可用词，正文展开事实，不强行大写。适配型耗材通常连续2–3条按系列列全已确认机型（短名单可1条），不强求五个不同主题。普通材质尺寸默认在其余五点正文，小标题补适用对象和有依据的 3 个代表机型，包装数量与组成优先预留字数并集中放在末尾，五点列完整适配名单；标题／小标题分别 ≤75／125 字符，含空格。另加 claims、image_plan、a_plus_plan。
 
 ### 声明与图片引用
 
-默认主题与灵活调整见[日文写作规则](../references/japanese-listing.md#五点的默认组织)，不新增固定五主题或代表型号数量的机器配额。
+默认主题与灵活调整见[日文写作规则](../references/japanese-listing.md#五点的默认组织)，代表机型数按已登记机型给出写作复核提示，实际取舍由内容复核判断。
 
 本品 `claims` 是数组：`{field, fact_ids: [], measurement_ids: []}`。field 支持 title、item_highlight、bullets[0] 至 bullets[4]、description、search_terms。每个前台文本字段至少有一个声明记录，允许无可核查数值的场景文字用空引用并由内容复核说明；非空引用必须属于本品且已确认。含规格的字段记录 measurement_ids 并复用 display_text，保持维度标签；后台搜索词不强制声明记录。
 
@@ -138,7 +139,7 @@ report.html 只嵌入 02 的 keyword_data、来源文件和工作表状态、计
 
 `07_keyword_coverage.json`（`keyword_quality.py coverage` 生成，仅供优化参考，不参与验收）：本品 target=single 的可用词数、完整短语覆盖、词级覆盖（大小写与简单英文复数折叠）、按搜索量加权覆盖率、未覆盖高流量词、标题覆盖前 10 词、后台词字节/预算/与标题重复词、暂缓或剔除词的完整短语命中；field_layout 列出标题／小标题字符数、标题前 40 字符预览及编辑目标区间、五点单条全文上限、可用前十词的标题零基精确位置（缺失为 null）、每条五点的 heading（从短主题冒号或旧式括号提取）、全文字符数、前 80 字符及精确短语命中（不代表同义表达无效或算法权重）；intent_map 表达位置；按搜索量排序的 fact_unlocks（暂缓词晋级条件）与 unsupported 问题。
 
-本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing。compatibility_unconfirmed 为 incomplete。error：bullets_length（每条全文最多 250 字符，合计最多 1250 字符，均包括型号及分隔符）、compatibility_model_missing、compatibility_unreferenced、compatible_models_shape、title_banned_character（品牌名中的除外）、search_bytes（JP 预算 499 UTF-8 字节）。
+本地检查的 warning（不阻断）：title_word_repeat、search_terms_title_repeat、search_terms_duplicate、search_terms_format、bullet_prohibited_symbol、intent_unexpressed、intent_map_missing、attribute_suggestions_missing、highlight_model_count（已有确认型号时，提示复核小标题的代表机型数）。compatibility_unconfirmed 为 incomplete。error 包括 title_brand_prefix、title_target_part_prefix、bullets_length（每条全文最多 250 字符，合计最多 1250 字符，均包括型号及分隔符）、compatibility_model_missing、compatibility_unreferenced、compatible_models_shape、title_banned_character（品牌名中的除外）、search_bytes（JP 预算 499 UTF-8 字节）。
 
 关键词旧任务修复命令：`python3 scripts/keyword_quality.py register-models --run-dir RUN`，修复后再 export、重写文案并重新验收。
 

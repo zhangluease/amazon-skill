@@ -1,4 +1,4 @@
-version: '2.9'
+version: '2.11'
 domain: item_highlight
 contract_ref: ../data_contract.md
 policy_ref: ../quality_policy.json
@@ -15,5 +15,5 @@ rules:
   limit_ref: default_limits.item_highlight_max_chars
 - id: highlight_purchase_reason
   type: editorial
-  source_id: user_mobile_layout_20261112
-  prompt_fragment: 小标题补足标题未展开的适用对象、2–3个代表型号、部件用途与真实包装数量／组成；数量和组成优先保留，不让型号挤掉实售内容。按真实指标选择代表型号，无指标按相关性选择并说明；少于2个不凑，非型号适配不强造机型。仅从本品确认清单选择并引用，五点仍列全。普通材质尺寸放五点，不整句重复标题，缺数量不猜，主耗材与配件分别计数。
+  source_id: user_title_highlight_layout_20261120
+  prompt_fragment: 先为实售数量与套装组成预留字数，再补3个不同的已确认代表机型和必要用途。指标缺失按购买代表性选，有多少已确认型号就写多少，最多3个。包装信息在末尾集中成一段，单一装数写一次，多组件分别列明，不重复同一数量。已证实的功能词放在装数之前。空间不足先保留实售组成，按需减少机型并记录原因。非型号适配用真实用途或规格，五点仍列全适配名单。
