@@ -23,8 +23,9 @@
 `SKILL`、`RUN` 都换成实际绝对路径。Windows 可按本机环境将 `python3` 换为 `py -3`。
 
 ```sh
-# 无网络、无浏览器：检查会话格式、扩展、运行依赖，返回问题与处理方法
+# 本地检查会话格式、扩展、运行依赖和飞书 CLI 状态
 node "SKILL/scripts/competitor.cjs" check
+node "SKILL/scripts/competitor.cjs" check --feishu
 
 # 查看命令帮助，不需要登录或 Python
 node "SKILL/scripts/competitor.cjs" --help
@@ -32,8 +33,10 @@ node "SKILL/scripts/competitor.cjs" --help
 # 无网络、无浏览器：完整检查输入和日期区间
 node "SKILL/scripts/competitor.cjs" validate-input --input "/absolute/asins.csv"
 
-# 准备授权依赖，启动并关闭本地检查浏览器，不登录网站
+# 准备 Chromium 和卖家精灵原扩展，在临时无头 Chromium 中离线试载
 node "SKILL/scripts/competitor.cjs" prepare --out "RUN"
+# 飞书场景同时准备官方 CLI 和检查本地授权权限
+node "SKILL/scripts/competitor.cjs" prepare --feishu --out "RUN"
 
 # 从日本站商品页进入原插件登录并核验 API
 node "SKILL/scripts/competitor.cjs" login --out "RUN"
@@ -53,7 +56,9 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 
 还支持 `--authorization-timeout 300`（5–900 秒）、`--interval 1`（1–60 秒）、`--extension-dir`（已安装的原扩展程序目录）、`--session-file`（用户明确提供的专用会话文件）。Python 可用 `AMAZON_COMPETITOR_PYTHON` 指定；已确认可见桌面时可用 `AMAZON_COMPETITOR_INTERACTIVE=1`，无桌面可设为 0。
 
-`check` 的 `ready_for_http` 仅表示本地会话格式有效，`session.authenticated=not_tested` 表示尚未请求服务端。`ready_for_login` 表示本地登录组件已存在；`login_can_prepare=true` 且 `login_preparation_required=true` 表示可自动准备登录依赖。缺少必需项时为 `needs_setup` 并附 `issues[].next_step`；HTTP 会话可用但登录依赖不齐时，提示放在 `warnings` 中，不强制为普通查询下载浏览器。检查不创建 profile、不登录网站。
+`check` 不联网、不开浏览器。`ready_for_http` 表示本地会话格式有效，卖家精灵的服务端会话用 `verify-session` 单独验证。`ready_for_login` 表示本地登录组件已存在。`extension.cached_version` 是 Skill 专用副本的版本。缺少必需项时返回 `needs_setup` 和 `issues[].next_step`；可选项的提示在 `warnings`，仅对飞书查询传 `--feishu` 将 CLI 和相应用户权限视为必需。
+
+`prepare` 按需安装固定版本的 Playwright 和 Chromium，从已安装的浏览器扩展中准备专用副本，再使用临时无头浏览器校验扩展能否加载。检查结果写入 `RUN/environment/environment.json`。如果卖家精灵原扩展尚未安装，先通过浏览器安装[卖家精灵官方扩展](https://www.sellersprite.com/en/help/sellersprite-chrome-extension-download)，然后重跑。`prepare --feishu` 缺少 CLI 时安装固定版本到用户缓存；应用配置、授权步骤和线上核验见 [飞书 CLI 工作流](feishu.md)。
 
 ## 错误与恢复
 

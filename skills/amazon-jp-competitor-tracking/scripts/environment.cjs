@@ -7,7 +7,8 @@ const { createRequire } = require('node:module');
 const { spawnSync, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const execute = promisify(execFile);
-const VERSION = require('../package.json').dependencies.playwright;
+const PACKAGE = require('../package.json');
+const VERSION = PACKAGE.dependencies.playwright;
 const ROOT = path.resolve(__dirname, '..');
 const CACHE = path.join(os.homedir(), '.amazon-skill', 'cache', 'competitor-runtime', `playwright-${VERSION}`);
 
@@ -15,9 +16,9 @@ function findPython() {
   const options = process.env.AMAZON_COMPETITOR_PYTHON
     ? [[process.env.AMAZON_COMPETITOR_PYTHON, []]] : [['python3', []], ['python', []], ['py', ['-3']]];
   for (const [command, prefix] of options) {
-    const r = spawnSync(command, [...prefix, '-c', 'import sys;sys.exit(0 if sys.version_info >= (3,9) else 1)'],
-      { timeout: 5000, windowsHide: true });
-    if (r.status === 0) return { command, prefix };
+    const r = spawnSync(command, [...prefix, '-c', 'import sys;print(sys.version.split()[0]);sys.exit(sys.version_info < (3,9))'],
+      { timeout: 5000, windowsHide: true, encoding: 'utf8' });
+    if (r.status === 0) return { command, prefix, version: r.stdout.trim() };
   }
   throw Object.assign(Error('PYTHON_39_REQUIRED'), { code: 'PYTHON_39_REQUIRED' });
 }
@@ -73,6 +74,56 @@ async function inspectRuntime(python) {
     npm_available: npmAvailable, browser_cache: settings.cache_dir };
 }
 
+async function inspectFeishu(python) {
+  const settings = { timeout: 25000, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } };
+  try {
+    const result = await execute(python.command, [...python.prefix, path.join(__dirname, 'feishu_cli.py'), 'environment'], settings);
+    return JSON.parse(result.stdout);
+  } catch {
+    return { ready: false, category: 'FEISHU_CLI_CHECK_FAILED' };
+  }
+}
+
+async function prepareFeishu(python) {
+  const current = await inspectFeishu(python);
+  if (current.category !== 'FEISHU_CLI_REQUIRED' || process.env.AMAZON_COMPETITOR_FEISHU_CLI) return current;
+  const npm = npmCommand();
+  if (!npm || spawnSync(npm[0], [...npm[1], '--version'], { timeout: 5000, windowsHide: true, stdio: 'ignore' }).status !== 0)
+    return { ...current, category: 'NPM_REQUIRED' };
+  const prefix = path.join(os.homedir(), '.amazon-skill', 'cache', 'feishu-cli', PACKAGE.feishu_cli_version);
+  try {
+    await fs.mkdir(prefix, { recursive: true });
+    // The official npm package's postinstall places the platform-specific native binary in bin/.
+    await execute(npm[0], [...npm[1], 'install', '--prefix', prefix, '--save-exact', '--no-audit', '--no-fund',
+      `@larksuite/cli@${PACKAGE.feishu_cli_version}`], { timeout: 180000, windowsHide: true, maxBuffer: 1024 * 1024 });
+  } catch {
+    return { ...current, category: 'FEISHU_CLI_INSTALL_FAILED' };
+  }
+  return inspectFeishu(python);
+}
+
+async function smokeExtension(playwright, extension) {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'amazon-competitor-extension-check-'));
+  let context;
+  try {
+    context = await playwright.chromium.launchPersistentContext(profile, {
+      channel: 'chromium', headless: true, offline: true, timeout: 15000,
+      args: [`--disable-extensions-except=${extension.directory}`, `--load-extension=${extension.directory}`,
+        '--host-resolver-rules=MAP * ~NOTFOUND'],
+    });
+    const page = context.pages()[0] || await context.newPage();
+    await page.goto(`chrome-extension://${extension.id}/${extension.manifest.action.default_popup}`,
+      { waitUntil: 'domcontentloaded', timeout: 15000 });
+    if (await page.evaluate(() => globalThis.chrome?.runtime?.id) !== extension.id)
+      throw Error('Extension runtime unavailable');
+  } catch {
+    throw Object.assign(Error('EXTENSION_LOAD_FAILED'), { code: 'EXTENSION_LOAD_FAILED' });
+  } finally {
+    await context?.close().catch(() => {});
+    await fs.rm(profile, { recursive: true, force: true });
+  }
+}
+
 async function ensureEnvironment({ out, prepare = false } = {}) {
   if (Number(process.versions.node.split('.')[0]) < 18) throw Object.assign(Error('NODE_18_REQUIRED'), { code: 'NODE_18_REQUIRED' });
   const python = findPython();
@@ -120,4 +171,4 @@ async function ensureEnvironment({ out, prepare = false } = {}) {
   return { report, playwright: found.playwright };
 }
 
-module.exports = { findPython, ensureEnvironment, desktopAvailability, inspectRuntime };
+module.exports = { findPython, ensureEnvironment, desktopAvailability, inspectRuntime, inspectFeishu, prepareFeishu, smokeExtension };

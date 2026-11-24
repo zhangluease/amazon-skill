@@ -1,8 +1,8 @@
 // Read-only local checks and actionable public errors; never return session headers.
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { findPython, inspectRuntime, desktopAvailability } = require('./environment.cjs');
-const { discoverExtension, readManifest, extensionId, stateRoot } = require('./sellersprite_session.cjs');
+const { findPython, inspectRuntime, inspectFeishu, desktopAvailability, ensureEnvironment, prepareFeishu, smokeExtension } = require('./environment.cjs');
+const { discoverExtension, readManifest, extensionId, stateRoot, prepareExtension } = require('./sellersprite_session.cjs');
 const { sessionFromBridge } = require('./sellersprite_auth.cjs');
 
 const GUIDANCE = {
@@ -11,13 +11,23 @@ const GUIDANCE = {
   EXTENSION_NOT_FOUND: ['未找到卖家精灵原扩展。', '在 Chrome／Edge 安装原扩展，或用 --extension-dir 指定扩展程序目录。'],
   INVALID_EXTENSION_DIRECTORY: ['指定目录不是可用的卖家精灵原扩展。', '将 --extension-dir 指向包含 manifest.json 和 popup 页的程序目录。'],
   EXTENSION_ID_UNAVAILABLE: ['扩展未提供授权桥接所需的标识。', '安装 Chrome 商店的原扩展后重试。'],
+  EXTENSION_LOAD_FAILED: ['卖家精灵扩展未能在本机 Chromium 中加载。', '核对原扩展版本和浏览器安装后重跑 prepare。'],
   INTERACTIVE_BROWSER_REQUIRED: ['需要可见桌面完成扫码登录。', '在本地桌面运行；确认桌面可用后可设置 AMAZON_COMPETITOR_INTERACTIVE=1。'],
   NPM_REQUIRED: ['未找到用于安装登录依赖的 npm。', '安装包含 npm 的 Node.js，然后运行 prepare。'],
   PLAYWRIGHT_MISSING: ['登录所需的 Playwright 尚未准备。', '运行 prepare；有效 HTTP 会话查询不需要它。'],
+  BROWSER_PREPARATION_REQUIRED: ['Playwright 或 Chromium 尚未准备。', '运行 prepare 安装并验证浏览器依赖。'],
   PLAYWRIGHT_INSTALL_FAILED: ['登录依赖下载或安装失败。', '检查 npm 网络或代理设置，再运行 prepare。'],
   BROWSER_INSTALL_FAILED: ['登录浏览器下载失败。', '检查下载网络或代理设置，再运行 prepare。'],
   BROWSER_LAUNCH_FAILED: ['专用登录浏览器无法启动。', '运行 prepare 检查浏览器；Linux 还需安装 Chromium 系统依赖。'],
   BROWSER_CONFIG_INVALID: ['浏览器缓存配置无法读取。', '检查 ~/.amazon-skill/config.json 中 browser.cache_dir，要求是本机绝对路径。'],
+  FEISHU_CLI_REQUIRED: ['未找到飞书官方 CLI。', '运行 prepare --feishu --out 新目录安装固定版本。'],
+  FEISHU_CLI_NOT_RUNNABLE: ['飞书 CLI 无法执行或未返回版本。', '检查指定路径、可执行权限及系统架构。'],
+  FEISHU_CLI_INSTALL_FAILED: ['飞书 CLI 安装失败。', '检查 npm 和官方 CLI 下载网络后重跑 prepare --feishu。'],
+  FEISHU_CLI_CHECK_FAILED: ['未能完成飞书 CLI 本地检查。', '检查 Python 和 lark-cli 是否可执行，再运行 check --feishu。'],
+  FEISHU_CLI_AUTH_STATUS_FAILED: ['飞书 CLI 未返回可用的授权状态。', '运行 lark-cli auth status 检查本机飞书 CLI 配置。'],
+  FEISHU_CLI_APP_REQUIRED: ['飞书 CLI 尚未配置应用。', '通过 lark-cli config init 完成应用配置。'],
+  FEISHU_CLI_USER_AUTH_REQUIRED: ['飞书 CLI 尚无可用用户授权。', '按飞书 CLI 工作流完成用户授权。'],
+  FEISHU_CLI_SCOPE_REQUIRED: ['飞书 CLI 用户授权缺少表格操作所需权限。', '按 missing_scopes 核对，再以用户身份补充授权。'],
   PROFILE_BUSY: ['另一个任务正在使用同一专用会话。', '等待该任务结束，或用独立 --state-dir 运行另一个账号。'],
   AUTHORIZATION_TIMEOUT: ['卖家精灵插件登录等待超时。', '用新报告目录重试，并在日本站商品页的插件面板完成登录。'],
   AUTHORIZATION_CANCELLED: ['卖家精灵专用窗口已关闭。', '用新报告目录重试，授权完成前保持窗口打开。'],
@@ -52,12 +62,17 @@ async function check(options, sessionFile, dependencies = {}) {
   const add = (list, code) => list.push({ code, ...guidance(code) });
   const node = { version: process.versions.node, supported: Number(process.versions.node.split('.')[0]) >= 18 };
   if (!node.supported) add(issues, 'NODE_18_REQUIRED');
-  let python, runtime;
+  let python, runtime, feishu;
   try { python = (dependencies.findPython || findPython)(); }
   catch { add(issues, 'PYTHON_39_REQUIRED'); }
   if (python) {
-    try { runtime = await (dependencies.inspectRuntime || inspectRuntime)(python); }
-    catch { add(loginIssues, 'BROWSER_CONFIG_INVALID'); }
+    const [browserCheck, feishuCheck] = await Promise.allSettled([
+      (dependencies.inspectRuntime || inspectRuntime)(python),
+      (dependencies.inspectFeishu || inspectFeishu)(python),
+    ]);
+    if (browserCheck.status === 'fulfilled') runtime = browserCheck.value;
+    else add(loginIssues, 'BROWSER_CONFIG_INVALID');
+    feishu = feishuCheck.status === 'fulfilled' ? feishuCheck.value : { ready: false, category: 'FEISHU_CLI_CHECK_FAILED' };
   }
   const session = { file_exists: false, format_valid: false, authenticated: 'not_tested' };
   try {
@@ -69,16 +84,20 @@ async function check(options, sessionFile, dependencies = {}) {
     }
   } catch { /* Missing and malformed caches require login, not disclosure of their contents. */ }
   const state = options['state-dir'] || stateRoot();
-  let extension;
+  const read = dependencies.readManifest || readManifest;
+  const cached = await read(path.join(state, 'extension'));
+  let extension, extensionSource;
   if (options['extension-dir']) {
-    const manifest = await (dependencies.readManifest || readManifest)(options['extension-dir']);
+    const manifest = await read(options['extension-dir']);
     if (manifest) extension = { manifest };
     else add(loginIssues, 'INVALID_EXTENSION_DIRECTORY');
+    extensionSource = 'specified_directory';
   } else {
     extension = await (dependencies.discoverExtension || discoverExtension)();
-    if (!extension) {
-      const manifest = await (dependencies.readManifest || readManifest)(path.join(state, 'extension'));
-      if (manifest) extension = { manifest };
+    if (extension) extensionSource = 'installed_browser';
+    else if (cached) {
+      extension = { manifest: cached };
+      extensionSource = 'skill_cache';
     }
     if (!extension) add(loginIssues, 'EXTENSION_NOT_FOUND');
   }
@@ -87,19 +106,58 @@ async function check(options, sessionFile, dependencies = {}) {
     warnings.push({ code: 'EXTENSION_VERSION_NOT_VERIFIED', message: '当前扩展版本与已验证的 5.0.7 不同，需以本轮接口实测为准。' });
   const desktop = (dependencies.desktopAvailability || desktopAvailability)();
   if (!desktop.available) add(loginIssues, 'INTERACTIVE_BROWSER_REQUIRED');
+  if (runtime && (!runtime.playwright_installed || !runtime.browser_installed)) add(warnings, 'BROWSER_PREPARATION_REQUIRED');
   if (runtime && !runtime.playwright_installed && !runtime.npm_available) add(loginIssues, 'NPM_REQUIRED');
   const httpReady = !issues.length && session.format_valid;
   const loginPreparable = !issues.length && !loginIssues.length;
   const loginReady = loginPreparable && Boolean(runtime?.playwright_installed && runtime?.browser_installed);
   if (httpReady) warnings.push(...loginIssues);
   else issues.push(...loginIssues);
+  if (feishu?.category) add(options.feishu ? issues : warnings, feishu.category);
   return { status: issues.length ? 'needs_setup' : 'ready', skill_version: require('../package.json').version,
-    node, python_found: Boolean(python),
+    node, python_found: Boolean(python), python_version: python?.version || null,
     session, session_tested: false, ready_for_http: httpReady, ready_for_login: loginReady,
     login_can_prepare: loginPreparable, login_preparation_required: loginPreparable && !loginReady,
-    extension: { found: Boolean(extension), version: extension?.manifest.version || null },
-    runtime: runtime || null, desktop, issues, warnings,
+    extension: { found: Boolean(extension), version: extension?.manifest.version || null,
+      source: extension ? extensionSource : null, cached_version: cached?.version || null, load_tested: false },
+    runtime: runtime || null, desktop, feishu: feishu ? { required: Boolean(options.feishu), ...feishu } : null, issues, warnings,
     collection_method: 'http_with_optional_amazon_browser', browser_only_for_login: false };
 }
 
-module.exports = { guidance, check };
+async function prepareSetup(options, home, python, output, dependencies = {}) {
+  const issues = [], warnings = [];
+  const [browserResult, extensionResult, feishuResult] = await Promise.allSettled([
+    (dependencies.ensureEnvironment || ensureEnvironment)({ prepare: true }),
+    (dependencies.prepareExtension || prepareExtension)(home, options['extension-dir']),
+    (options.feishu ? dependencies.prepareFeishu || prepareFeishu : dependencies.inspectFeishu || inspectFeishu)(python),
+  ]);
+  const browser = browserResult.value, extension = extensionResult.value;
+  const feishu = feishuResult.value || { ready: false, category: 'FEISHU_CLI_CHECK_FAILED' };
+  const add = (list, code) => list.push({ code, ...guidance(code) });
+  if (!browser) add(issues, browserResult.reason?.code || 'BROWSER_LAUNCH_FAILED');
+  if (!extension) add(issues, extensionResult.reason?.code || 'EXTENSION_NOT_FOUND');
+  else if (!extension.id) add(issues, 'EXTENSION_ID_UNAVAILABLE');
+  const extensionStatus = { prepared: Boolean(extension?.id), version: extension?.manifest.version || null,
+    load_tested: false, loaded: null };
+  if (browser && extension?.id) {
+    extensionStatus.load_tested = true;
+    try {
+      await (dependencies.smokeExtension || smokeExtension)(browser.playwright, extension);
+      extensionStatus.loaded = true;
+    } catch {
+      extensionStatus.loaded = false;
+      add(issues, 'EXTENSION_LOAD_FAILED');
+    }
+  }
+  if (feishu.category) add(options.feishu ? issues : warnings, feishu.category);
+  const ready = issues.length === 0;
+  const report = { ...browser?.report, status: ready ? 'ready' : 'needs_setup', ready,
+    extension: extensionStatus, feishu: { required: Boolean(options.feishu), ...feishu },
+    desktop: desktopAvailability(), issues, warnings, credentials_included: false };
+  const directory = path.join(output, 'environment');
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'environment.json'), JSON.stringify(report, null, 2));
+  return report;
+}
+
+module.exports = { guidance, check, prepareSetup };

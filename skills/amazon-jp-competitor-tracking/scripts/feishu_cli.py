@@ -13,14 +13,21 @@ import uuid
 from competitor_core import ApiError, BROWSER_OFFER_SOURCE, CHANGE_SCHEMA, write_json, is_login_mask, number
 from feishu_plan import cell_text, parse_table_url, create_plan
 
+CLI_VERSION = json.loads((Path(__file__).parents[1] / 'package.json').read_text(encoding='utf-8'))['feishu_cli_version']
+REQUIRED_SCOPES = frozenset('offline_access base:app:read base:table:read base:field:read '
+                            'base:record:read base:record:update wiki:wiki:readonly'.split())
+
+
+def cli_env():
+    return dict(os.environ, LARKSUITE_CLI_NO_UPDATE_NOTIFIER='1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER='1')
+
 
 def find_cli(supplied=None):
     if supplied or os.environ.get('AMAZON_COMPETITOR_FEISHU_CLI'):
         path = Path(supplied or os.environ['AMAZON_COMPETITOR_FEISHU_CLI']).expanduser()
     else:
-        version = json.loads((Path(__file__).parents[1] / 'package.json').read_text())['feishu_cli_version']
         binary = 'lark-cli.exe' if os.name == 'nt' else 'lark-cli'
-        path = Path.home() / f'.amazon-skill/cache/feishu-cli/{version}/node_modules/@larksuite/cli/bin/{binary}'
+        path = Path.home() / f'.amazon-skill/cache/feishu-cli/{CLI_VERSION}/node_modules/@larksuite/cli/bin/{binary}'
         if not path.is_file():
             found = shutil.which('lark-cli')
             path = Path(found) if found else path
@@ -38,6 +45,48 @@ def find_cli(supplied=None):
     return str(path.resolve())
 
 
+def cli_environment(supplied=None):
+    """Read only local lark-cli status and expose neither account metadata nor tokens."""
+    report = {'installed': False, 'runnable': False, 'version': None, 'pinned_version': CLI_VERSION,
+              'user_authorized_locally': False, 'missing_scopes': [], 'server_verified': False, 'ready': False}
+    try:
+        cli = find_cli(supplied)
+    except ApiError as error:
+        return dict(report, category=error.code)
+    report['installed'] = True
+    try:
+        result = subprocess.run([cli, '--version'], capture_output=True, text=True, encoding='utf-8',
+                                env=cli_env(), timeout=10)
+        version = re.search(r'\b(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)\b', result.stdout)
+        if result.returncode != 0 or not version:
+            return dict(report, category='FEISHU_CLI_NOT_RUNNABLE')
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return dict(report, category='FEISHU_CLI_NOT_RUNNABLE')
+    report.update(runnable=True, version=version[1])
+    try:
+        result = subprocess.run([cli, 'auth', 'status', '--json'], capture_output=True, text=True, encoding='utf-8',
+                                env=cli_env(), timeout=12)
+        status = json.loads(result.stdout or result.stderr)
+        if not isinstance(status, dict):
+            raise ValueError()
+        if result.returncode != 0:
+            return dict(report, category='FEISHU_CLI_AUTH_STATUS_FAILED')
+        if not status.get('appId'):
+            return dict(report, category='FEISHU_CLI_APP_REQUIRED')
+        user = status.get('identities', {}).get('user', {})
+        scope = user.get('scope', '')
+        missing = sorted(REQUIRED_SCOPES - set(scope.split() if isinstance(scope, str) else ()))
+        user_available = user.get('available') is True
+        report.update(user_authorized_locally=user_available, missing_scopes=missing)
+        if not user_available:
+            return dict(report, category='FEISHU_CLI_USER_AUTH_REQUIRED')
+        if missing:
+            return dict(report, category='FEISHU_CLI_SCOPE_REQUIRED')
+        return dict(report, ready=True)
+    except (OSError, AttributeError, ValueError, subprocess.TimeoutExpired):
+        return dict(report, category='FEISHU_CLI_AUTH_STATUS_FAILED')
+
+
 class FeishuClient:
     def __init__(self, output, cli=None):
         self.output = Path(output).resolve()
@@ -46,11 +95,10 @@ class FeishuClient:
         self.inherited_lock_fds = ()
 
     def run(self, args, *, artifact=False):
-        env = dict(os.environ, LARKSUITE_CLI_NO_UPDATE_NOTIFIER='1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER='1')
         inherited = {'pass_fds': self.inherited_lock_fds} if os.name != 'nt' else {}
         try:
             result = subprocess.run([self.cli, *args, '--as', 'user'], cwd=self.output,
-                                    capture_output=True, text=True, encoding='utf-8', env=env, timeout=90, **inherited)
+                                    capture_output=True, text=True, encoding='utf-8', env=cli_env(), timeout=90, **inherited)
             data = json.loads(result.stdout if result.returncode == 0 else result.stderr)
         except (OSError, ValueError, subprocess.TimeoutExpired):
             raise ApiError('FEISHU_CLI_FAILED') from None
@@ -241,14 +289,19 @@ def apply_one(client, target, schema, before, product, *, price_baseline=None, o
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('inspect', 'apply-one'))
-    parser.add_argument('--url', required=True)
-    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('command', choices=('environment', 'inspect', 'apply-one'))
+    parser.add_argument('--url')
+    parser.add_argument('--out', type=Path)
     parser.add_argument('--cli')
     parser.add_argument('--before', type=Path)
     parser.add_argument('--products', type=Path)
     parser.add_argument('--record-id')
     args = parser.parse_args()
+    if args.command == 'environment':
+        print(json.dumps(cli_environment(args.cli)))
+        return 0
+    if not args.url or not args.out:
+        parser.error('--url and --out are required for inspect and apply-one')
     try:
         client = FeishuClient(args.out, args.cli)
         target = client.resolve(args.url)

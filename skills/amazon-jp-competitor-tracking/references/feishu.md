@@ -1,10 +1,10 @@
 # 飞书 CLI 工作流
 
-本技能使用官方 `@larksuite/cli`，版本由 `package.json.feishu_cli_version` 固定。优先使用已安装的 `lark-cli`；可通过 `AMAZON_COMPETITOR_FEISHU_CLI` 指向原生可执行文件，也支持本技能用户缓存中的 CLI。CLI 自行管理凭证，不读取浏览器 Cookie 或将令牌放进报告。
+本技能使用官方 `@larksuite/cli`。自动安装版本由 `package.json.feishu_cli_version` 指定。查找顺序是 `AMAZON_COMPETITOR_FEISHU_CLI` 指定的原生可执行文件、技能用户缓存、系统 `PATH`。CLI 自行管理凭证。
 
 ## 初始化与授权
 
-首次使用可运行 `npm install -g @larksuite/cli@1.0.100`，或安装到 `~/.amazon-skill/cache/feishu-cli/1.0.100/`。使用官方 CLI 自带的 `skills read lark-shared`、`skills read lark-base` 查看与当前版本匹配的说明。
+先运行 `node "SKILL/scripts/competitor.cjs" check --feishu` 检查 CLI 是否可运行、当前用户授权是否涵盖任务所需权限。首次安装用 `node "SKILL/scripts/competitor.cjs" prepare --feishu --out "RUN"`，CLI 缺失时安装到 `~/.amazon-skill/cache/feishu-cli/` 下的版本目录。用户也可自行安装到 `PATH`。需要服务端确认时，使用已找到的 `lark-cli` 执行 `auth status --verify --json`，对外仅报告验证结论。CLI 的 `skills read lark-shared` 和 `skills read lark-base` 提供与当前版本匹配的说明。
 
 没有应用配置时，在后台运行 `lark-cli config init --new`，向用户展示原始配置链接，并用 `lark-cli auth qrcode URL --output ./qr.png` 展示 PNG。新增应用涉及创建凭证，需要用户确认后创建；不能自动扩大权限。已有配置不重复创建。
 

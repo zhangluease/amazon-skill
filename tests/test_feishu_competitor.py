@@ -2,16 +2,18 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'skills/amazon-jp-competitor-tracking/scripts'
 sys.path.insert(0, str(SCRIPTS))
 try:
     from feishu_plan import create_plan
-    from feishu_cli import build_patch, apply_one
+    from feishu_cli import build_patch, apply_one, cli_environment, REQUIRED_SCOPES
     from competitor_core import ApiError, CHANGE_SCHEMA, declared_package_quantity
     from competitor_changes import normalize_changes
     from competitor_core import window
@@ -58,6 +60,20 @@ class FakeClient:
 
 
 class FeishuTests(unittest.TestCase):
+    def test_environment_checks_only_local_user_scopes_and_omits_identity(self):
+        missing_scope = 'base:record:update'
+        status = {'appId': 'private-app-id', 'identities': {'user': {'available': True, 'userName': 'Private Name',
+                  'openId': 'private-user-id', 'scope': ' '.join(REQUIRED_SCOPES - {missing_scope})}}}
+        answers = [subprocess.CompletedProcess([], 0, 'lark-cli version 1.0.100', ''),
+                   subprocess.CompletedProcess([], 0, json.dumps(status), '')]
+        with patch('feishu_cli.find_cli', return_value='/fixture/lark-cli'), patch('feishu_cli.subprocess.run', side_effect=answers) as run:
+            report = cli_environment()
+        self.assertTrue(report['runnable'])
+        self.assertFalse(report['ready'])
+        self.assertEqual(report['missing_scopes'], [missing_scope])
+        self.assertEqual(run.call_args.args[0], ['/fixture/lark-cli', 'auth', 'status', '--json'])
+        self.assertNotIn('private', json.dumps(report).lower())
+
     def test_plan_uses_empty_title_and_preserves_distinct_record_ids(self):
         rows = [{'record_id': 'recOld', 'ASIN': ASIN, '标题': '旧标题'},
                 {'record_id': 'recNew', 'ASIN': ASIN, '标题': ' \n'},

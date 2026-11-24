@@ -5,16 +5,16 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { findPython, ensureEnvironment } = require('./environment.cjs');
+const { findPython } = require('./environment.cjs');
 const { stateRoot, prepareHome, fail } = require('./sellersprite_session.cjs');
 const { authorize, sessionFromBridge, saveSession } = require('./sellersprite_auth.cjs');
-const { check, guidance } = require('./diagnostics.cjs');
+const { check, guidance, prepareSetup } = require('./diagnostics.cjs');
 const execute = promisify(execFile);
 const HELP = `日本亚马逊竞对页面追踪
 依赖：Node.js 18+、Python 3.9+；首次登录还需本机卖家精灵原扩展和可见桌面。
 
-  node competitor.cjs check
-  node competitor.cjs prepare --out 新目录
+  node competitor.cjs check [--feishu]
+  node competitor.cjs prepare [--feishu] --out 新目录
   node competitor.cjs changes ASIN --out 新目录
   node competitor.cjs changes ASIN --all-history --out 新目录
   node competitor.cjs collect ASIN --out 新目录
@@ -27,6 +27,7 @@ changes 只查图片/视频修改图标，默认近七个日本自然日期；co
 支持 --input 清单、--as-of 日期、--interval 1、--state-dir 专用会话目录、--extension-dir 扩展程序目录。
 collect 默认 --amazon-browser headless；设为 off 仅走 HTTP。确认页会暂停后续 Amazon 采集，使用 amazon-offer headed 等待用户验证恢复。
 会话有效时直接调用 HTTP；鉴权失效时最多 API 续登一次，普通缺项只核验一次会话，必要时最多扫码一次。每轮使用新的输出目录。
+check 仅检查本机。prepare 启动测试 Chromium、准备并试载卖家精灵原扩展；--feishu 同时要求飞书 CLI 与用户授权，prepare 缺 CLI 时安装固定版本。
 `;
 
 function argumentsFor(argv) {
@@ -39,6 +40,7 @@ function argumentsFor(argv) {
     if (!args[i].startsWith('--')) { options.asins.push(args[i]); continue; }
     const key = args[i].slice(2);
     if (key === 'all-history' && command === 'changes') { options.allHistory = true; continue; }
+    if (key === 'feishu' && ['check', 'prepare'].includes(command)) { options.feishu = true; continue; }
     if (!['out', 'input', 'as-of', 'state-dir', 'session-file', 'extension-dir', 'authorization-timeout', 'interval', 'amazon-browser', 'login-asin'].includes(key)
       || !args[i + 1] || args[i + 1].startsWith('--')) throw fail('INVALID_ARGUMENT');
     options[key] = args[++i];
@@ -152,8 +154,7 @@ async function run(options, dependencies = {}) {
       return snapshot;
     }
     if (options.command === 'prepare') {
-      const env = await (dependencies.ensureEnvironment || ensureEnvironment)({ out: path.join(output, 'environment'), prepare: true });
-      return env.report;
+      return prepareSetup(options, home, python, output, dependencies);
     }
     if (options.command === 'login') {
       await login('user_requested_login');

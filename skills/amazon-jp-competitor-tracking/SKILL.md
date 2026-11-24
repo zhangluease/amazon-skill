@@ -17,7 +17,7 @@ description: 批量抓取日本亚马逊竞对 ASIN 的商品信息、包装数�
 node "SKILL/scripts/competitor.cjs" check
 ```
 
-此检查无网络、无浏览器，分别报告会话格式、扩展、登录运行依赖和下一步处理方法，不代表账号已通过线上验证。登录依赖可在需要授权时自动下载，或先运行 `prepare --out "RUN"`。缺失项与安装细节见 [访问方式](references/access.md)。
+`check` 只读本机依赖、桌面、扩展及授权缓存。处理飞书任务时用 `check --feishu` 将官方 CLI 和用户权限纳入必需项。首次安装或检查出缺项时，运行 `prepare --out "RUN"` 启动测试 Chromium 并试载卖家精灵扩展，加 `--feishu` 可同时补装官方 CLI。首次账号授权仍由用户完成。缺失项、安装和线上验证见 [访问方式](references/access.md)。
 
 只查近七天「修改图片/视频」合并图标：
 
