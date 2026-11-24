@@ -88,6 +88,14 @@ class CompetitorTests(unittest.TestCase):
         for key in ('reference_price', 'discount_percent', 'buy_box', 'stock'):
             self.assertIsNone(row[key])
 
+    def test_browser_offer_recognizes_explicit_low_stock_chinese_message(self):
+        observation = {'url': 'https://www.amazon.co.jp/dp/' + ASIN, 'title': '商品',
+                       'observed_at': '2026-11-24T03:32:41Z', 'country_label': '日本',
+                       'postal_code': '163-8001', 'offer_postal_code': '163-8001',
+                       'price_text': 'JP¥3,680', 'cart': {'enabled': True, 'label': '加入购物车'},
+                       'availability_text': '库存仅剩 2 件 - 欲购从速。'}
+        self.assertEqual(client.browser_offer(observation)['data']['stock'], 'in_stock')
+
     def test_complete_product_is_ok_and_missing_current_offer_reports_browser_followup(self):
         data = dict(product(), parent=OTHER)
         amazon = mock.Mock()
@@ -206,7 +214,8 @@ class CompetitorTests(unittest.TestCase):
         opener = Opener([{'code': 'OK', 'data': [product()]},
                          {'code': 'ERR_NEED_RENEWAL_AUTHORIZED', 'data': {}},
                          {'code': 'ERR_NEED_RENEWAL_AUTHORIZED', 'data': {}}])
-        api = client.Client(SESSION, opener=opener, sleep=lambda _: None)
+        from test_competitor_session import FakeGate
+        api = client.Client(SESSION, opener=opener, sleep=lambda _: None, gate=FakeGate())
         row = api.get('/v2/extension/asin/JP', {'asins': ASIN})
         self.assertEqual(row[0]['asin'], ASIN)
         parsed = urlsplit(opener.requests[0].full_url)

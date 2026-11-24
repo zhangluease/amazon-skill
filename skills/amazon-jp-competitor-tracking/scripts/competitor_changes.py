@@ -111,7 +111,9 @@ def collect_listing_changes(asins, client, scope, output, *, resume=False):
         results.append(row)
         save_listing_changes(output, results, asins, scope, stopped)
     usable = sum(row['media_change_observed'] is not None for row in results)
-    return {'status': 'verification_required' if stopped == 'ERR_ROBOT_CHECK' else
+    return {'status': 'resource_busy' if stopped == 'PROVIDER_BUSY' else
+            'authorization_pending' if stopped == 'PROVIDER_AUTHORIZATION_PENDING' else
+            'verification_required' if stopped in ('ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING') else
             'authorization_required' if stopped in AUTH_ERRORS else
             'ok' if all(row['history_status'] == 'ok' for row in results) else 'partial' if usable else 'failed',
             'category': stopped, 'requested': len(asins), 'usable_products': usable,

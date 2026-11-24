@@ -54,9 +54,9 @@ node skills/amazon-jp-competitor-tracking/scripts/competitor.cjs collect \
 
 输出 HTML、CSV、JSON 和取数证据。B008H0V15I 已验证在匿名请求遇到验证页后可从 Chrome 商品页补齐报价。命令和证据格式见 [访问方式](skills/amazon-jp-competitor-tracking/references/access.md)及[字段口径](skills/amazon-jp-competitor-tracking/references/data-contract.md)。
 
-向其他人分发时，运行 `python3 scripts/package_competitor_skill.py --out /absolute/amazon-jp-competitor-tracking.zip`。构建器仅打包明确列出的运行代码和说明，并输出 SHA-256 清单；登录态、扩展副本、历史报告和本地依赖不在包内。接收者把完整目录放入自己的 Codex 技能目录，先运行 `competitor.cjs check`，用自己的卖家精灵账号授权。已有会话正常复用；鉴权失效或关键商品数据为空时先尝试一次 API 续登，必要时才扫码，人机验证单独交给用户完成。
+向其他人分发时，运行 `python3 scripts/package_competitor_skill.py --out /absolute/amazon-jp-competitor-tracking.zip`。构建器仅打包明确列出的运行代码和说明，并输出 SHA-256 清单；登录态、扩展副本、历史报告和本地依赖不在包内。接收者把完整目录放入自己的 Codex 技能目录，先运行 `competitor.cjs check`，用自己的卖家精灵账号授权。已有会话正常复用；鉴权失效时最多 API 续登一次，普通数据缺项只核验一次会话；登录恢复后须通过同一 API 会话检查。飞书任务使用 `feishu_sync.py plan/work/status` 共享同机队列，默认每批并发最多 3 个 ASIN，同机合计上限也为 3；原子认领后按 ASIN 采集、立即通过 CLI 写回并核验，先新增后更新。飞书不使用 Browser Use；验证拒绝会暂停共享采集。
 
-此技能的 Python 分为 `competitor_core.py`（输入／HTTP）、`competitor_changes.py`（图库修改标记）、`competitor_report.py`（输出）和 `competitor_client.py`（编排／CLI）；Node 分为命令编排、诊断、依赖环境、专用会话和扫码桥接。Python 仅用标准库，浏览器运行依赖按需准备。修改后运行竞对相关 Python／Node 测试，并检查分发包隔离测试，避免重新依赖本机配置。
+此技能的 Python 分为 `competitor_core.py`（输入／HTTP）、`competitor_changes.py`（图库修改标记）、`competitor_report.py`（输出）和 `competitor_client.py`（编排／CLI）；Node 分为命令编排、诊断、依赖环境、专用会话和扫码桥接。`competitor_coordination.py` 负责同机共享队列与锁，`feishu_sync.py` 负责逐条编排，`feishu_cli.py` 封装官方飞书 CLI。Python 仅用标准库，浏览器运行依赖按需准备。修改后运行竞对相关 Python／Node 测试，并检查分发包隔离测试，避免重新依赖本机配置。
 
 ## POD 选图
 

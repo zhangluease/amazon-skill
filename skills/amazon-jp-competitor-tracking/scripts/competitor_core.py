@@ -26,7 +26,8 @@ AUTH_ERRORS = {'MISSING_HTTP_SESSION', 'INVALID_HTTP_SESSION', 'HTTP_401',
 
 
 STOP_ERRORS = {'HTTP_429', 'HTTP_403', 'ERR_GLOBAL_403', 'ERR_FREQUENT', 'ERR_VERSION_NEED_UPGRADE',
-               'ERR_ROBOT_CHECK'}
+               'ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING', 'PROVIDER_AUTHORIZATION_PENDING',
+               'PROVIDER_BUSY'}
 
 
 HEADERS = ('auth-token', 'auth-fp', 'random-token', 'user-agent')
@@ -217,34 +218,69 @@ def checksum(value, version):
     return str(number) + '.' + str(number ^ seed)
 
 
+def request_parameters(session, route, params):
+    """Mirror the original extension's common request middleware, not only sales."""
+    values = {key: value for key, value in params.items() if value is not None}
+    if not values.get('tk'):
+        text = values.get('asins') or values.get('asin') or values.get('q') or route
+        values['tk'] = checksum(str(text), session['extension_version'])
+    values.update(session['parameters'])
+    return values
+
+
 class Client:
-    def __init__(self, session, interval=1, opener=None, sleep=time.sleep, session_file=None):
+    def __init__(self, session, interval=1, opener=None, sleep=time.sleep, session_file=None, gate=None):
+        if gate is None:
+            from competitor_coordination import ProviderGate
+            gate = ProviderGate()
         self.session, self.interval = session, interval
         self.opener = opener or urllib.request.build_opener(NoRedirect())
         self.sleep, self.last = sleep, None
         self.session_file = Path(session_file).expanduser() if session_file else None
         self.renewal_attempted, self.auth_events = False, []
+        self.missing_session_checked = False
+        self.request_trace = []
+        self.gate = gate
+
+    def _reload_session(self):
+        if self.session_file and self.session_file.exists():
+            self.session = load_session(self.session_file)
+
+    def _pause_on_error(self, error):
+        if error.code == 'ERR_ROBOT_CHECK':
+            self.gate.pause(error.code, 'verification')
+        elif error.code in AUTH_ERRORS:
+            self.gate.pause(error.code, 'authorization')
 
     def _request(self, origin, route, params):
         # Fixed vendor origins only; redirects cannot forward the authorized headers.
         if not (origin == ORIGIN and re.fullmatch(
-                r'/v2/extension/(?:asin/JP|competitor-lookup/JP|keepa|chart/amz-unit-trend/variations|'
+                r'/v2/extension/(?:client/latest|asin/JP|competitor-lookup/JP|keepa|chart/amz-unit-trend/variations|'
                 r'listing/JP/(?:asin-change|ads-trend)/[A-Z0-9]{10})', route)
                 or origin == 'https://www.sellersprite.com' and route == '/v2/extension/tk/signin'):
             raise ApiError('ENDPOINT_NOT_ALLOWED')
         if self.last is not None:
             self.sleep(max(0, self.interval - (time.monotonic() - self.last)))
+        self.gate.pace(self.interval)
         self.last = time.monotonic()
-        query = urllib.parse.urlencode(dict(self.session['parameters'], **params))
+        parameters = request_parameters(self.session, route, params)
+        query = urllib.parse.urlencode(parameters)
+        trace = {'started_at': dt.datetime.now(JST).isoformat(), 'origin': origin,
+                 'route': route, 'parameter_names': sorted(parameters), 'signed': bool(parameters.get('tk'))}
+        self.request_trace.append(trace)
         req = urllib.request.Request(origin + route + '?' + query, headers=dict(self.session['headers'],
             **{'accept': 'application/json', 'content-type': 'application/json', 'accept-encoding': 'identity'}))
         try:
             with self.opener.open(req, timeout=30) as response:
                 data = response.read(8 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as error:
+            trace['status'] = 'HTTP_' + str(error.code)
             raise ApiError('HTTP_' + str(error.code)) from None
         except (OSError, TimeoutError):
+            trace['status'] = 'NETWORK_FAILED'
             raise ApiError('NETWORK_FAILED') from None
+        finally:
+            trace['finished_at'] = dt.datetime.now(JST).isoformat()
         if len(data) > 8 * 1024 * 1024:
             raise ApiError('RESPONSE_TOO_LARGE')
         try:
@@ -253,6 +289,7 @@ class Client:
             raise ApiError('NON_JSON_RESPONSE') from None
         if not isinstance(document, dict):
             raise ApiError('INVALID_RESPONSE')
+        trace['status'] = 'OK' if document.get('code') == 'OK' else ApiError(document.get('code')).code
         if document.get('code') != 'OK':
             raise ApiError(document.get('code'))
         if 'data' not in document:
@@ -265,6 +302,15 @@ class Client:
 
     def renew_session(self, reason):
         """Same token sign-in as the plugin's account button; at most once per worker."""
+        with self.gate.hold():
+            self._reload_session()
+            try:
+                return self._renew_session(reason)
+            except ApiError as error:
+                self._pause_on_error(error)
+                raise
+
+    def _renew_session(self, reason):
         if self.renewal_attempted:
             raise ApiError('ERR_NEED_RE_AUTHORIZED')
         self.renewal_attempted = True
@@ -289,6 +335,15 @@ class Client:
             raise
 
     def get(self, route, params):
+        with self.gate.hold():
+            self._reload_session()
+            try:
+                return self._get(route, params)
+            except ApiError as error:
+                self._pause_on_error(error)
+                raise
+
+    def _get(self, route, params):
         try:
             data = self._request(ORIGIN, route, params)
         except ApiError as error:
@@ -301,16 +356,52 @@ class Client:
                 if hasattr(error, 'snapshot_data') and not hasattr(recovery_error, 'snapshot_data'):
                     recovery_error.snapshot_data = error.snapshot_data
                 raise
-        if not self.renewal_attempted and missing_snapshot_data(route, params, data):
+        if not self.missing_session_checked and missing_snapshot_data(route, params, data):
+            self.missing_session_checked = True
             try:
-                self.renew_session('missing_snapshot_data')
-                return self._request(ORIGIN, route, params)
+                checked = self.verify_session('missing_snapshot_data')
+                if checked['token_rotated']:
+                    return self._request(ORIGIN, route, params)
             except ApiError as error:
                 # The original successful snapshot still contains useful business data.
                 # Callers must sanitize it and requery this source after authorization.
                 error.snapshot_data = data
                 raise
         return data
+
+    def verify_session(self, reason='explicit_session_check'):
+        with self.gate.hold(allow_paused=True):
+            self._reload_session()
+            try:
+                result = self._verify_session(reason)
+                self.gate.verified()
+                return result
+            except ApiError as error:
+                self._pause_on_error(error)
+                raise
+
+    def _verify_session(self, reason):
+        event = {'action': 'session_check', 'reason': reason, 'status': 'failed'}
+        self.auth_events.append(event)
+        previous = self.session['headers']['auth-token']
+        try:
+            data = self.get('/v2/extension/client/latest', {})
+            token = data.get('token') if isinstance(data, dict) else None
+            if isinstance(data, dict) and data.get('guest') is True:
+                raise ApiError('ERR_NEED_AUTHORIZED')
+            if (not isinstance(token, str) or not token or len(token) > 8192
+                    or token.lower() in ('null', 'undefined', '[redacted]') or is_login_mask(token)
+                    or any(ord(c) < 32 or ord(c) == 127 for c in token)):
+                raise ApiError('INVALID_SESSION_CHECK_RESPONSE')
+            self.session['headers']['auth-token'] = token
+            if self.session_file and token != previous:
+                write_json(self.session_file, dict(self.session, format='sellersprite-http-session-v1',
+                           captured_at=dt.datetime.now(JST).isoformat()))
+            event['status'] = 'ok'
+            return {'authenticated': True, 'token_rotated': token != previous}
+        except ApiError as error:
+            event['code'] = error.code
+            raise
 
 
 def is_login_mask(value):
@@ -384,7 +475,7 @@ def purchase_threshold(value):
 def declared_package_quantity(title):
     """Use an explicit single title quantity; mixed component counts stay unknown."""
     text = unicodedata.normalize('NFKC', title or '')
-    matches = re.findall(r'(?<![0-9])([1-9][0-9]?)\s*(?:枚|個|个|本|袋)(?:入り|入|セット|パック)?', text)
+    matches = re.findall(r'(?<![0-9])([1-9][0-9]?)\s*(?:枚|個|个|本|袋|セット|套|件)(?:入り|入|セット|パック|装)?', text)
     if len(matches) == 1:
         return int(matches[0])
     return None

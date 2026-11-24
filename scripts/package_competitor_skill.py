@@ -17,6 +17,7 @@ FILES = (
     'scripts/competitor_report.py', 'scripts/amazon_product.py', 'scripts/amazon_offer_page.js',
     'scripts/amazon_config.py', 'scripts/keepa_probe.py',
     'scripts/feishu_plan.py', 'scripts/feishu_cli.py',
+    'scripts/competitor_coordination.py', 'scripts/feishu_sync.py',
 )
 
 

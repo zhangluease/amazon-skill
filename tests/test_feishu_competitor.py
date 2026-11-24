@@ -125,6 +125,19 @@ class FeishuTests(unittest.TestCase):
             self.assertEqual(client.rows[1], another)
             self.assertEqual(client.rows[0]['分组'], 'keep')
 
+    def test_lost_owner_stops_before_remote_update(self):
+        before = {'record_id': 'recNew', 'ASIN': ASIN, '标题': None}
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(tmp, [before])
+            calls = []
+            def check_owner():
+                calls.append(1)
+                if len(calls) == 2:
+                    raise ApiError('CLAIM_LOST')
+            with self.assertRaisesRegex(ApiError, 'CLAIM_LOST'):
+                apply_one(client, {}, SCHEMA, before, product(), ownership_check=check_owner)
+            self.assertEqual(client.writes, [])
+
     def test_concurrent_edit_stops_before_any_remote_write(self):
         before = {'record_id': 'recNew', 'ASIN': ASIN, '标题': None}
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,6 +160,9 @@ class FeishuTests(unittest.TestCase):
 
     def test_package_quantity_does_not_guess_mixed_components_or_model_numbers(self):
         self.assertEqual(declared_package_quantity('V10 2個入り'), 2)
+        self.assertEqual(declared_package_quantity('Core 300 互換品 2セット入り'), 2)
+        self.assertEqual(declared_package_quantity('Core 300 兼容品 2套'), 2)
+        self.assertEqual(declared_package_quantity('Core 300 2件装'), 2)
         self.assertIsNone(declared_package_quantity('V10 SV12 969082-02'))
         self.assertIsNone(declared_package_quantity('フィルター2個とブラシ1本'))
 

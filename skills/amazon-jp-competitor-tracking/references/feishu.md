@@ -12,25 +12,46 @@
 
 Wiki 链接使用已公开的 `GET /open-apis/wiki/v2/spaces/get_node` 解析为实际 Base token，沿用 `wiki:wiki:readonly`；CLI 的新版 `+url-resolve` 可能要求不同的细分权限，不能混淆二者。`feishu_cli.py` 已封装此解析。所有数据操作显式 `--as user`。
 
-## 读取、规划和执行
+## 读取、认领和逐条执行
+
+飞书的数据读取、写入、读回核验与结果验收一律使用官方 CLI，不使用 Browser Use 查看表格、截图验收或取得 Cookie。首次授权时给用户 CLI 返回的链接／二维码，由用户自行完成，执行任务等待 CLI 授权结果。
+
+任务分派层必须先规划，再认领。不能让多个执行任务各自读取一遍空标题清单后，绕过队列直接采集。默认由执行器每批调度最多 3 个 ASIN，本批结束后再领取下一批；同机共享 3 个执行名额，多个进程或 Codex 任务合计最多 3 个活跃 ASIN；同机多个 Codex 任务需要使用相同协调目录和同一个 `job_id`。
 
 ```sh
-python3 "SKILL/scripts/feishu_cli.py" inspect --url "飞书多维表格链接" --out "RUN/feishu"
+# 只规划一次：读取 schema、视图的完整记录，并存入共享队列
+python3 "SKILL/scripts/feishu_sync.py" plan --url "飞书多维表格链接" --out "RUN"
+
+# 使用上一步返回的 job_id 执行；同机其他任务也只能领取这个批次
+python3 "SKILL/scripts/feishu_sync.py" work --job-id "job_返回的ID" --concurrency 3
+
+# 查询批次状态和持有者；不传 job-id 可列出活动批次
+python3 "SKILL/scripts/feishu_sync.py" status --job-id "job_返回的ID"
+python3 "SKILL/scripts/feishu_sync.py" status
 ```
 
-读取 schema 与指定视图范围内的完整记录，检查 `has_more=false`；超过 2000 行时使用返回 offset 继续并核对 rev。输出 `records.json` 和 `plan.json`：`new_rows` 是标题为空的行，`update_rows` 是有标题的行，先处理前者。标题列必须经 schema 确认，不能把投影漏列当作全表新增。
+`--concurrency` 默认为 3，只允许 1–3，可向下调整；共享名额的硬上限始终为 3，其他进程无法叠加突破。执行名额从认领持有到该条处理完释放，进程退出后由内核释放；正在等待名额的任务不先占取 ASIN。卖家精灵采集和登录恢复使用共享锁排队，HTTP 请求仍串行、间隔至少一秒。每个 ASIN 的 CLI 客户端和报告目录独立，事件输出串行化。
 
-以 record_id 定位行，不按 ASIN 覆盖所有同名记录，不增加记录或字段。一次任务内部重复 ASIN 可共享快照，下一次任务重新采集。每个采集批次不超过原采集器的 200 个 ASIN；使用新报告目录。
+只执行指定样本时，规划阶段逐次传 `--asin ASIN` 限定范围。`work --max-items 1` 表示本进程至多处理一个 ASIN，失败也计入数量。任务未完成时继续相同 `job_id`，不要重新读取、分派同一批记录。相同表、相同记录集合和日期窗口的活动规划会复用原批次；未指定 as-of 时，同一日本日期内复用原批次固定的结束时刻；不同范围的规划与活动记录重叠时返回 `FEISHU_RECORD_ALREADY_QUEUED` 和原批次 ID，避免无意扩大处理范围。
 
-完成商品采集与必要的 Amazon 报价补采后，逐条写回并核验：
+默认共享状态在 `~/.amazon-skill/state/amazon-jp-competitor-tracking/`，可用 `AMAZON_COMPETITOR_COORDINATION_DIR` 或每条命令的 `--coord-dir` 覆盖。同机执行者必须指向同一目录。不要放入 Git 或共享给其他人；其中有目标记录快照，没有登录凭证。该机制只协调同机进程，不是跨机器的分布式队列。
 
-```sh
-python3 "SKILL/scripts/feishu_cli.py" apply-one --url "飞书多维表格链接" \
-  --before "RUN/feishu/records.json" --products "RUN/collected/products.json" \
-  --record-id "目标记录ID" --out "RUN/writeback"
-```
+执行顺序固定如下：
 
-脚本先重读目标行，发现目标字段或 ASIN／标题被其他人改动时停止，不覆盖并发修改。只写 schema 允许的已有字段，保留写前备份和写后核验。CLI 写入成功不证明 record_id 存在，因此必须读回比对。
+1. SQLite 事务原子认领，绑定 `job_id + phase + ASIN + record_id集合 + owner + generation`。标题为空归新增阶段；全部新增任务结束后才开始旧数据更新。新增表示补齐已有行，不创建行或列。
+2. 同时持有一个共享执行名额和该 ASIN 的操作系统文件锁。其他进程不能接管仍存活的持有者；进程退出后内核释放锁，后续执行者增加代次并恢复。每次写回前检查持有者和代次。
+3. 通过 CLI 重读已认领记录。ASIN 或原始数据已被其他任务改动则标记 `stale`，在发起采集前停止这条。按 record_id 定位，不按行号或“同名 ASIN 全部更新”。
+4. 使用本条独立目录采集一个 ASIN，校验结果的 ASIN、日期窗口、商品数量和缓存校验和。相同批次的重复 ASIN 可复用本轮快照；其他批次重新采集。
+5. **本 ASIN 采集完成立即写回并读回核验，不等待同批其他 ASIN。** 同 ASIN 的多行逐条写入；其他 ASIN 不等全部采集结束。表级文件锁覆盖重读、并发修改检查、写入、读回全过程。
+6. 保存写前数据、拟写字段和写后结果至检查点。服务端已经写入但进程中断时，恢复先核对是否符合原拟写值；一致时确认现状，不重复写入，也不把本轮价格当作新的历史基准。
+
+普通单条失败登记后继续其他条目；`partial` 表示已经写回可核实数据但仍有缺项。账号验证拒绝是共享资源异常：本条已取得的有效字段可以写回，随后停止该账号后续采集；其他进程看到同一暂停状态后不重复登录或请求。处理同一专用会话后运行 `competitor.cjs verify-session --out "NEW_RUN"`，API 检查成功才清除暂停，再续跑原批次。
+
+队列状态为 `pending/running/done/partial/failed/blocked/stale`；`record_verified` 事件逐条报告 ASIN 与 record_id。`resource_busy` 或 `in_progress` 表示仍有工作，不能报告全批完成。`complete_with_gaps` 表示部分条目或字段未完成。已结束的普通失败需要后续新批次重试。
+
+文件锁保护配合本方案的进程。POSIX 上在途飞书 CLI 子进程继承执行名额、ASIN 和表锁，父进程中断后仍保护在途操作。人工改表或旧脚本没有服务端条件更新保证：通过写前检查和读回发现冲突，不能承诺飞书支持事务式“恰好一次”。实际验证平台为 macOS。
+
+只读排查仍可用 `feishu_cli.py inspect --url URL --out NEW_RUN`；低层 `apply-one` 供单条诊断，不用于绕过共享队列分派常规任务。读取超过 2000 行时，CLI 桥接按 offset 继续并核对 rev，完整读取后才规划，不能把投影漏列当作空标题。
 
 ## 写回口径
 

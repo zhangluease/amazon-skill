@@ -71,6 +71,10 @@ class DistributionTests(unittest.TestCase):
                                          capture_output=True, text=True, timeout=15)
             self.assertEqual(help_result.returncode, 0, help_result.stderr)
             self.assertIn('--all-history', help_result.stdout)
+            sync_help = subprocess.run([sys.executable, '-S', str(scripts / 'feishu_sync.py'), '--help'],
+                                       env=env, cwd=root, capture_output=True, text=True, timeout=15)
+            self.assertEqual(sync_help.returncode, 0, sync_help.stderr)
+            self.assertIn('--job-id', sync_help.stdout)
             # Synthetic API response exercises the shipped parsing and renderers offline.
             driver = '''import json, sys
 from pathlib import Path

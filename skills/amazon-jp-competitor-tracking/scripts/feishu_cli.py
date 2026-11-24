@@ -43,12 +43,14 @@ class FeishuClient:
         self.output = Path(output).resolve()
         self.output.mkdir(parents=True, exist_ok=True)
         self.cli = find_cli(cli)
+        self.inherited_lock_fds = ()
 
     def run(self, args, *, artifact=False):
         env = dict(os.environ, LARKSUITE_CLI_NO_UPDATE_NOTIFIER='1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER='1')
+        inherited = {'pass_fds': self.inherited_lock_fds} if os.name != 'nt' else {}
         try:
             result = subprocess.run([self.cli, *args, '--as', 'user'], cwd=self.output,
-                                    capture_output=True, text=True, encoding='utf-8', env=env, timeout=90)
+                                    capture_output=True, text=True, encoding='utf-8', env=env, timeout=90, **inherited)
             data = json.loads(result.stdout if result.returncode == 0 else result.stderr)
         except (OSError, ValueError, subprocess.TimeoutExpired):
             raise ApiError('FEISHU_CLI_FAILED') from None
@@ -147,7 +149,7 @@ TEXT_FIELDS = {'标题': 'title', '品牌': 'brand', '父体销量': 'parent_sal
                '评论分数': 'rating', '变体数': 'variation_count', '链接': 'url'}
 
 
-def build_patch(product, before, schema):
+def build_patch(product, before, schema, *, price_baseline=None):
     """Only known, evidenced values are written; unknowns preserve existing cells."""
     if any(is_login_mask(value) for value in product.values()):
         raise ApiError('FEISHU_SOURCE_REQUIRES_LOGIN')
@@ -170,7 +172,8 @@ def build_patch(product, before, schema):
         value = product.get(key)
         put(name, f'{value:g}' if isinstance(value, (float, int)) else value, 'text')
     put('当前售价', f'￥{product["price"]:,.0f}' if product.get('price') is not None else None, 'text')
-    previous_price = re.fullmatch(r'\s*[￥¥]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*', cell_text(before.get('当前售价')))
+    baseline_record = before if price_baseline is None else price_baseline
+    previous_price = re.fullmatch(r'\s*[￥¥]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*', cell_text(baseline_record.get('当前售价')))
     baseline = float(previous_price[1].replace(',', '')) if previous_price else None
     fluctuation = (abs(product['price'] - baseline) / baseline > .10
                    if baseline and product.get('price') is not None else None)
@@ -198,9 +201,11 @@ def build_patch(product, before, schema):
             'skipped': skipped}
 
 
-def apply_one(client, target, schema, before, product):
+def apply_one(client, target, schema, before, product, *, price_baseline=None, ownership_check=None):
     record_id = before['record_id']
-    patch = build_patch(product, before, schema)
+    patch = build_patch(product, before, schema, price_baseline=price_baseline)
+    if ownership_check:
+        ownership_check()
     current = client.records(target, schema, [record_id])
     if len(current) != 1 or current[0]['record_id'] != record_id:
         raise ApiError('FEISHU_RECORD_NOT_FOUND')
@@ -208,7 +213,11 @@ def apply_one(client, target, schema, before, product):
     if any(current[0].get(name) != before.get(name) for name in watched):
         raise ApiError('FEISHU_RECORD_CHANGED_SINCE_READ')
     write_json(client.output / ('before-' + record_id + '.json'), current[0])
-    client.update(target, {record_id: patch['by_id']})
+    changed = any(current[0].get(name) != value for name, value in patch['fields'].items())
+    if ownership_check:
+        ownership_check()
+    if changed:
+        client.update(target, {record_id: patch['by_id']})
     verified = None
     for delay in (0, 1, 2):
         if delay:
@@ -220,6 +229,7 @@ def apply_one(client, target, schema, before, product):
     if verified is None:
         raise ApiError('FEISHU_WRITE_READBACK_MISMATCH')
     result = {'record_id': record_id, 'asin': product['asin'], 'status': 'verified',
+              'operation': 'updated' if changed else 'already_current',
               'fields': patch['fields'], 'skipped': patch['skipped'], 'after': verified}
     write_json(client.output / ('after-' + record_id + '.json'), result)
     return result

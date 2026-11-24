@@ -154,7 +154,7 @@ def browser_offer(observation):
     stock = None
     if re.search(r'在庫切れ|在庫なし|缺货|无库存|Currently unavailable|Out of stock', availability, re.I):
         stock = 'out_of_stock'
-    elif re.search(r'在庫あり|残り\s*\d+\s*点|现在有货|有库存|In Stock', availability, re.I):
+    elif re.search(r'在庫あり|残り\s*\d+\s*点|现在有货|有库存|库存仅剩\s*\d+\s*件|In Stock', availability, re.I):
         stock = 'in_stock'
     cart = observation.get('cart')
     cart_label = cart.get('label') if isinstance(cart, dict) else None
@@ -265,7 +265,7 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
         changes = unavailable_changes()
         requests = [('product', '/v2/extension/asin/JP', {'asins': asin}),
                     ('sales', '/v2/extension/competitor-lookup/JP',
-                     {'q': '', 'asins': asin, 'tk': checksum(asin, client.session['extension_version'])}),
+                     {'asins': asin}),
                     ('changes', '/v2/extension/listing/JP/asin-change/' + asin,
                      {'startTime': scope['start_ms'], 'endTime': scope['end_ms']})]
         for source, route, params in requests:
@@ -314,7 +314,9 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
         results.append(result)
         save_report(output, results, asins, scope, stopped)
     usable = sum(r['status'] != 'failed' for r in results)
-    return {'status': 'verification_required' if stopped == 'ERR_ROBOT_CHECK' else
+    return {'status': 'resource_busy' if stopped == 'PROVIDER_BUSY' else
+            'authorization_pending' if stopped == 'PROVIDER_AUTHORIZATION_PENDING' else
+            'verification_required' if stopped in ('ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING') else
             'authorization_required' if stopped in AUTH_ERRORS else
             'ok' if all(row['status'] == 'ok' for row in results) else 'partial' if usable else 'failed',
             'requested': len(asins), 'products': len(results), 'category': stopped or ('NO_PRODUCT_DATA' if not usable else None),
@@ -330,6 +332,10 @@ def main(argv=None):
     check = commands.add_parser('validate-input')
     run = commands.add_parser('collect')
     changes = commands.add_parser('changes', help='Recent image/video gallery marker; direct HTTP')
+    verify = commands.add_parser('verify-session', help='Verify the managed API session before resuming a paused provider')
+    verify.add_argument('--session-file', required=True)
+    verify.add_argument('--out', required=True)
+    verify.add_argument('--interval', type=float, default=1)
     merge = commands.add_parser('merge-browser-offers')
     merge.add_argument('--from', dest='source', required=True)
     merge.add_argument('--out', required=True)
@@ -346,7 +352,19 @@ def main(argv=None):
         command.add_argument('--interval', type=float, default=1)
         command.add_argument('--resume', action='store_true', help='Reuse successful evidence after reauthorization')
     args = parser.parse_args(argv)
+    api = None
     try:
+        if args.command == 'verify-session':
+            if not math.isfinite(args.interval) or not 1 <= args.interval <= 60:
+                raise ApiError('INTERVAL_MUST_BE_1_TO_60')
+            api = Client(load_session(args.session_file), args.interval, session_file=args.session_file)
+            api.renewal_attempted = True
+            result = api.verify_session()
+            public = {'status': 'session_verified', 'authenticated': result['authenticated'],
+                      'request_trace': api.request_trace, 'api_authorization': {'events': api.auth_events}}
+            write_json(Path(args.out) / 'session-check.json', public)
+            print(json.dumps(public, ensure_ascii=False))
+            return 0
         if args.command == 'merge-browser-offers':
             if args.observations == '-':
                 observations = json.load(sys.stdin)
@@ -373,11 +391,24 @@ def main(argv=None):
                                  amazon=AmazonProductClient(interval=args.interval))
             result['api_authorization'] = {'events': api.auth_events,
                 'renewal_attempted': api.renewal_attempted, 'credentials_included': False}
+            result['request_trace'] = api.request_trace
         print(json.dumps(result, ensure_ascii=False))
-        return 3 if result['status'] == 'authorization_required' else 2 if result['status'] == 'verification_required' else 0
+        return 3 if result['status'] == 'authorization_required' else 2 if result['status'] in (
+            'verification_required', 'authorization_pending', 'resource_busy') else 0
     except ApiError as error:
-        print(json.dumps({'status': 'authorization_required' if error.code in AUTH_ERRORS else 'failed',
-                          'category': error.code}), file=sys.stderr)
+        status = ('authorization_required' if error.code in AUTH_ERRORS else
+                  'verification_required' if error.code in ('ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING') else
+                  'authorization_pending' if error.code == 'PROVIDER_AUTHORIZATION_PENDING' else
+                  'resource_busy' if error.code == 'PROVIDER_BUSY' else 'failed')
+        public = {'status': status, 'category': error.code}
+        if api is not None:
+            public.update(request_trace=api.request_trace, api_authorization={'events': api.auth_events})
+        if args.command == 'verify-session':
+            try:
+                write_json(Path(args.out) / 'session-check.json', public)
+            except OSError:
+                pass
+        print(json.dumps(public), file=sys.stderr)
         return 3 if error.code in AUTH_ERRORS else 2
     except (OSError, ValueError, TypeError):
         print(json.dumps({'status': 'failed', 'category': 'LOCAL_INPUT_OR_OUTPUT_INVALID'}), file=sys.stderr)

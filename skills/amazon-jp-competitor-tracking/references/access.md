@@ -35,8 +35,11 @@ node "SKILL/scripts/competitor.cjs" validate-input --input "/absolute/asins.csv"
 # 准备授权依赖，启动并关闭本地检查浏览器，不登录网站
 node "SKILL/scripts/competitor.cjs" prepare --out "RUN"
 
-# 单独扫码授权；保存成功不代表全部数据接口已验证
+# 单独扫码授权并核验 API；成功不代表全部数据接口都有覆盖
 node "SKILL/scripts/competitor.cjs" login --out "RUN"
+
+# 验证拒绝处理后，以同一专用会话进行 API 核验，成功才解除共享暂停
+node "SKILL/scripts/competitor.cjs" verify-session --out "NEW_RUN"
 
 # 正式批量采集；会话有效时无浏览器
 node "SKILL/scripts/competitor.cjs" collect --out "RUN" B008H0V15I
@@ -56,7 +59,9 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 
 - `ERR_NEED_AUTHORIZED`、`ERR_NEED_RE_AUTHORIZED`、`ERR_NEED_RENEWAL_AUTHORIZED`、`ERROR_UNAUTHORIZED`、HTTP 401：有专用令牌时先执行一次 API 续登并重试，仍需登录才停止后续取数并进入一次浏览器授权。
 - `PLUGIN_LOGIN_REQUIRED`：API 数据包含 `****` 等纯星号登录遮罩。即使 `code=OK` 也要求恢复登录；API 续登后仍被遮罩则进入一次浏览器授权，成功后重查被遮罩的来源。
-- `ERR_ROBOT_CHECK`：停止该轮后续请求，返回 `verification_required` 并保留已有数据；由用户完成原扩展要求的验证，不用登录循环代替验证。
+- `ERR_ROBOT_CHECK`：返回验证拒绝并暂停同机共享采集；仅凭该错误不能证明触发 CAPTCHA，更不能直接归因于并发。保留已有数据，处理同一专用会话后用 `verify-session` 核验，成功后继续 API；不自动改为 Browser Use 采集。
+- `PROVIDER_VERIFICATION_PENDING`／`PROVIDER_AUTHORIZATION_PENDING`：另一个任务已暂停共享请求，由一个执行者恢复，其他任务不重复弹窗。
+- `PROVIDER_BUSY`：共享资源被占用，等待后续跑原 job_id，不重复规划。
 - HTTP 403／429、`ERR_GLOBAL_403`、版本升级要求：停止该轮后续请求，保留结果，不当成登录失败反复弹窗或重试。
 - `EXTENSION_NOT_FOUND`：在本机 Chrome／Edge 安装[卖家精灵原扩展](https://www.sellersprite.com/en/help/sellersprite-chrome-extension-download)，或指定原扩展目录。不会打包分发供应商扩展。
 - `PYTHON_39_REQUIRED`／`NODE_18_REQUIRED`：安装所需运行时，或修正解释器路径。
@@ -74,7 +79,7 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 
 扩展 5.0.7 的“登录 xxx”按钮使用已登录官网账号的令牌，发送 `SIGN_IN_WITH_TOKEN`，后台实际请求 `GET https://www.sellersprite.com/v2/extension/tk/signin`。本技能使用已授权专用会话中的令牌执行同一接口；只接受成功响应中的有效新 token，原子写回私有会话文件，不保存返回的账号资料，也不读取日常浏览器账号存储。
 
-正常数据请求成功即可复用会话，无需每次点插件。遇到鉴权错误、空商品列表、待缓存商品，或商品快照的标题／品牌／图片／排名／评分／评论数缺失，或销量的 `units`／`month_units` 缺失时，最多尝试一次令牌登录，再重试当前请求一次。负数 `units` 也属于缺项。空修改历史、当前页面未显示参考价／折扣、403／429 和人机验证不触发该空值重试逻辑。
+正常取数成功即可复用会话，不逐次登录。明确鉴权错误才尝试一次令牌登录。普通空商品、待缓存商品、商品核心字段或销量缺项（包括负数 units），每个 HTTP 工作进程至多用签名后的 `client/latest` 核验一次会话；仅令牌实际更新才重查当前来源。核验有效但仍缺失时保留未知，不再次续登。合法空修改历史和 Amazon 报价缺项不触发卖家精灵续登。
 
 纯星号字段是明确的未登录遮罩，不属于上述普通空值。`code=OK` 加被遮罩的价格／销量等目标商品字段也会触发 `PLUGIN_LOGIN_REQUIRED`；重试后仍有遮罩就进入浏览器登录，不把它解释成来源没有数据。接口拒绝登录时仍保留同一响应中未遮罩的有效字段，被遮罩字段转为 null；来源标记 `recovery_pending`，恢复后必须重查，不能复用为成功缓存。飞书写入层还会拒绝含原始星号遮罩的商品报告。
 
@@ -82,7 +87,11 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 
 续登成功并不保证数据覆盖。重试仍为空就保留未知；失败不能填 0 或“否”。登录接口明确要求重新授权时才进入原有浏览器流程，先自动同步专用 profile 内的官网账号，必要时扫码。`status.json.api_authorization.events` 只记录触发原因和成功／失败状态，供排查是否执行过 API 续登。
 
-2026-11-24 实测：令牌续登接口返回 `OK`，新会话已保存，无需手动点击；随后 B07RPLXMXD 商品接口成功，销量接口返回 `ERR_ROBOT_CHECK`。直接调用 `client/latest` 当时也返回此验证错误，因此不把它设为每次取数前必须通过的检查。人机验证与登录失效分别处理，无法保证所有查询始终无人介入。
+2026-11-24 复查扩展 5.0.7：公共请求中间件为商品、修改历史、会话检查及续登等请求统一补 `tk`，原脚本只在销量请求显式携带。这一差异现已修复，签名输入优先 `asins/asin/q`，否则使用路径；六组输入与原扩展校验函数一致。补齐后的一次串行、只读 `client/latest` 实测仍返回 `ERR_ROBOT_CHECK`，因此不能声称签名修复已恢复服务，也不能认定并发是唯一原因。未继续高频探测。
+
+同机共享 `ProviderGate` 将本方案发出的卖家精灵 HTTP 请求串行化，跨进程请求起始间隔至少一秒，令牌续登也受同一锁保护；一秒是保守默认值，不代表供应商保证的安全速率。飞书执行器默认每批最多 3 个 ASIN，同机多个任务合计也最多 3 个；整段采集／登录恢复另外串行化，已取得数据的 ASIN 立即通过 CLI 写回。普通 Chrome 扩展、自行运行的旧脚本等非配合请求不受该锁控制，打开多个商品页可能产生额外后台请求。不要通过改 state-dir 为同一账号制造并发登录。
+
+[卖家精灵官方扩展自检说明](https://cn.sellersprite.com/v3/knowledge/feature/extension-self-check-guide) 提到不同浏览器环境登录可能互相挤下线，网络环境变化也可能触发验证；这是排查方向，尚未证明是本轮拒绝的原因。普通 Chrome 已登录不等于独立管理的 API 会话有效。`verify-session` 只检查同一专用会话，不自动轮换令牌；失败维持暂停。该检查只用于恢复或缺项诊断，不在每个正常请求前额外调用。公开 `request_trace` 仅有接口路径、参数名、请求起止时间及状态，不含认证头和参数值。
 
 ## 验证范围
 

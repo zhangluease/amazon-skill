@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/amazon-jp-competitor-tracking/scripts'
 sys.path.insert(0, str(SCRIPTS))
 try:
-    from competitor_core import ApiError, Client, load_session, is_login_mask, scalar
+    from competitor_core import ApiError, Client, load_session, is_login_mask, scalar, request_parameters
     from competitor_client import collect, window, collect_listing_changes
 finally:
     sys.path.pop(0)
@@ -41,9 +41,27 @@ class Opener:
         return contextlib.closing(io.BytesIO(json.dumps(next(self.responses)).encode()))
 
 
+class FakeGate:
+    def __init__(self):
+        self.pauses = []
+        self.verified_count = 0
+
+    def hold(self, **kwargs):
+        return contextlib.nullcontext()
+
+    def pace(self, interval):
+        pass
+
+    def pause(self, reason, kind):
+        self.pauses.append((reason, kind))
+
+    def verified(self):
+        self.verified_count += 1
+
+
 def api(responses, **kwargs):
     opener = Opener(responses)
-    return Client(copy.deepcopy(SESSION), opener=opener, sleep=lambda _: None, **kwargs), opener
+    return Client(copy.deepcopy(SESSION), opener=opener, sleep=lambda _: None, gate=FakeGate(), **kwargs), opener
 
 
 class SessionTests(unittest.TestCase):
@@ -140,7 +158,34 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(client.auth_events[0]['status'], 'ok')
         self.assertEqual(len(opener.requests), 4)
 
-    def test_empty_product_data_is_requeried_after_token_login(self):
+    def test_sparse_unchanged_session_checks_once_without_token_signin(self):
+        sparse = {'items': [{'asin': ASIN, 'units': -1, 'month_units': 100}]}
+        client, opener = api([ok(sparse), ok({'token': SESSION['headers']['auth-token']}), ok(sparse)])
+        client.get(SALES, {'asins': ASIN})
+        client.get(SALES, {'asins': ASIN})
+        self.assertFalse(client.renewal_attempted)
+        self.assertEqual([urlsplit(r.full_url).path for r in opener.requests],
+                         [SALES, '/v2/extension/client/latest', SALES])
+        self.assertEqual(client.auth_events[0]['action'], 'session_check')
+
+    def test_all_vendor_routes_get_common_signature_without_exposing_values_in_trace(self):
+        from urllib.parse import parse_qs
+        for route, params in [(PRODUCT, {'asins': ASIN}), (SALES, {'asins': ASIN, 'q': None}),
+                              ('/v2/extension/client/latest', {}),
+                              ('/v2/extension/listing/JP/asin-change/' + ASIN, {})]:
+            client, opener = api([ok([])])
+            client.missing_session_checked = True
+            client.get(route, params)
+            query = parse_qs(urlsplit(opener.requests[0].full_url).query)
+            self.assertTrue(query['tk'][0])
+            self.assertEqual(query['version'], ['5.0.7'])
+            self.assertNotIn('q', query)
+            trace = json.dumps(client.request_trace)
+            self.assertNotIn('fixture-token', trace)
+            self.assertNotIn(query['tk'][0], trace)
+        self.assertEqual(request_parameters(SESSION, SALES, {'asins': ASIN, 'tk': 'preserved'})['tk'], 'preserved')
+
+    def test_empty_product_data_is_requeried_after_checked_token_rotation(self):
         client, _ = api([ok([]), ok({'token': 'renewed-fixture-token'}), ok([COMPLETE])])
         self.assertEqual(client.get(PRODUCT, {'asins': ASIN}), [COMPLETE])
 
@@ -154,11 +199,12 @@ class SessionTests(unittest.TestCase):
     def test_invalid_token_response_preserves_previous_private_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'http-session.json'
-            path.write_text('previous-private-cache')
+            path.write_text(json.dumps(dict(SESSION, format='sellersprite-http-session-v1')))
+            previous = path.read_text()
             client, _ = api([ok([]), ok({'token': 'bad\nheader'})], session_file=path)
-            with self.assertRaisesRegex(ApiError, 'INVALID_TOKEN_SIGNIN_RESPONSE'):
+            with self.assertRaisesRegex(ApiError, 'INVALID_SESSION_CHECK_RESPONSE'):
                 client.get(PRODUCT, {'asins': ASIN})
-            self.assertEqual(path.read_text(), 'previous-private-cache')
+            self.assertEqual(path.read_text(), previous)
 
     def test_permission_rate_limit_and_robot_errors_do_not_repeat_login(self):
         for code in ('ERR_GLOBAL_403', 'HTTP_403', 'HTTP_429', 'ERR_ROBOT_CHECK'):

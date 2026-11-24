@@ -10,6 +10,7 @@ const { prepareHome } = require('../skills/amazon-jp-competitor-tracking/scripts
 const valid = { status: 'valid', asins: ['B008H0Y15I'], window: { end: '2026-11-23T12:00:00+09:00' } };
 function deps(worker, auth) {
   return { findPython: () => ({ command: 'fake-python', prefix: [] }), execute: worker,
+    verify: async () => ({ status: 'session_verified' }),
     authorize: auth || (async () => assert.fail('A valid session must not open a browser')), notify: () => {} };
 }
 
@@ -201,4 +202,42 @@ test('QR handoff saves the authorized session and closes only owned contexts', a
     assert.equal(saved.headers['auth-token'], 'fixture-token');
     if (process.platform !== 'win32') assert.equal((await fs.stat(path.join(home.directory, 'http-session.json'))).mode & 0o777, 0o600);
   } finally { await home?.release(); await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
+test('successful login is followed by an API check before collection resumes', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-api-proof-'));
+  const order = [];
+  let queries = 0;
+  try {
+    const d = deps(async (_cmd, argv) => {
+      if (argv.includes('validate-input')) return { stdout: JSON.stringify(valid) };
+      if (argv.includes('verify-session')) {
+        order.push('verify-api');
+        assert.ok(!argv.includes(valid.asins[0]));
+        return { stdout: JSON.stringify({ status: 'session_verified' }) };
+      }
+      order.push('query');
+      return { stdout: JSON.stringify(++queries === 1 ? { status: 'authorization_required' } : { status: 'ok' }) };
+    }, async () => { order.push('login'); });
+    delete d.verify; // Exercise the production Python subcommand rather than a test shortcut.
+    await run(await options(tmp), d);
+    assert.deepEqual(order, ['query', 'login', 'verify-api', 'query']);
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
+test('login without API verification never resumes collection or changes to browser collection', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-proof-rejected-'));
+  let queries = 0;
+  try {
+    const d = deps(async (_cmd, argv) => {
+      if (argv.includes('validate-input')) return { stdout: JSON.stringify(valid) };
+      queries++;
+      return { stdout: JSON.stringify({ status: 'authorization_required', usable_products: 1 }) };
+    }, async () => {});
+    d.verify = async () => ({ status: 'verification_required', category: 'ERR_ROBOT_CHECK' });
+    const result = await run(await options(tmp), d);
+    assert.equal(queries, 1);
+    assert.equal(result.status, 'verification_required');
+    assert.equal(result.usable_products, 1);
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
 });

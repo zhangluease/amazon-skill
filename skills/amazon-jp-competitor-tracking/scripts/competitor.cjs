@@ -19,17 +19,18 @@ const HELP = `日本亚马逊竞对页面追踪
   node competitor.cjs changes ASIN --all-history --out 新目录
   node competitor.cjs collect ASIN --out 新目录
   node competitor.cjs login --out 新目录
+  node competitor.cjs verify-session --out 新目录
 
 changes 只查图片/视频修改图标，默认近七个日本自然日期；collect 还采集商品、销量与报价。
 支持 --input 清单、--as-of 日期、--interval 1、--state-dir 专用会话目录、--extension-dir 扩展程序目录。
-会话有效时直接调用 HTTP；鉴权失效或商品数据缺失时先尝试一次 API 续登，必要时最多扫码一次。每轮使用新的输出目录。
+会话有效时直接调用 HTTP；鉴权失效时最多 API 续登一次，普通缺项只核验一次会话，必要时最多扫码一次。每轮使用新的输出目录。
 `;
 
 function argumentsFor(argv) {
   if (argv.some(arg => ['--help', '-h'].includes(arg)) || argv[0] === 'help') return { command: 'help' };
   const args = [...argv];
   const command = args[0] && !args[0].startsWith('--') ? args.shift() : 'collect';
-  if (!['collect', 'changes', 'login', 'check', 'prepare', 'validate-input'].includes(command)) throw fail('INVALID_COMMAND');
+  if (!['collect', 'changes', 'login', 'verify-session', 'check', 'prepare', 'validate-input'].includes(command)) throw fail('INVALID_COMMAND');
   const options = { command, asins: [], timeout: 300, interval: 1 };
   for (let i = 0; i < args.length; i++) {
     if (!args[i].startsWith('--')) { options.asins.push(args[i]); continue; }
@@ -71,14 +72,14 @@ async function run(options, dependencies = {}) {
   const call = async (command, extra = []) => {
     try {
       const r = await invoke(python.command, [...python.prefix, path.join(__dirname, 'competitor_client.py'), command,
-        ...extra, ...inputArgs], { timeout: ['collect', 'changes'].includes(command) ? (validated?.asins.length || 1) * 235000 + 30000 : 30000,
+        ...extra, ...(command === 'verify-session' ? [] : inputArgs)], { timeout: ['collect', 'changes'].includes(command) ? (validated?.asins.length || 1) * 235000 + 30000 : 90000,
         windowsHide: true, maxBuffer: 1024 * 1024,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
       return JSON.parse(r.stdout);
     } catch (error) {
       let r;
       try { r = JSON.parse(error.stdout || error.stderr); } catch { throw fail('HTTP_WORKER_FAILED'); }
-      if (['authorization_required', 'verification_required'].includes(r.status)) return r;
+      if (['authorization_required', 'verification_required', 'authorization_pending', 'resource_busy'].includes(r.status)) return r;
       throw fail(r.category || 'HTTP_WORKER_FAILED');
     }
   };
@@ -121,6 +122,8 @@ async function run(options, dependencies = {}) {
     await (dependencies.authorize || authorize)(home, { ...options, out: output }, publish, dependencies.auth || {});
     session = path.join(home.directory, 'http-session.json');
   };
+  const verify = () => (dependencies.verify || (() => call('verify-session', ['--out', output,
+    '--session-file', session, '--interval', String(options.interval)])))();
   try {
     home = await (dependencies.prepareHome || prepareHome)(options['state-dir'] || stateRoot(), output);
     if (options.command === 'prepare') {
@@ -129,8 +132,11 @@ async function run(options, dependencies = {}) {
     }
     if (options.command === 'login') {
       await login();
-      return { status: 'authorized', session_saved: true, api_tested: false };
+      const checked = await verify();
+      return checked.status === 'session_verified'
+        ? { ...checked, status: 'authorized', session_saved: true, api_tested: true } : checked;
     }
+    if (options.command === 'verify-session') return await verify();
     // Copy only an already authorized, known managed cache; never read browser login databases.
     if (session !== path.join(home.directory, 'http-session.json') && !options['session-file']) {
       try {
@@ -149,10 +155,15 @@ async function run(options, dependencies = {}) {
     let result = await query();
     if (result.status === 'authorization_required') {
       await login();
-      result = await query(true);
-    } else if (result.status === 'verification_required') {
+      const checked = await verify();
+      result = checked.status === 'session_verified' ? await query(true)
+        : { ...result, status: checked.status, category: checked.category, session_check: checked };
+    }
+    if (result.status === 'verification_required') {
       await publish('requires_user_verification', { reason: result.category });
-    } else await publish('not_required', { reason: 'http_session_valid_or_non_auth_api_error' });
+    } else if (result.status === 'authorization_pending') {
+      await publish('waiting_for_shared_authorization', { reason: result.category });
+    } else if (!handoffs) await publish('not_required', { reason: 'http_session_valid_or_non_auth_api_error' });
     const summary = { ...result, authorization_handoffs: handoffs,
       ...(apiAuthEvents.length ? { api_authorization: { events: apiAuthEvents, credentials_included: false } } : {}),
       ...(result.category ? guidance(result.category) : {}) };
@@ -170,7 +181,7 @@ async function main(argv = process.argv.slice(2)) {
   try {
     const result = await run(argumentsFor(argv));
     process.stdout.write(result.status === 'help' ? result.usage : JSON.stringify(result) + '\n');
-    if (['authorization_required', 'verification_required', 'failed', 'needs_setup'].includes(result.status) || result.usable_products === 0) process.exitCode = 2;
+    if (['authorization_required', 'verification_required', 'authorization_pending', 'resource_busy', 'failed', 'needs_setup'].includes(result.status) || result.usable_products === 0) process.exitCode = 2;
   } catch (error) {
     process.stderr.write(JSON.stringify({ status: 'failed', category: errorCode(error), ...guidance(errorCode(error)) }) + '\n');
     process.exitCode = 2;
