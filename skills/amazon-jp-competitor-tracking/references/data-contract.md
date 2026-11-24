@@ -31,7 +31,8 @@ Amazon 当前报价使用另一个匿名 HTTP 会话，固定 `https://www.amazo
 |结果|接口字段|说明|
 |---|---|---|
 |ASIN、父体、标题、品牌|`asin`、`parent`、`title`、`brand`|商品快照优先，缺失时用竞品接口|
-|主图|`image_zoom`，缺失时 `image`|只允许 Amazon 图片域名；输出 URL 和报告缩略图，不进行 OCR|
+|主图|Amazon `landingImage`，缺失时用同 ASIN 的 `image_zoom` 或 `image`|只允许 Amazon 图片域名。报告输出 URL 和缩略图|
+|数量装|当前标题的明确件数、商品正文规格、主图识别|按顺序使用。正文规格优先商品件数，其次包装数量。主图结果绑定 ASIN 和图片 URL，来源与观察说明单独保存|
 |大类排名和类别|`bsr`、`bsr_label`|来源原值，不用小类排名替代|
 |小类排名|`bsr_list`／`bsrList` 中 `main=false` 的 `rank,label`|不按数组第一项猜大小类；缺少标记的行不强行分类|
 |父体近30天销量|销量接口 `units`|卖家精灵估算值；缺失留空，真实 0 保留|
@@ -66,4 +67,6 @@ Amazon 当前报价使用另一个匿名 HTTP 会话，固定 `https://www.amazo
 
 `evidence/ASIN-product.json`、`ASIN-sales.json`、`ASIN-changes.json` 只保存各来源允许的业务字段、端点和实际取得时间。修改证据还保存本轮观察区间。重新授权后只复用同一任务、同一 ASIN 清单、同一历史区间的成功证据；失败的来源再次查询。商品快照时间和历史观察区间分开，指定历史结束日不代表取得该日的商品快照。
 
-缺失字段仍是 null。完整商品采集在所需字段齐全、历史接口正常且无来源错误时为 `ok`，有缺口或来源异常为 `partial`；商品身份未确认且没有有效资料或历史事件时为 `failed`。只查图库变化的模式在接口正常且身份可确认时为 `ok`，异常为 `partial`／`failed`。成功导出不代表来源覆盖完整。`browser_fallback_asins` 列出当前报价待补采的商品。飞书写回约定见 [飞书 CLI 工作流](feishu.md)。日本配送与当前报价的实测状态以当轮证据为准，离线成功不等于当轮配送已验证。
+缺失字段仍是 null。完整商品采集在所需字段齐全、历史接口正常且无来源错误时为 `ok`，有缺口或来源异常为 `partial`；商品身份未确认且没有有效资料或历史事件时为 `failed`。只查图库变化的模式在接口正常且身份可确认时为 `ok`，异常为 `partial`／`failed`。成功导出不代表来源覆盖完整。`browser_fallback_asins` 列出当前报价仍有缺项的商品，参考价或折扣未展示不代表应重试。`amazon_browser_verification_asins` 标记访问确认或限流暂停涉及的商品。飞书写回约定见 [飞书 CLI 工作流](feishu.md)。日本配送与当前报价的实测状态以当轮证据为准，离线成功不等于当轮配送已验证。
+
+Amazon 自动无头补采与人工页面观察都使用 `amazon_jp_browser_offer` 字段来源，快照的 `collection_method` 区分 `browser_headless`、`browser_headed` 和 `browser_page`。自动补采复用 `amazon_product.py` 的身份、配送和报价解析，返回公开字段及正文摘要哈希，不保存完整 HTML 或页面令牌。HTTP 确认页与验证码输入页分别记录 `AMAZON_CONTINUE_SHOPPING_REQUIRED` 和 `AMAZON_HUMAN_VERIFICATION_REQUIRED`；两个状态都不能当成有效商品响应。

@@ -4,11 +4,12 @@ import datetime as dt
 import html
 import json
 
-from competitor_core import JST, CHANGE_SCHEMA, BROWSER_OFFER_SOURCE, safe_image, write_json
+from competitor_core import JST, CHANGE_SCHEMA, BROWSER_OFFER_SOURCE, safe_image, write_json, package_quantity_candidate
 
 COLUMNS = [('asin', 'ASIN'), ('url', '商品链接'), ('title', '标题'), ('brand', '品牌'),
            ('delivery_status', '配送目的地'),
-           ('main_image', '主图链接'), ('parent_asin', '父ASIN'),
+           ('main_image', '主图链接'), ('package_quantity', '数量装'), ('package_quantity_source', '数量装来源'),
+           ('parent_asin', '父ASIN'),
            ('root_rank', '大类排名'), ('root_category', '大类名称'), ('sub_ranks', '小类排名'),
            ('parent_sales_30d', '父体近30天估算销量'), ('child_monthly_purchased', '子体近30天购买量阈值'),
            ('price', '售价'), ('currency', '币种'), ('rating', '评分'), ('review_count', '评论数'),
@@ -30,6 +31,11 @@ def cell(value):
 
 
 def display_value(key, row):
+    if key == 'package_quantity_source':
+        source = row.get('field_sources', {}).get('package_quantity', '')
+        if source.endswith('.quantity_specs'):
+            return '商品正文规格'
+        return {'explicit_listing_title': '标题', 'amazon_jp_main_image_review': '主图识别'}.get(source, '未知')
     value = row.get(key)
     if value is None:
         return '未知'
@@ -84,7 +90,9 @@ def save_report(output, results, requested, scope, stopped):
     browser_offers = sum(bool(row.get('offer_observed_at')) for row in results)
     payload = {'format': 'amazon-jp-competitor-tracking-v1', 'marketplace': 'JP', 'window': scope,
                'requested_asins': requested, 'collected_count': len(results), 'stop_reason': stopped,
-               'collection_method': 'http_with_browser_offers' if browser_offers else 'independent_http', 'products': results}
+               'collection_method': 'http_with_browser_offers' if browser_offers else 'independent_http',
+               'package_quantity_review': [candidate for row in results if (candidate := package_quantity_candidate(row))],
+               'products': results}
     write_json(output / 'products.json', payload)
     with (output / 'products.csv').open('w', encoding='utf-8-sig', newline='') as stream:
         writer = csv.writer(stream)
@@ -133,9 +141,11 @@ def save_report(output, results, requested, scope, stopped):
     if browser_offers:
         page += f'<p>通过 Amazon 浏览器商品页补采了 {browser_offers} 个商品的报价。每项来源见 JSON，页面观察证据见 evidence 目录。</p>'
     reasons = {'AMAZON_HUMAN_VERIFICATION_REQUIRED': 'Amazon 请求触发验证页，未能完成配送至日本的设置与核验。',
+               'AMAZON_CONTINUE_SHOPPING_REQUIRED': 'Amazon 返回“继续购物”确认页，需在可见浏览器完成后恢复；该页面未要求输入验证码。',
                'AMAZON_DESTINATION_NOT_CONFIRMED': '未能核验刷新后的配送标签，当前报价字段未采用。',
                'AMAZON_DESTINATION_REJECTED': 'Amazon 未接受本次日本配送设置，当前报价字段未采用。'}
-    stages = {'initial_product': '首次请求商品页', 'destination_setup': '设置日本配送',
+    stages = {'http_session_setup': '载入 Amazon HTTP 会话',
+              'initial_product': '首次请求商品页', 'destination_setup': '设置日本配送',
               'product_refresh': '刷新商品页', 'destination_verification': '核对配送目的地',
               'offer_extraction': '读取商品报价'}
     for row in results:
@@ -154,3 +164,17 @@ def save_report(output, results, requested, scope, stopped):
         page += '<p>接口停止原因：' + esc(stopped) + '</p>'
     page += ''.join(cards) + '</html>'
     (output / 'report.html').write_text(page, encoding='utf-8')
+
+
+def save_quantity_review(output, report, *, changed):
+    rows, requested = report['products'], report['requested_asins']
+    if changed:
+        save_report(output, rows, requested, report['window'], report.get('stop_reason'))
+    status_path = output / 'status.json'
+    status = json.loads(status_path.read_text(encoding='utf-8')) if status_path.is_file() else {}
+    if status.get('status') == 'partial' and len(rows) == len(requested) and all(row['status'] == 'ok' for row in rows):
+        status['status'] = 'ok'
+    candidates = [candidate for row in rows if (candidate := package_quantity_candidate(row))]
+    status['package_quantity_review'] = candidates
+    write_json(status_path, status)
+    return candidates

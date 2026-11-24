@@ -9,10 +9,12 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 
-from competitor_core import ApiError, parse_asin, window, write_json
+from competitor_core import ApiError, parse_asin, window, write_json, package_quantity_candidate, apply_package_image_review
 from competitor_coordination import WorkQueue, ProviderGate, FileMutex, MAX_ACTIVE_ASINS
+from competitor_report import save_quantity_review
 from feishu_cli import FeishuClient, apply_one, build_patch
 from feishu_plan import create_plan, cell_text
 
@@ -22,11 +24,28 @@ BUSY = {'PROFILE_BUSY', 'PROVIDER_BUSY'}
 RESOURCE_WAIT_SECONDS = MAX_ACTIVE_ASINS * 1100
 
 
-def plan(client, queue, url, output, *, asins=None, as_of=None):
+def plan(client, queue, url, output, *, asins=None, as_of=None, group=None, group_prefix=None):
     """Read the table once; workers share the returned job ID instead of replanning."""
     target = client.resolve(url)
     schema = client.fields(target)
     records = client.records(target, schema)
+    if group is not None or group_prefix is not None:
+        if not any(field['name'] == '分组' for field in schema):
+            raise ApiError('FEISHU_GROUP_COLUMN_MISSING')
+        selected = group if group is not None else group_prefix
+        if not selected.strip():
+            raise ApiError('EMPTY_FEISHU_GROUP')
+        groups = {cell_text(row.get('分组')) for row in records}
+        if group is None:
+            matches = [name for name in groups if name.casefold().startswith(selected.strip().casefold())]
+            if len(matches) > 1:
+                raise ApiError('FEISHU_GROUP_PREFIX_AMBIGUOUS')
+            group = matches[0] if matches else None
+        else:
+            group = group.strip()
+        if group not in groups:
+            raise ApiError('FEISHU_GROUP_NOT_FOUND')
+        records = [row for row in records if cell_text(row.get('分组')) == group]
     if asins:
         requested = set(asins)
         records = [row for row in records if cell_text(row.get('ASIN')) in requested]
@@ -47,6 +66,7 @@ def plan(client, queue, url, output, *, asins=None, as_of=None):
                                    'update_rows': len(planned['update_rows'])})
     return {'status': 'planned', 'job_id': job_id, 'new_rows': len(planned['new_rows']),
             'update_rows': len(planned['update_rows']), 'output': canonical_output,
+            **({'group': group} if group is not None else {}),
             'reused_active_job': canonical_output != str(output)}
 
 
@@ -58,9 +78,11 @@ def collect_one(asin, output, scope, coordinator_root):
             '--out', str(output), '--as-of', scope['end']]
     env = dict(os.environ, AMAZON_COMPETITOR_COORDINATION_DIR=str(coordinator_root))
     try:
-        result = subprocess.run(args, capture_output=True, text=True, encoding='utf-8', env=env, timeout=1100)
-        public = json.loads(result.stdout if result.stdout.strip() else result.stderr.splitlines()[-1])
-    except (OSError, ValueError, subprocess.TimeoutExpired, IndexError):
+        # Child stderr carries the public login handoff and must be visible while the window is open.
+        result = subprocess.run(args, stdout=subprocess.PIPE, text=True, encoding='utf-8', env=env, timeout=1100)
+        summary = result.stdout if result.stdout.strip() else (Path(output) / 'status.json').read_text(encoding='utf-8')
+        public = json.loads(summary)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         raise ApiError('COLLECTOR_PROCESS_FAILED') from None
     if not isinstance(public, dict):
         raise ApiError('INVALID_COLLECTOR_SUMMARY')
@@ -112,7 +134,29 @@ def preflight(client, job, schema, claim):
     return bases
 
 
-def process_claim(queue, job, schema, claim, client, collector, emit):
+def review_package_image(product, attempt, job, emit, wait_seconds):
+    candidate = package_quantity_candidate(product)
+    if not candidate or not wait_seconds:
+        return False
+    reply = attempt / 'package-image-review.json'
+    emit({'event': 'package_quantity_review', **candidate, 'job_id': job['id'], 'reply_file': str(reply.resolve())})
+    deadline = time.monotonic() + wait_seconds
+    while not reply.is_file():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            emit({'event': 'package_quantity_review_timeout', 'asin': product['asin']})
+            return False
+        time.sleep(min(0.25, remaining))
+    try:
+        review = json.loads(reply.read_text(encoding='utf-8'))
+        return apply_package_image_review(product, review)
+    except (OSError, ValueError, ApiError) as error:
+        emit({'event': 'package_quantity_review_invalid', 'asin': product['asin'],
+              'category': error.code if isinstance(error, ApiError) else 'INVALID_PACKAGE_IMAGE_REVIEW'})
+        return False
+
+
+def process_claim(queue, job, schema, claim, client, collector, emit, quantity_review_seconds):
     asin = claim.row['asin']
     bases = preflight(client, job, schema, claim)
     cached = queue.snapshot(job['id'], asin)
@@ -132,6 +176,12 @@ def process_claim(queue, job, schema, claim, client, collector, emit):
                 claim.finish('blocked', provider.get('reason'))
                 return 'verification_required' if provider['state'] == 'verification' else 'authorization_pending'
             status = collector(asin, attempt, job['window'], queue.root)
+            if status.get('status') == 'failed' and status.get('category') not in BUSY:
+                provider = ProviderGate(queue.root).state()
+                if provider['state'] == 'verification':
+                    status = dict(status, status='verification_required')
+                elif provider['state'] == 'authorization' or status.get('authorization_reason'):
+                    status = dict(status, status='authorization_required')
         finally:
             collection_lock.release()
         if status.get('category') in BUSY or status.get('status') == 'resource_busy':
@@ -144,6 +194,11 @@ def process_claim(queue, job, schema, claim, client, collector, emit):
                 return status['status']
             raise ApiError(status.get('category') or 'COLLECTOR_DID_NOT_PRODUCE_PRODUCT')
         product = load_product(path, asin, job['window'], job['output'])
+        if (status.get('status') not in PAUSED and any(field['name'] == '数量装' for field in schema)
+                and review_package_image(product, attempt, job, emit, quantity_review_seconds)):
+            report = json.loads(path.read_text(encoding='utf-8'))
+            report['products'] = [product]
+            save_quantity_review(attempt, report, changed=True)
         queue.save_snapshot(claim, path, status.get('status') not in PAUSED and bool(product.get('title')))
     if not product.get('title'):
         if status and status.get('status') in PAUSED:
@@ -179,9 +234,11 @@ def process_claim(queue, job, schema, claim, client, collector, emit):
 
 
 def work(queue, job_id, *, client_factory=FeishuClient, collector=collect_one, max_items=None,
-         concurrency=MAX_ACTIVE_ASINS, emit=lambda _: None):
+         concurrency=MAX_ACTIVE_ASINS, quantity_review_seconds=0, emit=lambda _: None):
     if type(concurrency) is not int or not 1 <= concurrency <= MAX_ACTIVE_ASINS:
         raise ApiError('CONCURRENCY_MUST_BE_1_TO_3')
+    if type(quantity_review_seconds) is not int or not 0 <= quantity_review_seconds <= 300:
+        raise ApiError('QUANTITY_REVIEW_SECONDS_MUST_BE_0_TO_300')
     job = queue.job(job_id)
     schema = json.loads((Path(job['output']) / 'fields.json').read_text())
     provider = ProviderGate(queue.root).state()
@@ -198,7 +255,7 @@ def work(queue, job_id, *, client_factory=FeishuClient, collector=collect_one, m
     def run_claim(claim):
         try:
             client = client_factory(Path(job['output']) / 'writeback' / uuid.uuid4().hex)
-            return process_claim(queue, job, schema, claim, client, collector, publish)
+            return process_claim(queue, job, schema, claim, client, collector, publish, quantity_review_seconds)
         except ApiError as error:
             if error.code == 'CLAIM_LOST':
                 raise
@@ -270,11 +327,16 @@ def main():
     parser.add_argument('--url')
     parser.add_argument('--out', type=Path)
     parser.add_argument('--asin', action='append')
+    group_filter = parser.add_mutually_exclusive_group()
+    group_filter.add_argument('--group', help='Exact 分组 cell value')
+    group_filter.add_argument('--group-prefix', help='Case-insensitive prefix matching exactly one group')
     parser.add_argument('--as-of')
     parser.add_argument('--job-id')
     parser.add_argument('--max-items', type=int)
     parser.add_argument('--concurrency', type=int, choices=range(1, MAX_ACTIVE_ASINS + 1),
                         default=MAX_ACTIVE_ASINS, help='ASIN workers per batch; same-host global cap is 3')
+    parser.add_argument('--quantity-review-seconds', type=int, default=0,
+                        help='Wait up to this many seconds per ASIN for optional main-image observation (0–300)')
     args = parser.parse_args()
     try:
         queue = WorkQueue(args.coord_dir)
@@ -284,8 +346,11 @@ def main():
             if args.out.exists() and any(args.out.iterdir()):
                 raise ApiError('OUTPUT_ALREADY_HAS_RESULTS_USE_NEW_DIRECTORY')
             asins = [parse_asin(value) for value in args.asin] if args.asin else None
-            result = plan(FeishuClient(args.out), queue, args.url, args.out, asins=asins, as_of=args.as_of)
+            result = plan(FeishuClient(args.out), queue, args.url, args.out, asins=asins, as_of=args.as_of,
+                          group=args.group, group_prefix=args.group_prefix)
         else:
+            if args.group is not None or args.group_prefix is not None:
+                raise ApiError('FEISHU_GROUP_FILTER_REQUIRES_PLAN')
             if not args.job_id:
                 if args.command != 'status':
                     raise ApiError('JOB_ID_REQUIRED')
@@ -295,6 +360,7 @@ def main():
                 raise ApiError('MAX_ITEMS_MUST_BE_POSITIVE')
             result = queue.status(args.job_id) if args.command == 'status' else work(
                 queue, args.job_id, max_items=args.max_items, concurrency=args.concurrency,
+                quantity_review_seconds=args.quantity_review_seconds,
                 emit=lambda event: print(json.dumps(event, ensure_ascii=False), flush=True))
         print(json.dumps(result, ensure_ascii=False))
         return 2 if result.get('status') in PAUSED | {'resource_busy', 'complete_with_gaps'} else 0

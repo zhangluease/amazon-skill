@@ -97,7 +97,7 @@ class CompetitorTests(unittest.TestCase):
         self.assertEqual(client.browser_offer(observation)['data']['stock'], 'in_stock')
 
     def test_complete_product_is_ok_and_missing_current_offer_reports_browser_followup(self):
-        data = dict(product(), parent=OTHER)
+        data = dict(product(), parent=OTHER, title='テスト用 商品 1枚入り')
         amazon = mock.Mock()
         amazon.fetch.return_value = {'status': 'ok', 'delivery_destination': {'country_code': 'JP', 'verified': True},
             'data': {'asin': ASIN, 'currency': 'JPY', 'price': 3255, 'reference_price': 5170,
@@ -163,6 +163,66 @@ class CompetitorTests(unittest.TestCase):
         self.assertEqual(row['status'], 'partial')
         self.assertFalse(row['media_change_observed'])
 
+    def test_browser_title_alone_can_supply_declared_pack_quantity_and_source(self):
+        snapshot = {'status': 'ok', 'collection_method': 'browser_headless',
+                    'delivery_destination': {'country_code': 'JP', 'verified': True},
+                    'collected_at': '2026-11-24T08:00:00Z',
+                    'data': {'asin': ASIN, 'title': '交換用フィルター 2個パック', 'price': 5387}}
+        row = client.normalize(ASIN, {'amazon': snapshot}, client.normalize_changes([], SCOPE), [], SCOPE['end'])
+        self.assertEqual(row['package_quantity'], 2)
+        self.assertEqual(row['field_sources']['price'], 'amazon_jp_browser_offer.price')
+        self.assertEqual(row['offer_observed_at'], snapshot['collected_at'])
+
+    def test_title_and_product_specs_precede_image_and_variation_label(self):
+        asin = 'B0F284QTLM'
+        data = dict(product(asin), title='洗える脱臭フィルター 280 337 0168',
+                    variation_list=[{'asin': asin, 'attr': '8枚入り'}])
+        changes = client.normalize_changes([], SCOPE)
+        def resolve(title, specs):
+            amazon = {'status': 'ok', 'delivery_destination': {'country_code': 'JP', 'verified': True},
+                      'data': {'asin': asin, 'title': title, 'quantity_specs': specs}}
+            return client.normalize(asin, {'product': data, 'amazon': amazon}, changes, [], SCOPE['end'])
+
+        specs = [{'label': '商品数量', 'value': '１'}, {'label': '内包装数量', 'value': '1'}]
+        title = resolve('脱臭フィルター １枚入り', [{'label': '商品数量', 'value': '3'}])
+        self.assertEqual(title['package_quantity'], 1)
+        self.assertEqual(title['field_sources']['package_quantity'], 'explicit_listing_title')
+        body = resolve(data['title'], specs)
+        self.assertEqual(body['package_quantity'], 1)
+        self.assertEqual(body['field_sources']['package_quantity'], 'amazon_jp_verified_delivery.quantity_specs')
+        self.assertIsNone(client.package_quantity_candidate(body))
+        pack = resolve(data['title'], [{'label': '入数', 'value': '２枚'}])
+        self.assertEqual(pack['package_quantity'], 2)
+        conflict = resolve(data['title'], specs + [{'label': '商品個数', 'value': '2'}])
+        self.assertIsNone(conflict['package_quantity'])
+        self.assertIsNone(client.package_quantity_candidate(conflict))
+        missing = resolve(data['title'], [])
+        self.assertIsNone(missing['package_quantity'])
+        self.assertEqual(client.package_quantity_candidate(missing), {'asin': asin, 'main_image': data['image']})
+
+    def test_main_image_count_is_bound_to_the_local_run_and_cannot_replace_text(self):
+        asin = 'B0F284QTLM'
+        data = dict(product(asin), title='洗える脱臭フィルター 280 337 0168')
+        title_data = dict(product(OTHER), title='脱臭フィルター 1枚入り')
+        vendor = FakeClient([[data], {'items': [{'asin': asin, 'units': 4}]}, [],
+                             [title_data], {'items': [{'asin': OTHER, 'units': 4}]}, []])
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            summary = client.collect([asin, OTHER], vendor, SCOPE, output)
+            self.assertEqual(summary['package_quantity_review'], [{'asin': asin, 'main_image': data['image']}])
+            evidence = dict(summary['package_quantity_review'][0], quantity=1, evidence='一块带独立外框的滤网')
+            with self.assertRaisesRegex(client.ApiError, 'PACKAGE_REVIEW_PRODUCT_OR_IMAGE_MISMATCH'):
+                client.review_quantities(output, [dict(evidence, asin=OTHER)])
+            with self.assertRaisesRegex(client.ApiError, 'PACKAGE_REVIEW_PRODUCT_OR_IMAGE_MISMATCH'):
+                client.review_quantities(output, [dict(evidence, main_image=data['image'] + '.other')])
+            self.assertEqual(client.review_quantities(output, [dict(evidence, quantity=None)])['quantities_added'], 0)
+            self.assertEqual(client.review_quantities(output, [evidence])['quantities_added'], 1)
+            rows = json.loads((output / 'products.json').read_text())['products']
+            self.assertEqual([row['package_quantity'] for row in rows], [1, 1])
+            self.assertEqual(rows[0]['field_sources']['package_quantity'], 'amazon_jp_main_image_review')
+            with (output / 'products.csv').open(encoding='utf-8-sig') as stream:
+                self.assertEqual([r['数量装来源'] for r in csv.DictReader(stream)], ['主图识别', '标题'])
+
     def test_browser_offer_supplements_failed_http_quote_in_new_report(self):
         observation = {'url': 'https://www.amazon.co.jp/dp/' + ASIN, 'title': 'テスト用 商品',
                        'observed_at': '2026-11-23T07:22:25Z', 'country_label': '日本',
@@ -185,7 +245,7 @@ class CompetitorTests(unittest.TestCase):
             self.assertEqual([row[key] for key in client.OFFER_FIELDS], [3255, 5170, 37, True, 'in_stock'])
             self.assertEqual(row['field_sources']['discount_percent'], 'amazon_jp_browser_offer.discount_percent')
             self.assertEqual(row['parent_sales_30d'], 175)
-            self.assertEqual(row['missing_fields'], ['parent_asin'])
+            self.assertEqual(row['missing_fields'], ['package_quantity', 'parent_asin'])
             self.assertTrue((output / 'evidence' / f'{ASIN}-amazon.json').is_file())
             self.assertTrue((output / 'evidence' / f'{ASIN}-amazon-browser.json').is_file())
             self.assertIn('Amazon 浏览器商品页', (output / 'report.html').read_text())

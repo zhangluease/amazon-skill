@@ -349,13 +349,19 @@ class Client:
         except ApiError as error:
             if error.code not in AUTH_ERRORS or self.renewal_attempted:
                 raise
+            renewal_completed = False
             try:
                 self.renew_session(error.code)
+                renewal_completed = True
                 return self._request(ORIGIN, route, params)
             except ApiError as recovery_error:
+                if not renewal_completed and recovery_error.code == 'ERR_ACCOUNT_NOT_EXIST':
+                    # A rejected token sign-in needs interactive plugin login. The renewal event
+                    # already records the vendor's original code.
+                    recovery_error = ApiError('ERR_NEED_RE_AUTHORIZED')
                 if hasattr(error, 'snapshot_data') and not hasattr(recovery_error, 'snapshot_data'):
                     recovery_error.snapshot_data = error.snapshot_data
-                raise
+                raise recovery_error from None
         if not self.missing_session_checked and missing_snapshot_data(route, params, data):
             self.missing_session_checked = True
             try:
@@ -472,13 +478,49 @@ def purchase_threshold(value):
     return None
 
 
+def package_quantity_mentions(title):
+    text = unicodedata.normalize('NFKC', title) if isinstance(title, str) else ''
+    matches = re.findall(
+        r'(?<![0-9])(?<![0-9][.,])([1-9][0-9]{0,3})\s*'
+        r'(?:枚|個|个|本(?!体)|袋|セット|組(?![合み])|パック|套|件|片装|入(?!手)り?|[-‐‑– ]?packs?\b)'
+        r'(?!当たり|あたり|目)'
+        r'|\bpack\s+of\s+([1-9][0-9]{0,3})(?![0-9.,])', text, re.I)
+    return [int(counter or pack) for counter, pack in matches]
+
+
 def declared_package_quantity(title):
     """Use an explicit single title quantity; mixed component counts stay unknown."""
-    text = unicodedata.normalize('NFKC', title or '')
-    matches = re.findall(r'(?<![0-9])([1-9][0-9]?)\s*(?:枚|個|个|本|袋|セット|套|件)(?:入り|入|セット|パック|装)?', text)
-    if len(matches) == 1:
-        return int(matches[0])
-    return None
+    matches = package_quantity_mentions(title)
+    return matches[0] if len(matches) == 1 else None
+
+
+def package_quantity_candidate(product):
+    image = safe_image(product.get('main_image'))
+    if (product.get('title') and image and product.get('package_quantity') is None
+            and not product.get('package_quantity_conflict')
+            and not package_quantity_mentions(product.get('package_quantity_title', product['title']))):
+        return {'asin': product['asin'], 'main_image': image}
+
+
+def apply_package_image_review(product, review):
+    """Accept a visual count only for the exact ASIN and primary image reviewed."""
+    candidate = package_quantity_candidate(product)
+    if (not isinstance(review, dict) or not candidate
+            or any(review.get(key) != value for key, value in candidate.items())):
+        raise ApiError('PACKAGE_REVIEW_PRODUCT_OR_IMAGE_MISMATCH')
+    quantity, evidence = review.get('quantity'), review.get('evidence')
+    if quantity is None:
+        return False
+    if type(quantity) is not int or not 1 <= quantity <= 9999 or not isinstance(evidence, str) or not evidence.strip():
+        raise ApiError('INVALID_PACKAGE_IMAGE_REVIEW')
+    product['package_quantity'] = quantity
+    product['package_quantity_evidence'] = {'main_image': candidate['main_image'], 'observation': evidence.strip()[:500]}
+    product['field_sources']['package_quantity'] = 'amazon_jp_main_image_review'
+    product['missing_fields'] = [key for key in product.get('missing_fields', []) if key != 'package_quantity']
+    if (product['status'] == 'partial' and not product['missing_fields'] and not product['errors']
+            and product.get('history', {}).get('status') == 'ok'):
+        product['status'] = 'ok'
+    return True
 
 
 def title_original_claim(title):

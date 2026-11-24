@@ -19,13 +19,16 @@ const GUIDANCE = {
   BROWSER_LAUNCH_FAILED: ['专用登录浏览器无法启动。', '运行 prepare 检查浏览器；Linux 还需安装 Chromium 系统依赖。'],
   BROWSER_CONFIG_INVALID: ['浏览器缓存配置无法读取。', '检查 ~/.amazon-skill/config.json 中 browser.cache_dir，要求是本机绝对路径。'],
   PROFILE_BUSY: ['另一个任务正在使用同一专用会话。', '等待该任务结束，或用独立 --state-dir 运行另一个账号。'],
-  AUTHORIZATION_TIMEOUT: ['扫码登录等待超时。', '用新报告目录重试，并在弹出的窗口中完成扫码。'],
-  AUTHORIZATION_CANCELLED: ['扫码登录窗口已关闭。', '用新报告目录重试，授权完成前保持窗口打开。'],
+  AUTHORIZATION_TIMEOUT: ['卖家精灵插件登录等待超时。', '用新报告目录重试，并在日本站商品页的插件面板完成登录。'],
+  AUTHORIZATION_CANCELLED: ['卖家精灵专用窗口已关闭。', '用新报告目录重试，授权完成前保持窗口打开。'],
   AUTHORIZATION_REJECTED: ['卖家精灵未接受本次授权。', '核对自己的账号登录和权限，用新报告目录重试。'],
   PLUGIN_LOGIN_REQUIRED: ['卖家精灵返回星号登录遮罩，当前数据尚未解锁。', '完成本轮浏览器登录后重查；遮罩不写入表格，也不代表没有图片变化。'],
   OUTPUT_ALREADY_HAS_RESULTS_USE_NEW_DIRECTORY: ['输出目录已有报告或采集证据。', '每次查询选择新的 --out 目录。'],
   ERR_GLOBAL_403: ['卖家精灵拒绝了这个接口请求。', '检查当前账号的数据权限或扩展版本；本轮不会重复弹登录窗口。'],
   ERR_ROBOT_CHECK: ['卖家精灵返回验证拒绝，已暂停共享采集请求并保留已有数据。', '此错误本身不能确认验证码原因；处理同一专用会话的登录或验证后运行 verify-session，通过 API 核验才恢复。'],
+  ERR_ACCOUNT_NOT_EXIST: ['卖家精灵令牌登录接口返回账号不可用。', '检查插件所用账号与可用的官网账号是否一致。确认插件登录并通过 API 核验后再继续。'],
+  AMAZON_CONTINUE_SHOPPING_REQUIRED: ['Amazon 返回继续购物确认页，尚未取得有效商品报价。', '使用 amazon-offer ASIN --amazon-browser headed --out 新目录，在同一专用会话中由用户完成交互后恢复。'],
+  AMAZON_HUMAN_VERIFICATION_REQUIRED: ['Amazon 要求验证，已暂停后续 Amazon 请求。', '使用 amazon-offer ASIN --amazon-browser headed --out 新目录，由用户完成验证并等待采集核验成功。'],
   PROVIDER_VERIFICATION_PENDING: ['其他任务已因验证拒绝暂停共享采集。', '处理同一专用会话后运行 verify-session；不要启动多个登录或反复请求。'],
   PROVIDER_AUTHORIZATION_PENDING: ['共享采集正在等待账号授权恢复。', '由一个任务完成 login 并通过 API 核验，其他任务随后续跑原 job_id。'],
   PROVIDER_BUSY: ['另一个任务正在使用共享采集资源。', '等待该任务释放后续跑原 job_id，不重新规划同一批记录。'],
@@ -96,7 +99,7 @@ async function check(options, sessionFile, dependencies = {}) {
     login_can_prepare: loginPreparable, login_preparation_required: loginPreparable && !loginReady,
     extension: { found: Boolean(extension), version: extension?.manifest.version || null },
     runtime: runtime || null, desktop, issues, warnings,
-    collection_method: 'independent_http', browser_only_for_login: true };
+    collection_method: 'http_with_optional_amazon_browser', browser_only_for_login: false };
 }
 
 module.exports = { guidance, check };

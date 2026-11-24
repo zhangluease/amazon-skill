@@ -10,7 +10,7 @@ import sys
 import time
 import uuid
 
-from competitor_core import ApiError, CHANGE_SCHEMA, write_json, is_login_mask
+from competitor_core import ApiError, BROWSER_OFFER_SOURCE, CHANGE_SCHEMA, write_json, is_login_mask, number
 from feishu_plan import cell_text, parse_table_url, create_plan
 
 
@@ -171,12 +171,16 @@ def build_patch(product, before, schema, *, price_baseline=None):
     for name, key in TEXT_FIELDS.items():
         value = product.get(key)
         put(name, f'{value:g}' if isinstance(value, (float, int)) else value, 'text')
-    put('当前售价', f'￥{product["price"]:,.0f}' if product.get('price') is not None else None, 'text')
+    destination = product.get('delivery_destination', {})
+    price_source = product.get('field_sources', {}).get('price')
+    price = (number(product.get('price')) if destination.get('verified') is True
+             and destination.get('country_code') == 'JP'
+             and price_source in ('amazon_jp_verified_delivery.price', BROWSER_OFFER_SOURCE + '.price') else None)
+    put('当前售价', f'￥{price:,.0f}' if price is not None else None, 'text')
     baseline_record = before if price_baseline is None else price_baseline
     previous_price = re.fullmatch(r'\s*[￥¥]?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*', cell_text(baseline_record.get('当前售价')))
     baseline = float(previous_price[1].replace(',', '')) if previous_price else None
-    fluctuation = (abs(product['price'] - baseline) / baseline > .10
-                   if baseline and product.get('price') is not None else None)
+    fluctuation = abs(price - baseline) / baseline > .10 if baseline and price is not None else None
     put('价格波动（超10%）', ['是' if fluctuation else '否'] if type(fluctuation) is bool else None, 'select')
     put('大类排名', f'#{product["root_rank"]:g} {product.get("root_category") or ""}'.strip()
         if product.get('root_rank') is not None else None, 'text')

@@ -2,7 +2,9 @@ import html
 import importlib.util
 import io
 import json
+import http.cookiejar
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -46,6 +48,62 @@ def flow(final=None, address=None):
 
 
 class JapanProductTests(unittest.TestCase):
+    def test_primary_image_and_quantity_specs_are_extracted_from_the_product_page(self):
+        markup = product() + '''
+          <img id="landingImage" data-old-hires="https://m.media-amazon.com/images/I/hero.jpg">
+          <table id="productOverview_feature_div">
+            <tr><td>商品数量</td><td>１</td></tr><tr><td>内包装数量</td><td>１</td></tr>
+            <tr><td>商品尺寸</td><td>19.3 x 15 x 19.3</td></tr>
+            <tr><td>ユニット数</td><td>480 グラム</td></tr>
+          </table>
+          <table id="productDetails_techSpec_section_1"><tr><th>商品の個数</th><td>1.0 個</td></tr></table>
+          <table id="anotherProduct"><tr><th>商品数量</th><td>5</td></tr></table>
+          <select name="quantity"><option>2</option></select>'''
+        offer = jp.parse_offer(jp.Page(markup), ASIN)
+        self.assertEqual(offer['main_image'], 'https://m.media-amazon.com/images/I/hero.jpg')
+        self.assertEqual([(s['label'], s['quantity']) for s in offer['quantity_specs']],
+                         [('商品数量', 1), ('内包装数量', 1), ('商品の個数', 1)])
+
+    def test_empty_accessibility_price_and_chinese_stock(self):
+        markup = product(stock='现在有货。').replace('<span class="a-offscreen">￥3,255</span>',
+            '<span class="a-offscreen"></span><span aria-hidden="true">JP¥<span class="a-price-whole">5,387</span></span>')
+        offer = jp.parse_offer(jp.Page(markup), ASIN)
+        self.assertEqual(offer['price'], 5387)
+        self.assertEqual(offer['stock'], 'in_stock')
+        self.assertIn('5,387', offer['field_evidence']['price'])
+
+    def test_continue_shopping_is_distinct_from_captcha_input(self):
+        markup = '<form action="/errors_page/validateCaptcha"><button>ショッピングを続ける</button></form>'
+        with self.assertRaisesRegex(jp.AmazonError, 'AMAZON_CONTINUE_SHOPPING_REQUIRED'):
+            jp.validate_page(jp.Page(markup))
+        with self.assertRaisesRegex(jp.AmazonError, 'AMAZON_HUMAN_VERIFICATION_REQUIRED'):
+            jp.validate_page(jp.Page(markup + '<input id="captchacharacters">'))
+        opener = mock.Mock(open=mock.Mock(return_value=Response(markup.encode())))
+        client = jp.AmazonProductClient(opener=opener)
+        self.assertEqual(client.fetch(ASIN)['category'], 'AMAZON_CONTINUE_SHOPPING_REQUIRED')
+        self.assertTrue(client.fetch('B07WQGD7G1')['not_attempted'])
+        self.assertEqual(opener.open.call_count, 1)
+
+    def test_cookie_session_persists_between_clients_outside_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'cookies.txt'
+            client = jp.AmazonProductClient(cookie_file=target)
+            client.jar.set_cookie(http.cookiejar.Cookie(0, 'session-id', 'fixture-private', None, False,
+                '.amazon.co.jp', True, True, '/', True, True, None, True, None, None, {}, False))
+            client.save_cookies()
+            restored = jp.AmazonProductClient(cookie_file=target)
+            self.assertEqual([(c.name, c.value) for c in restored.jar], [('session-id', 'fixture-private')])
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+    def test_browser_parser_verifies_country_and_child_asin(self):
+        result = jp.parse_browser_capture({'html': product()}, ASIN)
+        self.assertEqual(result['collection_method'], 'browser_headless')
+        self.assertEqual(result['data']['price'], 3255)
+        with self.assertRaisesRegex(jp.AmazonError, 'AMAZON_PRODUCT_NOT_CONFIRMED'):
+            jp.parse_browser_capture({'html': product(asin='B07WQGD7G1')}, ASIN)
+        with self.assertRaisesRegex(jp.AmazonError, 'AMAZON_DESTINATION_NOT_CONFIRMED'):
+            jp.parse_browser_capture({'html': product(label='中国')}, ASIN)
+
     def test_existing_japan_delivery_skips_location_api_and_reload(self):
         for label in ['日本', 'Japan']:
             opener = mock.Mock()

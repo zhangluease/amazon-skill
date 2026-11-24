@@ -17,11 +17,23 @@
   const url = new URL(location.href);
   const asin = url.pathname.match(/\/dp\/([A-Z0-9]{10})(?:\/|$)/i)?.[1]?.toUpperCase();
   const title = text(id('productTitle'));
-  if (url.origin !== 'https://www.amazon.co.jp' || !asin || !title) return null;
+  if (url.origin !== 'https://www.amazon.co.jp' || !asin || id('ASIN')?.value?.toUpperCase() !== asin || !title) return null;
+  const image = id('landingImage');
+  const specSections = ['productOverview_feature_div', 'productFactsDesktop_feature_div', 'productFactsDesktopExpander',
+    'productDetails_techSpec_section_1', 'productDetails_techSpec_section_2', 'productDetails_detailBullets_sections1'];
+  const quantitySpecs = specSections.flatMap(name => Array.from(id(name)?.querySelectorAll('tr') || [])
+    .filter(row => row.cells.length === 2)
+    .map(row => ({ label: text(row.cells[0]), value: text(row.cells[1]) })));
+  for (const bullet of id('detailBullets_feature_div')?.querySelectorAll('li') || []) {
+    const line = text(bullet)?.match(/^([^:：]+)[:：](.+)$/);
+    if (line) quantitySpecs.push({ label: line[1], value: line[2] });
+  }
   return {
     url: `https://www.amazon.co.jp/dp/${asin}`,
     observed_at: new Date().toISOString(),
     title,
+    main_image: image?.getAttribute('data-old-hires') || image?.getAttribute('src') || null,
+    quantity_specs: quantitySpecs,
     country_label: text(id('icp-touch-link-country')),
     destination_country_label: ['日本', '日本国', 'Japan'].includes(destination) ? destination : null,
     postal_code: postalCode(destination),

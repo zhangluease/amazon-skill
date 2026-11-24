@@ -36,6 +36,8 @@ SCHEMA = [
 
 def product(marker=False):
     return {'asin': ASIN, 'title': '互換フィルター 2個入り', 'brand': 'Fixture', 'price': 1852,
+            'delivery_destination': {'country_code': 'JP', 'verified': True},
+            'field_sources': {'price': 'amazon_jp_verified_delivery.price'},
             'media_change_observed': marker, 'history': {'schema': CHANGE_SCHEMA, 'status': 'ok'},
             'stock': 'in_stock', 'package_quantity': 2}
 
@@ -114,6 +116,17 @@ class FeishuTests(unittest.TestCase):
         self.assertEqual(build_patch(data, before, SCHEMA)['fields']['价格波动（超10%）'], ['是'])
         self.assertNotIn('价格波动（超10%）', build_patch(data, {'ASIN': ASIN}, SCHEMA)['fields'])
 
+    def test_snapshot_price_or_unconfirmed_delivery_preserves_existing_current_price(self):
+        before = {'ASIN': ASIN, '当前售价': '￥100', '价格波动（超10%）': ['是']}
+        for data in (
+            dict(product(), field_sources={'price': 'product.price'}),
+            dict(product(), delivery_destination={'country_code': 'JP', 'verified': False}),
+        ):
+            fields = build_patch(data, before, SCHEMA)['fields']
+            self.assertNotIn('当前售价', fields)
+            self.assertNotIn('价格波动（超10%）', fields)
+            self.assertEqual(fields['品牌'], 'Fixture')
+
     def test_record_id_write_and_readback_do_not_modify_other_rows_with_same_asin(self):
         before = {'record_id': 'recNew', 'ASIN': ASIN, '标题': None, '分组': 'keep'}
         another = {'record_id': 'recOther', 'ASIN': ASIN, '标题': '不可改'}
@@ -163,7 +176,11 @@ class FeishuTests(unittest.TestCase):
         self.assertEqual(declared_package_quantity('Core 300 互換品 2セット入り'), 2)
         self.assertEqual(declared_package_quantity('Core 300 兼容品 2套'), 2)
         self.assertEqual(declared_package_quantity('Core 300 2件装'), 2)
+        self.assertEqual(declared_package_quantity('Core Mini 互換フィルター、２パック'), 2)
+        self.assertEqual(declared_package_quantity('Filter 3-Pack'), 3)
+        self.assertEqual(declared_package_quantity('Filter Pack of 2'), 2)
         self.assertIsNone(declared_package_quantity('V10 SV12 969082-02'))
+        self.assertIsNone(declared_package_quantity('PC150本体に対応、フィルター1枚あたり'))
         self.assertIsNone(declared_package_quantity('フィルター2個とブラシ1本'))
 
 

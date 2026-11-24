@@ -123,6 +123,16 @@ class SessionTests(unittest.TestCase):
             row = json.loads((Path(directory) / 'changes.json').read_text())['products'][0]
             self.assertIsNone(row['media_change_observed'])
 
+    def test_rejected_token_account_stops_collection_for_interactive_login(self):
+        client, opener = api([{'code': 'ERR_NEED_RE_AUTHORIZED'}, {'code': 'ERR_ACCOUNT_NOT_EXIST'}])
+        with tempfile.TemporaryDirectory() as directory:
+            result = collect([ASIN], client, window('2026-11-24'), directory)
+        self.assertEqual(result['status'], 'authorization_required')
+        self.assertEqual(result['category'], 'ERR_NEED_RE_AUTHORIZED')
+        self.assertEqual(client.auth_events[0]['code'], 'ERR_ACCOUNT_NOT_EXIST')
+        self.assertIn(('ERR_NEED_RE_AUTHORIZED', 'authorization'), client.gate.pauses)
+        self.assertEqual(len(opener.requests), 2)
+
     def test_masks_are_whole_values_and_do_not_match_ordinary_product_names(self):
         for value in ('****', '  ***  ', '＊＊＊＊'):
             self.assertTrue(is_login_mask(value))

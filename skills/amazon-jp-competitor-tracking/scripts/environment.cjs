@@ -1,4 +1,4 @@
-// Browser dependencies are prepared only for authorization, never for collection.
+// Browser dependencies are prepared on demand for authorization or Amazon fallback.
 const fs = require('node:fs/promises');
 const syncFs = require('node:fs');
 const path = require('node:path');

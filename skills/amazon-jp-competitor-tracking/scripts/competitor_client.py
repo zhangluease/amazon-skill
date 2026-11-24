@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
@@ -13,10 +14,12 @@ from competitor_core import (AUTH_ERRORS, STOP_ERRORS, ORIGIN, JST, ASIN_RE, OFF
                              BROWSER_OFFER_SOURCE, CHANGE_SCHEMA, ApiError, Client, load_session,
                              read_inputs, parse_asin, window, history_window, checksum, scalar,
                              number, purchase_threshold, product_row, safe_image, write_json,
-                             validate_output_directory, declared_package_quantity, title_original_claim)
+                             validate_output_directory, package_quantity_mentions, declared_package_quantity,
+                             package_quantity_candidate, apply_package_image_review, title_original_claim)
+from amazon_product import quantity_specs
 from competitor_changes import (normalize_changes, unavailable_changes,
                                 collect_listing_changes)
-from competitor_report import COLUMNS, save_report
+from competitor_report import COLUMNS, save_report, save_quantity_review
 
 def normalize(asin, sources, changes, errors, collected_at):
     info, sales = sources.get('product', {}), sources.get('sales', {})
@@ -46,12 +49,6 @@ def normalize(asin, sources, changes, errors, collected_at):
     for name in ('package_quantity', 'title_original_claim'):
         if result[name] is not None:
             result['field_sources'][name] = 'explicit_listing_title'
-    if result['package_quantity'] is None:
-        labels = [row.get('attr') for row in info.get('variation_list') or [] if row.get('asin') == asin]
-        if len(labels) == 1:
-            result['package_quantity'] = declared_package_quantity(labels[0])
-            if result['package_quantity'] is not None:
-                result['field_sources']['package_quantity'] = 'product.variation_list[requested_asin].attr'
     result['currency'] = result['currency'] or ('JPY' if get('symbol', 'symbol') in ('¥', '￥') else None)
     if result['currency'] in ('円', '¥', '￥'):
         result['currency'] = 'JPY'
@@ -75,7 +72,8 @@ def normalize(asin, sources, changes, errors, collected_at):
     result['delivery_destination'] = destination
     result['delivery_status'] = '日本（已验证）' if destination.get('verified') else '日本（未验证）'
     if amazon.get('status') == 'ok' and destination.get('verified') is True:
-        apply_offer(result, amazon, 'amazon_jp_verified_delivery')
+        source = BROWSER_OFFER_SOURCE if str(amazon.get('collection_method', '')).startswith('browser_') else 'amazon_jp_verified_delivery'
+        apply_offer(result, amazon, source)
     result['availability_note'] = 'Current offer fields require verified Japan delivery and explicit offer evidence; cached unavailable is not current inventory'
     result['history'] = changes
     result['media_change_observed'] = changes['media_change_observed']
@@ -92,9 +90,51 @@ def apply_offer(result, snapshot, source):
     if offer.get('asin') != result['asin']:
         raise ApiError('AMAZON_PRODUCT_NOT_CONFIRMED')
     sources = result['field_sources']
-    if not result['title'] and isinstance(offer.get('title'), str):
-        result['title'] = offer['title']
+    offer_title = offer.get('title')
+    if not isinstance(offer_title, str):
+        offer_title = None
+    if not result['title'] and offer_title:
+        result['title'] = offer_title
         sources['title'] = source + '.title'
+        original = title_original_claim(result['title'])
+        if original is not None:
+            result['title_original_claim'] = original
+            sources['title_original_claim'] = 'explicit_listing_title'
+    image = safe_image(offer.get('main_image'))
+    if image:
+        result['main_image'] = image
+        sources['main_image'] = source + '.landingImage'
+    previous_quantity = result.get('package_quantity')
+    previous_image_review = (result.get('package_quantity_evidence', {})
+                             if sources.get('package_quantity') == 'amazon_jp_main_image_review' else {})
+    result['package_quantity'] = None
+    result.pop('package_quantity_conflict', None)
+    result.pop('package_quantity_evidence', None)
+    sources.pop('package_quantity', None)
+    title = offer_title or result.get('package_quantity_title', result['title'])
+    if title != result['title']:
+        result['package_quantity_title'] = title
+    else:
+        result.pop('package_quantity_title', None)
+    counts = package_quantity_mentions(title)
+    if len(counts) == 1:
+        result['package_quantity'] = counts[0]
+        sources['package_quantity'] = 'explicit_listing_title'
+    elif counts:
+        result['package_quantity_conflict'] = 'title'
+    else:
+        specs = quantity_specs(offer.get('quantity_specs'))
+        fields = [field for field in specs if field['kind'] == 'item'] or specs
+        quantities = {field['quantity'] for field in fields}
+        if len(quantities) == 1:
+            result['package_quantity'] = next(iter(quantities))
+            result['package_quantity_evidence'] = {'specifications': fields}
+            sources['package_quantity'] = source + '.quantity_specs'
+        elif quantities:
+            result['package_quantity_conflict'] = 'specifications'
+        elif previous_image_review and previous_image_review.get('main_image') == result.get('main_image'):
+            apply_package_image_review(result, {'asin': result['asin'], 'main_image': result['main_image'],
+                'quantity': previous_quantity, 'evidence': previous_image_review['observation']})
     for key in ('price', 'reference_price', 'discount_percent'):
         value = number(offer.get(key))
         if value is not None:
@@ -111,6 +151,8 @@ def apply_offer(result, snapshot, source):
         sources['stock'] = source + '.availability'
     result['reference_price_label'] = offer.get('reference_price_label')
     result['availability_text'] = offer.get('availability_text')
+    if snapshot.get('collected_at'):
+        result['offer_observed_at'] = snapshot['collected_at']
     result['delivery_destination'] = snapshot['delivery_destination']
     result['delivery_status'] = '日本（已验证）'
     result['data_freshness'] = source + '_and_provider_snapshots; see_field_sources'
@@ -167,7 +209,9 @@ def browser_offer(observation):
                 'stock': availability}
     data = {'asin': asin, 'title': observed_text('title'), 'currency': 'JPY', 'price': price, 'reference_price': reference,
             'reference_price_label': reference_label[0].strip() if reference_label else None,
-            'discount_percent': percent, 'buy_box': buy_box, 'stock': stock, 'availability_text': availability or None}
+            'discount_percent': percent, 'buy_box': buy_box, 'stock': stock, 'availability_text': availability or None,
+            'main_image': safe_image(observation.get('main_image')),
+            'quantity_specs': quantity_specs(observation.get('quantity_specs'))}
     if all(data[key] is None for key in OFFER_FIELDS):
         raise ApiError('AMAZON_BROWSER_OFFER_EMPTY')
     data['field_evidence'] = {key: value for key, value in evidence.items() if value and data[key] is not None}
@@ -226,10 +270,34 @@ def merge_browser_offers(source, output, observations):
     summary = {'status': 'ok' if all(row['status'] == 'ok' for row in rows) else 'partial',
                'requested': len(previous['requested_asins']), 'products': len(rows),
                'browser_offers_merged': len(snapshots), 'collection_method': 'http_with_browser_offers',
+               'package_quantity_review': [candidate for row in rows if (candidate := package_quantity_candidate(row))],
                'japan_delivery_verified': sum(row['delivery_destination'].get('verified') is True for row in rows),
                'output': str(output.resolve())}
     write_json(output / 'status.json', summary)
     return summary
+
+
+def review_quantities(output, observations):
+    """Attach image observations after a local collection has finished."""
+    output = Path(output)
+    report = json.loads((output / 'products.json').read_text(encoding='utf-8'))
+    if report.get('format') != 'amazon-jp-competitor-tracking-v1' or report.get('marketplace') != 'JP':
+        raise ApiError('INVALID_COMPETITOR_REPORT')
+    rows = report['products']
+    by_asin = {row['asin']: row for row in rows}
+    if not isinstance(observations, list) or not observations or len(observations) > len(rows):
+        raise ApiError('INVALID_PACKAGE_REVIEW_LIST')
+    reviewed = set()
+    changes = 0
+    for review in observations:
+        asin = review.get('asin') if isinstance(review, dict) else None
+        if not isinstance(asin, str) or asin not in by_asin or asin in reviewed:
+            raise ApiError('PACKAGE_REVIEW_PRODUCT_OR_IMAGE_MISMATCH')
+        changes += apply_package_image_review(by_asin[asin], review)
+        reviewed.add(asin)
+    pending = save_quantity_review(output, report, changed=bool(changes))
+    return {'reviewed': len(reviewed), 'quantities_added': changes,
+            'package_quantity_review': pending, 'output': str(output.resolve())}
 
 
 def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None):
@@ -253,6 +321,8 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
             cached_amazon = output / 'evidence' / f'{asin}-amazon.json'
             # Do not repeat a challenge, or discard a verified offer, during the same auth retry.
             snapshot = json.loads(cached_amazon.read_text(encoding='utf-8')) if resume and cached_amazon.is_file() else amazon.fetch(asin)
+            if snapshot.get('status') == 'ok' and 'main_image' in snapshot['data']:
+                snapshot['data']['main_image'] = safe_image(snapshot['data']['main_image'])
             sources['amazon'] = snapshot
             write_json(cached_amazon, snapshot)
             if snapshot.get('status') != 'ok':
@@ -314,6 +384,8 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
         results.append(result)
         save_report(output, results, asins, scope, stopped)
     usable = sum(r['status'] != 'failed' for r in results)
+    browser_offers = sum(any(str(value).startswith(BROWSER_OFFER_SOURCE) for value in row['field_sources'].values())
+                         for row in results)
     return {'status': 'resource_busy' if stopped == 'PROVIDER_BUSY' else
             'authorization_pending' if stopped == 'PROVIDER_AUTHORIZATION_PENDING' else
             'verification_required' if stopped in ('ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING') else
@@ -322,8 +394,11 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
             'requested': len(asins), 'products': len(results), 'category': stopped or ('NO_PRODUCT_DATA' if not usable else None),
             'usable_products': usable,
             'browser_fallback_asins': [row['asin'] for row in results if any(row.get(key) is None for key in OFFER_FIELDS)],
+            'package_quantity_review': [candidate for row in results if (candidate := package_quantity_candidate(row))],
+            'amazon_browser_verification_asins': getattr(amazon, 'verification_asins', []),
+            'browser_offers_collected': browser_offers,
             'japan_delivery_verified': sum(bool(r['delivery_destination'].get('verified')) for r in results),
-            'output': str(output.resolve()), 'collection_method': 'independent_http'}
+            'output': str(output.resolve()), 'collection_method': 'http_with_browser_offers' if browser_offers else 'independent_http'}
 
 
 def main(argv=None):
@@ -340,6 +415,9 @@ def main(argv=None):
     merge.add_argument('--from', dest='source', required=True)
     merge.add_argument('--out', required=True)
     merge.add_argument('--observations', required=True, help='JSON array of browser observations; use - for stdin')
+    quantity_review = commands.add_parser('review-quantities', help='Attach main-image counts to a completed local run')
+    quantity_review.add_argument('--out', required=True)
+    quantity_review.add_argument('--observations', required=True, help='JSON array of main-image observations; use - for stdin')
     for command in (check, run, changes):
         command.add_argument('--input')
         command.add_argument('--as-of')
@@ -351,6 +429,8 @@ def main(argv=None):
         command.add_argument('--out', required=True)
         command.add_argument('--interval', type=float, default=1)
         command.add_argument('--resume', action='store_true', help='Reuse successful evidence after reauthorization')
+        command.add_argument('--amazon-browser', choices=('off', 'headless'), default='off')
+        command.add_argument('--amazon-state-dir')
     args = parser.parse_args(argv)
     api = None
     try:
@@ -365,12 +445,13 @@ def main(argv=None):
             write_json(Path(args.out) / 'session-check.json', public)
             print(json.dumps(public, ensure_ascii=False))
             return 0
-        if args.command == 'merge-browser-offers':
+        if args.command in ('merge-browser-offers', 'review-quantities'):
             if args.observations == '-':
                 observations = json.load(sys.stdin)
             else:
                 observations = json.loads(Path(args.observations).read_text(encoding='utf-8-sig'))
-            result = merge_browser_offers(args.source, args.out, observations)
+            result = (merge_browser_offers(args.source, args.out, observations) if args.command == 'merge-browser-offers'
+                      else review_quantities(args.out, observations))
             print(json.dumps(result, ensure_ascii=False))
             return 0
         asins = read_inputs(args.asins, args.input)
@@ -387,8 +468,14 @@ def main(argv=None):
                                                  resume=args.resume)
             else:
                 from amazon_product import AmazonProductClient
+                if args.amazon_state_dir:
+                    from amazon_collection import AmazonQuoteClient
+                    amazon = AmazonQuoteClient(args.amazon_state_dir, interval=args.interval,
+                        mode=args.amazon_browser, node=os.environ.get('AMAZON_COMPETITOR_NODE', 'node'))
+                else:
+                    amazon = AmazonProductClient(interval=args.interval)
                 result = collect(asins, api, scope, Path(args.out), resume=args.resume,
-                                 amazon=AmazonProductClient(interval=args.interval))
+                                 amazon=amazon)
             result['api_authorization'] = {'events': api.auth_events,
                 'renewal_attempted': api.renewal_attempted, 'credentials_included': False}
             result['request_trace'] = api.request_trace

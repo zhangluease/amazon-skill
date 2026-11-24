@@ -76,7 +76,7 @@ async function prepareHome(directory, output) {
   if (existing.length && !existing.includes('.amazon-jp-competitor-tracking')) throw fail('STATE_DIRECTORY_NOT_MANAGED');
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   if ((await fs.lstat(directory)).isSymbolicLink()) throw fail('UNSAFE_STATE_DIRECTORY');
-  for (const name of ['profile', 'extension']) {
+  for (const name of ['profile', 'extension', 'amazon-profile', 'amazon-http-cookies.txt', 'amazon-browser-status.json']) {
     if (await fs.lstat(path.join(directory, name)).then(s => s.isSymbolicLink()).catch(() => false)) throw fail('UNSAFE_STATE_DIRECTORY');
   }
   await fs.chmod(directory, 0o700).catch(() => {});

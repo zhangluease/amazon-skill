@@ -19,6 +19,29 @@ async function options(tmp) {
     '--session-file', path.join(tmp, 'provided-session.json'), 'B008H0Y15I']);
 }
 
+test('amazon-offer validates input and never enters SellerSprite authorization', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-amazon-only-'));
+  try {
+    const calls = [];
+    const dependencies = deps(async (_, argv) => {
+      calls.push(argv);
+      assert.ok(argv.includes('validate-input'));
+      return { stdout: JSON.stringify(valid) };
+    });
+    dependencies.collectAmazon = async options => {
+      assert.equal(options.asin, valid.asins[0]);
+      assert.equal(options.mode, 'headless');
+      return { status: 'ok', data: { asin: options.asin, price: 5387 } };
+    };
+    const result = await run(argumentsFor(['amazon-offer', valid.asins[0], '--out', path.join(tmp, 'out'),
+      '--state-dir', path.join(tmp, 'state')]), dependencies);
+    assert.equal(result.data.price, 5387);
+    assert.equal(calls.length, 1);
+    assert.equal(JSON.parse(await fs.readFile(path.join(tmp, 'out/amazon-offer.json'))).data.price, 5387);
+    await assert.rejects(fs.access(path.join(tmp, 'state/.running')));
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
 test('valid cache queries through HTTP without browser preparation or login', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-valid-'));
   try {
@@ -76,6 +99,28 @@ test('API-only renewal remains automatic and does not open a QR browser', async 
     assert.equal(result.authorization_handoffs, 0);
     assert.equal(result.api_authorization.events[0].status, 'ok');
     assert.equal(result.api_authorization.credentials_included, false);
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
+test('failed authorization records the API cause and renewal attempt without credentials', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-auth-cause-'));
+  try {
+    const config = await options(tmp);
+    const dependencies = deps(async (_, argv) => ({ stdout: JSON.stringify(argv.includes('validate-input') ? valid : {
+      status: 'authorization_required', category: 'ERR_NEED_RE_AUTHORIZED', api_authorization: { events: [
+        { action: 'token_signin', reason: 'ERR_NEED_RE_AUTHORIZED', status: 'failed', code: 'ERR_ACCOUNT_NOT_EXIST' },
+      ] },
+    }) }), async (_, __, publish) => {
+      await publish('awaiting_login');
+      throw Object.assign(new Error('AUTHORIZATION_TIMEOUT'), { code: 'AUTHORIZATION_TIMEOUT' });
+    });
+    await assert.rejects(run(config, dependencies), { code: 'AUTHORIZATION_TIMEOUT' });
+    const status = JSON.parse(await fs.readFile(path.join(config.out, 'status.json')));
+    const auth = JSON.parse(await fs.readFile(path.join(config.out, 'authorization.json')));
+    assert.equal(status.authorization_reason, 'ERR_NEED_RE_AUTHORIZED');
+    assert.equal(status.api_authorization.events[0].status, 'failed');
+    assert.equal(status.api_authorization.credentials_included, false);
+    assert.equal(auth.reason, 'ERR_NEED_RE_AUTHORIZED');
   } finally { await fs.rm(tmp, { recursive: true, force: true }); }
 });
 
@@ -164,7 +209,7 @@ test('changes mode carries the all-period window through one login and resumes o
   } finally { await fs.rm(tmp, { recursive: true, force: true }); }
 });
 
-test('QR handoff saves the authorized session and closes only owned contexts', async () => {
+test('interactive recovery opens the Japanese listing and waits for the original plugin login', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-qr-'));
   let home;
   try {
@@ -174,29 +219,38 @@ test('QR handoff saves the authorized session and closes only owned contexts', a
       host_permissions: ['https://e.sellersprite.com/*'], action: { default_popup: 'popup.html' }, key: Buffer.from('fixture-key').toString('base64') }));
     await fs.writeFile(path.join(source, 'popup.html'), '<title>fixture</title>');
     home = await prepareHome(path.join(tmp, 'state'), path.join(tmp, 'out'));
-    let launches = 0, closes = 0, clicks = 0;
+    let launches = 0, closes = 0;
+    const routeAppliedInHeadless = [];
     const statuses = [];
     const session = { format: 'sellersprite-http-session-v1', extension_version: '5.0.7',
       headers: { 'auth-token': 'fixture-token', 'auth-fp': 'fixture-fp', 'random-token': 'fixture-random' },
       parameters: { version: '5.0.7' } };
-    await authorize(home, { out: path.join(tmp, 'out'), 'extension-dir': source, timeout: 5 },
-      async status => statuses.push(status), {
+    await authorize(home, { out: path.join(tmp, 'out'), 'extension-dir': source, timeout: 5,
+      authorizationAsin: 'B09BQ4KNTG' },
+      async (status, details) => {
+        statuses.push(status);
+        if (status === 'awaiting_login') assert.equal(details.login_url, 'https://www.amazon.co.jp/dp/B09BQ4KNTG');
+      }, {
         prepare: async () => ({ report: { ready: true } }), desktop: () => ({ available: true }),
         launch: async (profile, settings) => {
           launches++;
           let pages = 0;
-          return { route: async () => {}, close: async () => { closes++; }, newPage: async () => {
+          return { route: async () => routeAppliedInHeadless.push(settings.headless), close: async () => { closes++; }, newPage: async () => {
             if (++pages === 1) return { goto: async () => {}, isClosed: () => false,
-              evaluate: async () => settings.headless ? { plugin_ready: false } : { plugin_ready: true, session } };
-            return { goto: async url => assert.ok(url.endsWith('/w/user/login')), bringToFront: async () => {},
-              isClosed: () => false, getByText: label => ({ first: () => ({
-                isVisible: async () => label === '微信登录', click: async () => { clicks++; } }) }) };
+              evaluate: async (_, allowWebsiteSync) => {
+                assert.equal(allowWebsiteSync, settings.headless);
+                if (settings.headless) return { plugin_ready: false, rejected: true, reason: 'ERR_ACCOUNT_NOT_EXIST' };
+                assert.deepEqual(statuses, ['awaiting_login']);
+                return { plugin_ready: true, session };
+              } };
+            return { goto: async url => assert.equal(url, 'https://www.amazon.co.jp/dp/B09BQ4KNTG'),
+              bringToFront: async () => {}, isClosed: () => false };
           } };
         }
       });
     assert.equal(launches, 2);
     assert.equal(closes, 2);
-    assert.equal(clicks, 1);
+    assert.deepEqual(routeAppliedInHeadless, [true]);
     assert.deepEqual(statuses, ['awaiting_login', 'completed']);
     const saved = JSON.parse(await fs.readFile(path.join(home.directory, 'http-session.json'), 'utf8'));
     assert.equal(saved.headers['auth-token'], 'fixture-token');

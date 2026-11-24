@@ -41,7 +41,7 @@ python3 scripts/configure.py status
 
 ## 日本站竞对页面追踪
 
-[amazon-jp-competitor-tracking](skills/amazon-jp-competitor-tracking/SKILL.md) 接收 ASIN、商品链接或本地 TXT／CSV／JSON 清单，通过卖家精灵 API 获取商品快照、销量和近七天图片/视频变化。报价先用 Amazon HTTP 会话核对日本配送并读取。报价缺项时，技能可从浏览器的 `https://www.amazon.co.jp/dp/{ASIN}` 商品页补采售价、参考价、折扣、购物车和库存。只查图库变更可用 `changes`，无需 MCP 或 Amazon 页面；加 `--all-history` 可做全周期验证。
+[amazon-jp-competitor-tracking](skills/amazon-jp-competitor-tracking/SKILL.md) 接收 ASIN、商品链接或本地 TXT／CSV／JSON 清单，通过卖家精灵 API 获取商品快照、销量和近七天图片/视频变化。报价优先用 Amazon HTTP 会话读取并核验日本配送，读取失败或缺少售价时默认用无头浏览器补采。只查图库变更可以用 `changes`，加 `--all-history` 可做全周期验证。需要恢复授权时，在专用浏览器的日本站商品页内完成卖家精灵插件登录。
 
 ```text
 请使用 $amazon-jp-competitor-tracking，抓取 B008H0V15I 的竞对页面信息，并检查近 7 天图片/视频变化。
@@ -55,6 +55,8 @@ node skills/amazon-jp-competitor-tracking/scripts/competitor.cjs collect \
 输出 HTML、CSV、JSON 和取数证据。B008H0V15I 已验证在匿名请求遇到验证页后可从 Chrome 商品页补齐报价。命令和证据格式见 [访问方式](skills/amazon-jp-competitor-tracking/references/access.md)及[字段口径](skills/amazon-jp-competitor-tracking/references/data-contract.md)。
 
 向其他人分发时，运行 `python3 scripts/package_competitor_skill.py --out /absolute/amazon-jp-competitor-tracking.zip`。构建器仅打包明确列出的运行代码和说明，并输出 SHA-256 清单；登录态、扩展副本、历史报告和本地依赖不在包内。接收者把完整目录放入自己的 Codex 技能目录，先运行 `competitor.cjs check`，用自己的卖家精灵账号授权。已有会话正常复用；鉴权失效时最多 API 续登一次，普通数据缺项只核验一次会话；登录恢复后须通过同一 API 会话检查。飞书任务使用 `feishu_sync.py plan/work/status` 共享同机队列，默认每批并发最多 3 个 ASIN，同机合计上限也为 3；原子认领后按 ASIN 采集、立即通过 CLI 写回并核验，先新增后更新。飞书不使用 Browser Use；验证拒绝会暂停共享采集。
+
+按飞书分组执行时，规划可加 `--group` 或 `--group-prefix`。授权恢复后用原 `job_id` 继续未完成记录。只有核验日本配送的 Amazon 报价才能写入飞书的当前售价和价格波动。
 
 此技能的 Python 分为 `competitor_core.py`（输入／HTTP）、`competitor_changes.py`（图库修改标记）、`competitor_report.py`（输出）和 `competitor_client.py`（编排／CLI）；Node 分为命令编排、诊断、依赖环境、专用会话和扫码桥接。`competitor_coordination.py` 负责同机共享队列与锁，`feishu_sync.py` 负责逐条编排，`feishu_cli.py` 封装官方飞书 CLI。Python 仅用标准库，浏览器运行依赖按需准备。修改后运行竞对相关 Python／Node 测试，并检查分发包隔离测试，避免重新依赖本机配置。
 

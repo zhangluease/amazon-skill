@@ -2,7 +2,7 @@
 
 ## 会话和浏览器
 
-商品快照、销量和修改记录由 `competitor_client.py` 使用 Python 标准库 HTTP 直连 `https://e.sellersprite.com`；当前报价由 `amazon_product.py` 在独立匿名 HTTP 会话中读取。先核对配送国家，已确认日本则直接复用；只有国家非日本或无法确认时才调用地址切换接口并刷新核验。不注册 MCP，不需要 Keepa API key。本地采集无需飞书权限；飞书读写另按 [飞书 CLI 工作流](feishu.md) 授权。修改记录来源是卖家精灵自己的 Keepa 替代功能，不宣称直连 Keepa 官方 API。
+商品快照、销量和修改记录由 `competitor_client.py` 使用 Python 标准库 HTTP 直连 `https://e.sellersprite.com`；Amazon 当前报价优先使用独立 HTTP 会话，失败或无价格时由普通无头 Chromium 自动补采。HTTP Cookie 保存在专用目录的 `amazon-http-cookies.txt`，浏览器状态保存在 `amazon-profile`；两者均不读取日常浏览器登录库。先核对配送国家，已确认日本则直接复用；只有国家非日本或无法确认时才调用地址切换接口并刷新核验。不注册 MCP，不需要 Keepa API key。本地采集无需飞书权限；飞书读写另按 [飞书 CLI 工作流](feishu.md) 授权。修改记录来源是卖家精灵自己的 Keepa 替代功能，不宣称直连 Keepa 官方 API。
 
 入口复用已授权的专用 HTTP 会话；本技能首次运行时可读取 POD 选图已知管理目录中的 `http-session.json`，白名单复制到自己的私有目录。只读取这个明确缓存，不读取日常浏览器的 Cookie、密码库或账号存储。浏览器扩展发现只读取已安装扩展的程序文件；授权使用独立持久化 profile，通过原扩展消息同步官网扫码登录，生成 `auth-token`、`auth-fp`、`random-token`。会话不进入仓库或报告。
 
@@ -14,7 +14,7 @@
 
 可用 `--state-dir` 或 `AMAZON_COMPETITOR_STATE_DIR` 指定另一个专用目录，不得放在项目仓库、输出目录或日常浏览器 profile 内。目录有互斥锁，避免两个任务同时操作登录态。会话文件权限为 0600，目录为 0700（支持这些权限的平台）。
 
-浏览器下载目录沿用公共 `~/.amazon-skill/config.json` 的 `browser.cache_dir`。卖家精灵授权用的 Playwright 版本固定在本技能 `package.json`，缺失时安装到用户缓存。Amazon 报价补采用 Codex 的浏览器连接和现有的日本配送会话。
+浏览器下载目录沿用公共 `~/.amazon-skill/config.json` 的 `browser.cache_dir`。Playwright 版本固定在本技能 `package.json`，缺失时安装到用户缓存。Amazon 使用 `channel: chromium` 的原生新无头模式，保留浏览器默认自动化标识，没有 stealth、代理轮换或验证码处理组件。其独立持久 profile 与卖家精灵授权 profile 隔离。[Playwright 官方说明](https://playwright.dev/docs/browsers)介绍了该无头模式；持久 profile 及互斥约束见 [launchPersistentContext](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context)。
 
 没有公共配置文件时直接使用操作系统默认浏览器缓存，不需要创建配置、填写后端 token 或安装其他 Amazon 技能。对方须自行安装 Node.js 18+、Python 3.9+ 和本机卖家精灵原扩展，使用自己的账号扫码。扫码不保证账号具备所有数据权限；403 和业务权限错误按当轮真实结果处理。Windows、Linux 有路径分支，当前实机验收平台是 macOS；Linux 的 Chromium 系统依赖需在目标机另行核验。
 
@@ -35,16 +35,16 @@ node "SKILL/scripts/competitor.cjs" validate-input --input "/absolute/asins.csv"
 # 准备授权依赖，启动并关闭本地检查浏览器，不登录网站
 node "SKILL/scripts/competitor.cjs" prepare --out "RUN"
 
-# 单独扫码授权并核验 API；成功不代表全部数据接口都有覆盖
+# 从日本站商品页进入原插件登录并核验 API
 node "SKILL/scripts/competitor.cjs" login --out "RUN"
 
 # 验证拒绝处理后，以同一专用会话进行 API 核验，成功才解除共享暂停
 node "SKILL/scripts/competitor.cjs" verify-session --out "NEW_RUN"
 
-# 正式批量采集；会话有效时无浏览器
+# 正式批量采集；Amazon HTTP 无价格时自动无头补采
 node "SKILL/scripts/competitor.cjs" collect --out "RUN" B008H0V15I
 
-# 仅查询近七天“修改图片/视频”合并图标，不访问 Amazon
+# 仅查询近七天“修改图片/视频”合并图标，必要时在日本站完成插件授权
 node "SKILL/scripts/competitor.cjs" changes --out "RUN" B0CDCD694T
 
 # 回看截至某日的七个自然日期；商品字段仍是本次取得的快照
@@ -70,7 +70,8 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 - `PROFILE_BUSY`：同一专用目录正被其他进程使用，等待该任务结束。
 - `AUTHORIZATION_TIMEOUT`／`AUTHORIZATION_CANCELLED`：保留状态和部分采集结果。再次运行时选新报告目录。
 - `OUTPUT_ALREADY_HAS_RESULTS_USE_NEW_DIRECTORY`：已有报告目录不能直接复用，改用新的 `RUN`。
-- `AMAZON_HUMAN_VERIFICATION_REQUIRED`：Amazon 返回验证页，停止该轮 HTTP 请求。走下述浏览器商品页补采。
+- `AMAZON_CONTINUE_SHOPPING_REQUIRED`：返回“继续购物”确认页，区别于验证码输入页，不自动点击确认按钮。
+- `AMAZON_HUMAN_VERIFICATION_REQUIRED`：返回验证码输入页或未识别的验证表单。无头仍受阻时，按下述可见浏览器流程由用户处理；共享暂停期间不再为其他 ASIN 连续发请求。
 - `AMAZON_DESTINATION_NOT_CONFIRMED`／`AMAZON_DESTINATION_REJECTED`：地址切换或刷新核验未通过；不能只凭日本站域名标记配送为日本。具体公开状态保存在 `ASIN-amazon.json`。
 
 任一来源的 HTTP 200 并不表示数据成功，仍检查业务 `code=OK`、返回 ASIN 与字段类型。单个来源网络错误保留其余来源；限流及鉴权错误停止后续接口。报告内不包含请求认证头、账号信息、完整原始响应或浏览器 profile。
@@ -85,7 +86,11 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 
 页面显示“插件需要登录才能使用／立即登录”反映该浏览器扩展的状态。采集器使用独立 API 会话，以 API 响应判断登录是否有效，不需要等 Keepa 面板加载或点击页面按钮。API 会话失效时执行同一账号令牌登录流程，必要时才扫码。页面空白和登录遮罩均不能作为近七天没有图库变化的证据。
 
-续登成功并不保证数据覆盖。重试仍为空就保留未知；失败不能填 0 或“否”。登录接口明确要求重新授权时才进入原有浏览器流程，先自动同步专用 profile 内的官网账号，必要时扫码。`status.json.api_authorization.events` 只记录触发原因和成功／失败状态，供排查是否执行过 API 续登。
+续登成功后若重试仍为空，保留未知。`status.json.api_authorization.events` 记录续登触发原因和结果。令牌续登返回 `ERR_ACCOUNT_NOT_EXIST` 时，任务进入插件交互登录，原始拒绝码仍保存在续登事件中。可见窗口由原扩展处理登录，脚本只等待并验证插件登录结果。
+
+显式运行 `login --out RUN --login-asin B09BQ4KNTG` 可选择要打开的日本站商品。`collect` 和 `changes` 默认使用本轮第一个 ASIN，单独运行 `login` 时默认打开日本站首页。在窗口工具栏的扩展程序菜单里打开卖家精灵，点击「立即登录」，再在 Amazon 页面内的原插件面板完成登录。
+
+2026-11-24 日本站实测中，官网已有会话，但插件的 `tk/signin` 返回 `ERR_ACCOUNT_NOT_EXIST`。用户在商品页内直接登录后，原插件的 `/v2/extension/signin` 返回 `OK`，随后浏览器和独立脚本调用 `/v2/extension/client/latest` 均返回 `OK`。
 
 2026-11-24 复查扩展 5.0.7：公共请求中间件为商品、修改历史、会话检查及续登等请求统一补 `tk`，原脚本只在销量请求显式携带。这一差异现已修复，签名输入优先 `asins/asin/q`，否则使用路径；六组输入与原扩展校验函数一致。补齐后的一次串行、只读 `client/latest` 实测仍返回 `ERR_ROBOT_CHECK`，因此不能声称签名修复已恢复服务，也不能认定并发是唯一原因。未继续高频探测。
 
@@ -99,11 +104,28 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 
 日本配送切换、刷新核验和当前报价解析已有离线流程测试。B008H0V15I 的匿名请求返回验证页。随后从已配送至东京的 Chrome 商品页取得售价、市场价、折扣、购物车与库存状态。图库变化采用插件“修改图片/视频”的合并图标口径。
 
-可复制完整技能目录使用，也可安装仓库构建的 ZIP。发布包只包含白名单中的代码和说明，排除登录会话、profile、扩展副本、报告及 node_modules。接收者在自己的环境运行 `check`，按需准备和扫码。完整采集的 `browser_fallback_asins` 明确列出需要 Codex 浏览器工具补采的 ASIN，独立 CLI 不保证在 Amazon 验证页下自动补齐报价。
+可复制完整技能目录使用，也可安装仓库构建的 ZIP。发布包只包含白名单中的代码和说明，排除登录会话、profile、扩展副本、报告及 node_modules。接收者在自己的环境运行 `check`，按需准备和扫码。`browser_fallback_asins` 列出自动补采后仍有报价缺项的商品；折扣或参考价可能本就不展示，不能据此反复请求。`amazon_browser_verification_asins` 列出需要可见浏览器恢复的商品。
+
+2026-11-24 使用 B0D9W5646D 实测：匿名 HTTP 返回继续购物确认页，随后原生无头浏览器成功取得售价 5,387 日元、购物车可用与在库；通过地址接口将配送设置为日本并刷新核验。没有隐藏无头标识、处理验证码或借用日常 Chrome Cookie。单个样本成功不保证所有商品和网络环境均可访问。
+
+## CLI 浏览器恢复
+
+```sh
+# 只测 Amazon，不依赖卖家精灵登录；默认无头，输出公开报价快照
+node "SKILL/scripts/competitor.cjs" amazon-offer B0D9W5646D --out "NEW_RUN"
+
+# 确认或验证页：用同一个 --state-dir，在可见窗口等待用户操作
+node "SKILL/scripts/competitor.cjs" amazon-offer B0D9W5646D \
+  --amazon-browser headed --authorization-timeout 300 --out "RECOVERY_RUN"
+```
+
+`amazon-offer.json` 保存同一 ASIN、日本配送和当前报价。只有成功采集才将 `amazon-browser-status.json` 改为 ready；验证超时、错误商品或配送不明不会解除暂停。恢复后用新目录运行 `collect`；飞书继续尚未完成的行，已经以缺项交付的行需要安排更新采集，不把旧快照当成新报价。不能把可见窗口“看起来通过”当成采集成功。独立 HTTP 会话与浏览器会话并不自动互相继承 Cookie，后续仍按 HTTP 优先、必要时浏览器补采执行。
 
 ## 浏览器商品页补采
 
-1. 在 `products.json` 中筛出价格、参考价、折扣、购物车或库存仍缺失的 ASIN。用 Codex 浏览器工具查找同 ASIN 的现有标签页。需要打开时，使用 `https://www.amazon.co.jp/dp/{ASIN}`。
+以下是 CLI 自动后备之外的可选人工补采路径，不用于飞书读写。
+
+1. 在 `products.json` 中筛出需要补采的 ASIN，排除页面本就没有的折扣和参考价。用 Codex 浏览器工具查找同 ASIN 的现有标签页。需要打开时，使用 `https://www.amazon.co.jp/dp/{ASIN}`。
 2. 核对商品和日本配送。不确定时查看页面现有配送标签。浏览器商品页遇到验证时由用户完成验证。通过只读页面求值执行 [`amazon_offer_page.js`](../scripts/amazon_offer_page.js) 中的函数。返回对象仅含 URL、商品标题、国家及邮编、报价原文、购物车可用状态和库存文本。将有效对象组成 JSON 数组。页面不匹配或没有取得有效对象时保留原报告并说明缺项。
 3. 使用采集脚本合并到新目录。原报告和旧请求证据可以继续查看。`--observations -` 从标准输入读取 JSON。
 

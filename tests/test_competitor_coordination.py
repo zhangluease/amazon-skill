@@ -14,7 +14,9 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/amazon-jp-competitor-tracking/scripts'
 sys.path.insert(0, str(SCRIPTS))
 from competitor_core import ApiError, Client, window, write_json
+from competitor_client import normalize, normalize_changes
 from competitor_coordination import WorkQueue, ProviderGate, FileMutex
+from competitor_report import save_report
 from feishu_plan import create_plan
 from feishu_sync import plan, work
 from feishu_cli import FeishuClient
@@ -248,6 +250,22 @@ class CoordinationTests(Fixture):
         two = plan(remote.client(self.root / 'p2'), self.queue, URL, self.root / 'p2')
         self.assertEqual(one['job_id'], two['job_id'])
 
+    def test_group_prefix_queues_only_matching_records_even_for_a_shared_asin(self):
+        rows = rows_for([A, A, B])
+        for row, name in zip(rows, ('Levoit 300-RF-JP', 'Levoit 200', 'Levoit 300-RF-JP')):
+            row['分组'] = name
+        remote = Remote(rows)
+        with self.assertRaisesRegex(ApiError, 'FEISHU_GROUP_PREFIX_AMBIGUOUS'):
+            plan(remote.client(self.root), self.queue, URL, self.root / 'ambiguous', group_prefix='Levoit')
+        result = plan(remote.client(self.root), self.queue, URL, self.root / 'group',
+                      group_prefix='levoit 300-rf', asins=[A])
+        self.assertEqual((result['group'], result['new_rows']), ('Levoit 300-RF-JP', 1))
+        claim = self.queue.claim(result['job_id'])
+        try:
+            self.assertEqual([row['record_id'] for row in claim.row['records']], ['rec0'])
+        finally:
+            claim.close()
+
     def test_shared_provider_pause_prevents_requests_until_verified_by_api(self):
         gate = ProviderGate(self.queue.root, sleep=lambda _: None)
         opener = Opener([{'code': 'ERR_ROBOT_CHECK'}])
@@ -412,6 +430,37 @@ class SyncTests(Fixture):
         self.assertEqual(len(remote.writes), 1)
         self.assertEqual(remote.rows[1]['品牌'], B)
 
+    def test_pending_image_review_only_waits_for_its_asin_before_cli_write(self):
+        rows = rows_for([A, B])
+        job = make_job(self.queue, self.root / 'out', rows)
+        remote = Remote(rows)
+        image = 'https://m.media-amazon.com/images/I/hero.jpg'
+        events = queue_module.Queue()
+
+        def collect(asin, output, scope, root):
+            if asin != A:
+                return remote.collect(asin, output, scope, root)
+            snapshot = normalize(asin, {'product': {'title': '脱臭フィルター 280 337 0168', 'image': image}},
+                                 normalize_changes([], scope), [], scope['end'])
+            save_report(output, [snapshot], [asin], scope, None)
+            return {'status': 'partial'}
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(work, self.queue, job, client_factory=remote.client, collector=collect,
+                                     concurrency=2, quantity_review_seconds=5, emit=events.put)
+            seen = {}
+            while 'package_quantity_review' not in seen or 'record_verified' not in seen:
+                event = events.get(timeout=4)
+                seen[event['event']] = event
+            request = seen['package_quantity_review']
+            self.assertEqual((request['asin'], request['main_image']), (A, image))
+            self.assertEqual(seen['record_verified']['asin'], B)
+            self.assertIsNone(remote.rows[0]['标题'])
+            write_json(request['reply_file'], {'asin': A, 'main_image': image, 'quantity': 1,
+                                                'evidence': '一块独立外框的滤网'})
+            self.assertEqual(future.result(timeout=5)['processed'], 2)
+        self.assertEqual([row['数量装'] for row in remote.rows], [1, 2])
+
     def test_stale_record_is_rejected_before_collection(self):
         rows = rows_for([A])
         job = make_job(self.queue, self.root / 'out', rows)
@@ -478,6 +527,26 @@ class SyncTests(Fixture):
         # Scheduling order within a parallel batch is unspecified; exactly one item collected before pause.
         self.assertEqual(sum(row['标题'] is not None for row in remote.rows), 1)
         self.assertEqual(sum(event[0] == 'collect' for event in remote.events), 1)
+
+    def test_authorization_timeout_preserves_partial_write_and_resumes_same_job(self):
+        rows = rows_for([A])
+        job = make_job(self.queue, self.root / 'out', rows)
+        remote = Remote(rows)
+
+        def collect(*args):
+            remote.collect(*args)
+            return {'status': 'failed', 'category': 'AUTHORIZATION_TIMEOUT', 'authorization_reason': 'ERR_NEED_RE_AUTHORIZED'}
+
+        first = work(self.queue, job, client_factory=remote.client, collector=collect)
+        self.assertEqual(first['status'], 'authorization_required')
+        self.assertEqual(first['queue']['items'][0]['status'], 'blocked')
+        self.assertEqual(first['queue']['items'][0]['error'], 'AUTHORIZATION_TIMEOUT')
+        self.assertEqual(len(remote.writes), 1)
+        self.assertIsNone(self.queue.snapshot(job, A))
+
+        second = work(self.queue, job, client_factory=remote.client, collector=remote.collect)
+        self.assertEqual(second['status'], 'complete')
+        self.assertEqual(len(remote.writes), 1)
 
     def test_snapshot_tampering_blocks_reuse_on_restart(self):
         rows = rows_for([A])

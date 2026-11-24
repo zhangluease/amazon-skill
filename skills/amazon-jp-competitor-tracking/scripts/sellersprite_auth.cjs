@@ -51,20 +51,24 @@ async function authorize(home, options, publish, dependencies = {}) {
   const env = { ...process.env };
   const desktop = (dependencies.desktop || (() => desktopAvailability({ env })))();
   let context, bridge, captured;
+  const openBridge = async () => {
+    bridge = await context.newPage();
+    await bridge.goto(`chrome-extension://${extension.id}/${extension.manifest.action.default_popup}`, { waitUntil: 'load', timeout: 30000 });
+  };
   const launch = async headed => {
     captured = null;
     context = await (dependencies.launch || ((profile, settings) => environment.playwright.chromium.launchPersistentContext(profile, settings)))(home.profile,
       { channel: 'chromium', headless: !headed, locale: 'zh-CN', viewport: { width: 1200, height: 900 },
         args: [`--disable-extensions-except=${extension.directory}`, `--load-extension=${extension.directory}`] });
-    // Authorization does not need Amazon. Prevent the plugin's default-home links from navigating there.
-    await context.route('**/*', route => isAmazon(route.request().url()) ? route.abort() : route.fallback());
-    bridge = await context.newPage();
-    await bridge.goto(`chrome-extension://${extension.id}/${extension.manifest.action.default_popup}`, { waitUntil: 'load' });
+    // Suppress background Amazon requests during the non-interactive session probe.
+    // The visible flow must allow the extension to follow a user action back to Amazon.
+    if (!headed) await context.route('**/*', route => isAmazon(route.request().url()) ? route.abort() : route.fallback());
+    await openBridge();
   };
-  const probe = async first => {
+  const probe = async allowWebsiteSync => {
     // Use the original extension's messages in its own dedicated profile. Do not read browser databases.
     // Only the dedicated extension's selected device keys and refreshed token form the private cache.
-    const result = await bridge.evaluate(async first => {
+    const result = await bridge.evaluate(async allowWebsiteSync => {
       const send = action => new Promise(resolve => {
         const timer = setTimeout(() => resolve({ code: 'MESSAGE_TIMEOUT' }), 20000);
         chrome.runtime.sendMessage(action, response => {
@@ -87,15 +91,15 @@ async function authorize(home, options, publish, dependencies = {}) {
         }
         return null;
       };
-      if (first) {
-        const current = await send({ action: 'CLIENT_LATEST', args: {} });
-        if (current.code === 'OK' && current.data?.token) return { plugin_ready: true, session: await session(current.data.token) };
-      }
+      const current = await send({ action: 'CLIENT_LATEST', args: {} });
+      if (current.code === 'OK' && current.data?.token) return { plugin_ready: true, session: await session(current.data.token) };
+      if (!allowWebsiteSync) return { plugin_ready: false };
       const web = await send({ action: 'AUTO_SIGN_IN_INFO', args: {} });
       if (!web.data?.token || web.data.token === globalThis.__competitorLastSyncToken) return { plugin_ready: false };
       globalThis.__competitorLastSyncToken = web.data.token;
       const sync = await send({ action: 'SIGN_IN_WITH_TOKEN', args: { token: web.data.token } });
-      if (sync.code !== 'OK') return { plugin_ready: false, rejected: true };
+      if (sync.code !== 'OK') return { plugin_ready: false, rejected: true,
+        reason: /^[A-Z0-9_]{1,80}$/.test(sync.code || '') ? sync.code : 'PLUGIN_SYNC_FAILED' };
       // The vendor acknowledges sign-in before its asynchronous local store is necessarily committed.
       // Recheck a bounded number of times in this same browser instead of closing it immediately.
       for (let i = 0; i < 3; i++) {
@@ -105,42 +109,49 @@ async function authorize(home, options, publish, dependencies = {}) {
         await new Promise(resolve => setTimeout(resolve, 300));
       }
       return { plugin_ready: false, rejected: true };
-    }, first);
+    }, allowWebsiteSync);
     captured = sessionFromBridge(result.session, extension.manifest.version);
     return result;
   };
   try {
-    await launch(false);
-    let state = await probe(true);
-    if (state.plugin_ready && !captured) throw fail('AUTHORIZATION_BRIDGE_UNAVAILABLE');
-    if (state.plugin_ready && captured) {
-      const target = await saveSession(home, captured);
-      await publish('reused', { session_saved: true });
-      return target;
+    let state;
+    if (!options.requireVisibleLogin || options.reuseVisibleSession) {
+      if (options.reuseVisibleSession && !desktop.available) throw fail('INTERACTIVE_BROWSER_REQUIRED');
+      await launch(Boolean(options.reuseVisibleSession));
+      state = await probe(true);
+      if (state.plugin_ready && !captured) throw fail('AUTHORIZATION_BRIDGE_UNAVAILABLE');
+      if (state.plugin_ready && captured) {
+        const target = await saveSession(home, captured);
+        await publish('reused', { session_saved: true });
+        return target;
+      }
+      if (options.reuseVisibleSession) {
+        const reason = state.reason || (state.rejected ? 'AUTHORIZATION_REJECTED' : 'PLUGIN_LOGIN_REQUIRED');
+        await publish('session_not_reusable', { reason });
+        throw fail(reason);
+      }
     }
     if (!desktop.available) {
       await publish('requires_interactive_browser', { reason: desktop.reason });
       throw fail('INTERACTIVE_BROWSER_REQUIRED');
     }
-    await context.close();
+    await context?.close();
     await launch(true);
+    const product = /^[A-Z0-9]{10}$/.test(options.authorizationAsin || '') ? '/dp/' + options.authorizationAsin : '/';
+    const loginUrl = 'https://www.amazon.co.jp' + product;
     const login = await context.newPage();
-    await login.goto('https://www.sellersprite.com/cn/w/user/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await login.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await login.bringToFront();
-    // Prefer the vendor's visible QR login tab; the user completes any challenge.
-    for (const label of ['微信登录', '扫码登录', '微信扫码登录']) {
-      const tab = login.getByText(label, { exact: true }).first();
-      if (await tab.isVisible().catch(() => false)) { await tab.click(); break; }
-    }
-    await publish('awaiting_login', { timeout_seconds: options.timeout,
-      message: '请在弹出的卖家精灵窗口扫码登录并保持窗口打开；授权完成后会自动关闭窗口，继续通过 API 抓取竞对信息。' });
+    await publish('awaiting_login', { timeout_seconds: options.timeout, login_url: loginUrl,
+      message: '请在专用日本站窗口点击卖家精灵扩展，在商品页插件面板完成登录。插件登录成功后将自动核验 API。' });
     const deadline = Date.now() + options.timeout * 1000;
-    let first = true;
     while (Date.now() < deadline) {
-      if (login.isClosed() || bridge.isClosed()) throw fail('AUTHORIZATION_CANCELLED');
-      state = await probe(first); first = false;
+      if (bridge.isClosed() && context.pages().some(page => !page.isClosed()))
+        await openBridge();
+      if (bridge.isClosed() || login.isClosed() && !options.requireVisibleLogin) throw fail('AUTHORIZATION_CANCELLED');
+      // The original plugin handles direct sign-in. Polling must not sign in again with the website token.
+      state = await probe(false);
       if (state.plugin_ready && !captured) throw fail('AUTHORIZATION_BRIDGE_UNAVAILABLE');
-      if (state.rejected) throw fail('AUTHORIZATION_REJECTED');
       if (state.plugin_ready && captured) {
         const target = await saveSession(home, captured);
         await publish('completed', { session_saved: true });
