@@ -10,11 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     'SKILL.md', 'package.json', 'agents/openai.yaml',
     'references/access.md', 'references/data-contract.md', 'references/keepa-trend.md',
+    'references/feishu.md',
     'scripts/competitor.cjs', 'scripts/diagnostics.cjs', 'scripts/environment.cjs',
     'scripts/sellersprite_auth.cjs', 'scripts/sellersprite_session.cjs',
     'scripts/competitor_client.py', 'scripts/competitor_core.py', 'scripts/competitor_changes.py',
     'scripts/competitor_report.py', 'scripts/amazon_product.py', 'scripts/amazon_offer_page.js',
     'scripts/amazon_config.py', 'scripts/keepa_probe.py',
+    'scripts/feishu_plan.py', 'scripts/feishu_cli.py',
 )
 
 

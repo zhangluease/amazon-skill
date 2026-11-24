@@ -13,8 +13,8 @@ from competitor_core import (AUTH_ERRORS, STOP_ERRORS, ORIGIN, JST, ASIN_RE, OFF
                              BROWSER_OFFER_SOURCE, CHANGE_SCHEMA, ApiError, Client, load_session,
                              read_inputs, parse_asin, window, history_window, checksum, scalar,
                              number, purchase_threshold, product_row, safe_image, write_json,
-                             validate_output_directory)
-from competitor_changes import (normalize_changes, change_times, unavailable_changes,
+                             validate_output_directory, declared_package_quantity, title_original_claim)
+from competitor_changes import (normalize_changes, unavailable_changes,
                                 collect_listing_changes)
 from competitor_report import COLUMNS, save_report
 
@@ -24,8 +24,7 @@ def normalize(asin, sources, changes, errors, collected_at):
     amazon_confirmed = (amazon.get('status') == 'ok' and amazon.get('delivery_destination', {}).get('verified') is True
                         and amazon.get('data', {}).get('asin') == asin)
     if not info and not sales and not amazon_confirmed and changes['status'] == 'ok' and not changes['events']:
-        changes = dict(changes, status='unconfirmed_product', image_change_observed=None,
-                       title_change_observed=None, highlight_change_observed=None,
+        changes = dict(changes, status='unconfirmed_product', media_change_observed=None,
                        reason='PRODUCT_IDENTITY_UNCONFIRMED')
     result = {'asin': asin, 'url': 'https://www.amazon.co.jp/dp/' + asin, 'collected_at': collected_at,
               'field_sources': {}, 'errors': errors, 'data_freshness': 'provider_snapshot; not_live_amazon_page'}
@@ -41,6 +40,18 @@ def normalize(asin, sources, changes, errors, collected_at):
         result[name] = get(name, key)
     for name, key in [('price', 'price'), ('rating', 'rating'), ('review_count', 'reviews'), ('root_rank', 'bsr')]:
         result[name] = get(name, key, number)
+    result['variation_count'] = get('variation_count', 'variations', number)
+    result['package_quantity'] = declared_package_quantity(result['title'])
+    result['title_original_claim'] = title_original_claim(result['title'])
+    for name in ('package_quantity', 'title_original_claim'):
+        if result[name] is not None:
+            result['field_sources'][name] = 'explicit_listing_title'
+    if result['package_quantity'] is None:
+        labels = [row.get('attr') for row in info.get('variation_list') or [] if row.get('asin') == asin]
+        if len(labels) == 1:
+            result['package_quantity'] = declared_package_quantity(labels[0])
+            if result['package_quantity'] is not None:
+                result['field_sources']['package_quantity'] = 'product.variation_list[requested_asin].attr'
     result['currency'] = result['currency'] or ('JPY' if get('symbol', 'symbol') in ('¥', '￥') else None)
     if result['currency'] in ('円', '¥', '￥'):
         result['currency'] = 'JPY'
@@ -67,13 +78,8 @@ def normalize(asin, sources, changes, errors, collected_at):
         apply_offer(result, amazon, 'amazon_jp_verified_delivery')
     result['availability_note'] = 'Current offer fields require verified Japan delivery and explicit offer evidence; cached unavailable is not current inventory'
     result['history'] = changes
-    result['image_change_observed'] = changes['image_change_observed']
-    result['video_change_observed'] = changes['video_change_observed']
-    result['change_dates'] = sorted({e['date'] for e in changes['events'] if e['image_changed']})
-    for name in ('title', 'highlight'):
-        result[name + '_change_observed'] = changes.get(name + '_change_observed')
-        result[name + '_change_times'] = change_times(changes, name)
-        result['field_sources'][name + '_change_times'] = 'listing.asin-change.' + name + '_changed'
+    result['media_change_observed'] = changes['media_change_observed']
+    result['field_sources']['media_change_observed'] = 'listing.asin-change.gallery_marker'
     result['missing_fields'] = [key for key, _ in COLUMNS if key in result and result[key] is None]
     usable = bool(info or sales or amazon_confirmed or changes['events'] or changes['status'] == 'ok')
     result['status'] = ('ok' if usable and not result['missing_fields'] and not errors and changes['status'] == 'ok'
@@ -278,7 +284,7 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
                         changes = saved['data']
                         if changes.get('status') == 'ok' and changes.get('schema') == CHANGE_SCHEMA:
                             continue
-                    if source != 'changes':
+                    if source != 'changes' and not saved.get('recovery_pending'):
                         sources[source] = product_row([saved['data']], asin)
                         continue
                 data = client.get(route, params)
@@ -292,6 +298,15 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
                            {'endpoint': ORIGIN + route, 'collected_at': dt.datetime.now(JST).isoformat(),
                             'window': scope if source == 'changes' else None, 'data': evidence})
             except ApiError as error:
+                if source != 'changes' and hasattr(error, 'snapshot_data'):
+                    try:
+                        partial = product_row(error.snapshot_data, asin, sales=source == 'sales')
+                        sources[source] = partial
+                        write_json(cached, {'endpoint': ORIGIN + route,
+                            'collected_at': dt.datetime.now(JST).isoformat(), 'window': None,
+                            'recovery_pending': True, 'data': partial})
+                    except ApiError:
+                        pass
                 errors.append({'source': source, 'code': error.code})
                 if error.code in AUTH_ERRORS or error.code in STOP_ERRORS:
                     stopped = error.code
@@ -299,7 +314,8 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
         results.append(result)
         save_report(output, results, asins, scope, stopped)
     usable = sum(r['status'] != 'failed' for r in results)
-    return {'status': 'authorization_required' if stopped in AUTH_ERRORS else
+    return {'status': 'verification_required' if stopped == 'ERR_ROBOT_CHECK' else
+            'authorization_required' if stopped in AUTH_ERRORS else
             'ok' if all(row['status'] == 'ok' for row in results) else 'partial' if usable else 'failed',
             'requested': len(asins), 'products': len(results), 'category': stopped or ('NO_PRODUCT_DATA' if not usable else None),
             'usable_products': usable,
@@ -313,7 +329,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     check = commands.add_parser('validate-input')
     run = commands.add_parser('collect')
-    changes = commands.add_parser('changes', help='Only title/highlight timestamps; direct HTTP')
+    changes = commands.add_parser('changes', help='Recent image/video gallery marker; direct HTTP')
     merge = commands.add_parser('merge-browser-offers')
     merge.add_argument('--from', dest='source', required=True)
     merge.add_argument('--out', required=True)
@@ -347,15 +363,18 @@ def main(argv=None):
             if not math.isfinite(args.interval) or not 1 <= args.interval <= 60:
                 raise ApiError('INTERVAL_MUST_BE_1_TO_60')
             session = load_session(args.session_file)
+            api = Client(session, args.interval, session_file=args.session_file)
             if args.command == 'changes':
-                result = collect_listing_changes(asins, Client(session, args.interval), scope, Path(args.out),
+                result = collect_listing_changes(asins, api, scope, Path(args.out),
                                                  resume=args.resume)
             else:
                 from amazon_product import AmazonProductClient
-                result = collect(asins, Client(session, args.interval), scope, Path(args.out), resume=args.resume,
+                result = collect(asins, api, scope, Path(args.out), resume=args.resume,
                                  amazon=AmazonProductClient(interval=args.interval))
+            result['api_authorization'] = {'events': api.auth_events,
+                'renewal_attempted': api.renewal_attempted, 'credentials_included': False}
         print(json.dumps(result, ensure_ascii=False))
-        return 3 if result['status'] == 'authorization_required' else 0
+        return 3 if result['status'] == 'authorization_required' else 2 if result['status'] == 'verification_required' else 0
     except ApiError as error:
         print(json.dumps({'status': 'authorization_required' if error.code in AUTH_ERRORS else 'failed',
                           'category': error.code}), file=sys.stderr)

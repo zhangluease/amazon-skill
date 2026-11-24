@@ -115,8 +115,7 @@ class CompetitorTests(unittest.TestCase):
                 client.collect_listing_changes([ASIN], untouched, SCOPE, product_dir)
             self.assertEqual(untouched.calls, [])
             self.assertEqual((product_dir / 'report.html').read_bytes(), before)
-            api = FakeClient([[{'timePoint': '2026-11-20', 'changeType': 1,
-                                'previousHighlight': None, 'currentHighlight': None}]])
+            api = FakeClient([[{'timePoint': '2026-11-20', 'changeType': 2}]])
             client.collect_listing_changes([ASIN], api, SCOPE, history_dir)
             with self.assertRaisesRegex(client.ApiError, 'OUTPUT_ALREADY_HAS_RESULTS'):
                 client.collect([ASIN], untouched, SCOPE, history_dir)
@@ -154,7 +153,7 @@ class CompetitorTests(unittest.TestCase):
         row = client.normalize(ASIN, {'amazon': amazon}, client.normalize_changes([], SCOPE), [], SCOPE['end'])
         self.assertEqual(row['title'], 'Confirmed offer')
         self.assertEqual(row['status'], 'partial')
-        self.assertFalse(row['image_change_observed'])
+        self.assertFalse(row['media_change_observed'])
 
     def test_browser_offer_supplements_failed_http_quote_in_new_report(self):
         observation = {'url': 'https://www.amazon.co.jp/dp/' + ASIN, 'title': 'テスト用 商品',
@@ -204,7 +203,9 @@ class CompetitorTests(unittest.TestCase):
             client.window('2026-11-23T12:00:00')
 
     def test_http_checks_business_code_and_uses_only_fixed_jp_endpoints(self):
-        opener = Opener([{'code': 'OK', 'data': [product()]}, {'code': 'ERR_NEED_RENEWAL_AUTHORIZED', 'data': {}}])
+        opener = Opener([{'code': 'OK', 'data': [product()]},
+                         {'code': 'ERR_NEED_RENEWAL_AUTHORIZED', 'data': {}},
+                         {'code': 'ERR_NEED_RENEWAL_AUTHORIZED', 'data': {}}])
         api = client.Client(SESSION, opener=opener, sleep=lambda _: None)
         row = api.get('/v2/extension/asin/JP', {'asins': ASIN})
         self.assertEqual(row[0]['asin'], ASIN)
@@ -217,70 +218,41 @@ class CompetitorTests(unittest.TestCase):
         with self.assertRaisesRegex(client.ApiError, 'ENDPOINT_NOT_ALLOWED'):
             api.get('/v2/extension/asin/US', {'asins': ASIN})
 
+    def test_robot_verification_stops_remaining_sources_and_preserves_known_product(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vendor = FakeClient([[product()], client.ApiError('ERR_ROBOT_CHECK')])
+            result = client.collect([ASIN, OTHER], vendor, SCOPE, tmp)
+            self.assertEqual(result['status'], 'verification_required')
+            self.assertEqual(result['category'], 'ERR_ROBOT_CHECK')
+            self.assertEqual(len(vendor.calls), 2)
+            rows = json.loads((Path(tmp) / 'products.json').read_text())['products']
+            self.assertEqual(rows[0]['title'], product()['title'])
+            self.assertIsNone(rows[0]['media_change_observed'])
+
     def test_histories_are_enum_not_bitmask_and_filter_dates(self):
         events = [{'timePoint': '2026-11-20 10:00:00', 'changeType': k} for k in range(8)]
         events += [{'timePoint': '2026-11-16 10:00:00', 'changeType': 2}]
         result = client.normalize_changes(events, SCOPE)
-        self.assertEqual([e['changeType'] for e in result['events'] if e['image_changed']], [2, 4, 6, 7])
-        self.assertFalse(result['events'][3]['image_changed'])
-        self.assertIsNone(result['video_change_observed'])
+        self.assertEqual([e['changeType'] for e in result['events']], [2, 4, 6, 7])
+        self.assertEqual(len(result['events']), 4)
 
-    def test_highlight_comparison_is_independent_of_title_image_and_feature_enum(self):
-        events = [
-            {'timePoint': '2026-11-20 00:00:00', 'changeType': 3,
-             'previousFeatures': ['旧五点'], 'currentFeatures': ['新五点'],
-             'previousHighlight': ['同じ亮点', None], 'currentHighlight': '同じ亮点\n'},
-            {'timePoint': '2026-11-21 00:00:00', 'changeType': 2,
-             'previousHighlight': '旧亮点', 'currentHighlight': ['新亮点', '次の行']},
-            {'timePoint': '2026-11-22 00:00:00', 'changeType': 0,
-             'previousHighlight': '削除する亮点', 'currentHighlight': None},
-            {'timePoint': '2026-11-23 00:00:00', 'changeType': 0,
-             'previousHighlight': None, 'currentHighlight': '追加された亮点'}]
-        history = client.normalize_changes(events, SCOPE)
-        self.assertEqual(history['status'], 'ok')
-        self.assertEqual([e['highlight_changed'] for e in history['events']], [False, True, True, True])
-        self.assertEqual(history['events'][1]['currentHighlight'], '新亮点\n次の行')
-        self.assertFalse(history['title_change_observed'])
-        self.assertEqual(len(client.change_times(history, 'highlight')), 3)
 
-    def test_change_times_keep_all_distinct_raw_timestamps_and_filter_seven_dates(self):
-        events = [{'timePoint': point, 'changeType': 1,
-                   'previousHighlight': None, 'currentHighlight': None} for point in
-                  ['2026-11-16 23:59:59', '2026-11-17 00:00:00', '2026-11-20 12:34:56',
-                   '2026-11-20 18:20:00', '2026-11-20 12:34:56', '2026-11-24 00:00:00']]
-        history = client.normalize_changes(events, SCOPE)
-        self.assertEqual(client.change_times(history, 'title'),
-                         ['2026-11-17 00:00:00', '2026-11-20 12:34:56', '2026-11-20 18:20:00'])
-        self.assertEqual(client.change_times(history, 'highlight'), [])
-        self.assertEqual(client.history_window('2026-11-23', True)['start_ms'], 0)
 
-    def test_missing_highlights_are_unknown_and_unknown_enum_keeps_valid_highlight(self):
-        history = client.normalize_changes([{'timePoint': '2026-11-20', 'changeType': 3}], SCOPE)
-        self.assertIsNone(history['highlight_change_observed'])
-        self.assertIsNone(client.change_times(history, 'highlight'))
-        self.assertFalse(history['title_change_observed'])
-        history = client.normalize_changes([{'timePoint': '2026-11-20', 'changeType': 9,
-                                             'previousHighlight': '旧', 'currentHighlight': '新'}], SCOPE)
-        self.assertIsNone(history['title_change_observed'])
-        self.assertTrue(history['highlight_change_observed'])
-        self.assertEqual(history['status'], 'partial')
 
-    def test_changes_only_all_period_exports_requested_times_without_chart_or_amazon(self):
+    def test_changes_only_all_period_exports_media_marker_without_chart_or_amazon(self):
         scope = client.history_window('2026-11-23', True)
         event = {'timePoint': '2025-08-31 00:00:00', 'changeType': 4,
-                 'previousHighlight': None, 'currentHighlight': None, 'auth-token': 'must-not-save'}
+                 'private_notes': 'must-not-save', 'auth-token': 'must-not-save'}
         api = FakeClient([[event]])
         with tempfile.TemporaryDirectory() as tmp:
             result = client.collect_listing_changes([ASIN], api, scope, tmp)
             self.assertEqual(result['status'], 'ok')
-            self.assertEqual(result['title_changes'], 1)
-            self.assertEqual(result['highlight_changes'], 0)
+            self.assertEqual(result['media_changed_products'], 1)
             self.assertEqual(api.calls, [('/v2/extension/listing/JP/asin-change/' + ASIN,
                                          {'startTime': 0, 'endTime': scope['end_ms']})])
             payload = json.loads((Path(tmp) / 'changes.json').read_text())
-            self.assertEqual(payload['products'][0]['title_change_times'], ['2025-08-31 00:00:00'])
-            self.assertEqual(payload['products'][0]['highlight_change_times'], [])
-            self.assertIn('全部周期修改标题时间', (Path(tmp) / 'changes.csv').read_text(encoding='utf-8-sig'))
+            self.assertEqual(payload['products'][0]['media_change_observed'], True)
+            self.assertIn('全部周期图片/视频变化', (Path(tmp) / 'changes.csv').read_text(encoding='utf-8-sig'))
             for path in Path(tmp).rglob('*'):
                 if path.is_file():
                     self.assertNotIn('must-not-save', path.read_text(encoding='utf-8-sig'))
@@ -291,13 +263,12 @@ class CompetitorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = client.collect_listing_changes([ASIN], first, SCOPE, tmp)
             self.assertEqual(result['status'], 'authorization_required')
-            self.assertIsNone(json.loads((Path(tmp) / 'changes.json').read_text())['products'][0]['title_change_times'])
+            self.assertIsNone(json.loads((Path(tmp) / 'changes.json').read_text())['products'][0]['media_change_observed'])
             result = client.collect_listing_changes([ASIN], second, SCOPE, tmp, resume=True)
             self.assertEqual(result['status'], 'ok')
             self.assertEqual([route for route, params in second.calls], ['/v2/extension/asin/JP'])
             row = json.loads((Path(tmp) / 'changes.json').read_text())['products'][0]
-            self.assertEqual(row['title_change_times'], [])
-            self.assertEqual(row['highlight_change_times'], [])
+            self.assertFalse(row['media_change_observed'])
 
     def test_changes_only_empty_list_does_not_confirm_an_unknown_asin(self):
         api = FakeClient([[], []])
@@ -305,10 +276,9 @@ class CompetitorTests(unittest.TestCase):
             result = client.collect_listing_changes([ASIN], api, SCOPE, tmp)
             self.assertEqual(result['status'], 'failed')
             row = json.loads((Path(tmp) / 'changes.json').read_text())['products'][0]
-            self.assertIsNone(row['title_change_times'])
-            self.assertIsNone(row['highlight_change_times'])
+            self.assertIsNone(row['media_change_observed'])
 
-    def test_normal_collection_exports_title_highlight_times_and_refreshes_legacy_evidence(self):
+    def test_normal_collection_exports_media_marker_and_refreshes_legacy_evidence(self):
         api = FakeClient([[product()], {'items': [{'asin': ASIN, 'units': 175}]}, []])
         with tempfile.TemporaryDirectory() as tmp:
             client.collect([ASIN], api, SCOPE, tmp)
@@ -316,27 +286,25 @@ class CompetitorTests(unittest.TestCase):
             saved = json.loads(evidence_path.read_text())
             saved['data'].pop('schema')
             evidence_path.write_text(json.dumps(saved))
-            event = {'timePoint': '2026-11-20 12:34:56', 'changeType': 1,
-                     'previousHighlight': ['旧亮点'], 'currentHighlight': ['新亮点']}
+            event = {'timePoint': '2026-11-20 12:34:56', 'changeType': 2,
+                     'previousImages': ['old'], 'currentImages': ['new']}
             fresh = FakeClient([[event]])
             client.collect([ASIN], fresh, SCOPE, tmp, resume=True)
             self.assertEqual(len(fresh.calls), 1)
             row = json.loads((Path(tmp) / 'products.json').read_text())['products'][0]
-            self.assertEqual(row['title_change_times'], ['2026-11-20 12:34:56'])
-            self.assertEqual(row['highlight_change_times'], ['2026-11-20 12:34:56'])
+            self.assertTrue(row['media_change_observed'])
             with (Path(tmp) / 'products.csv').open(encoding='utf-8-sig') as stream:
                 exported = list(csv.DictReader(stream))[0]
-            self.assertEqual(exported['近7天修改亮点时间'], '2026-11-20 12:34:56')
-            self.assertNotIn('近7天视频修改观测', exported)
+            self.assertEqual(exported['近7天图片/视频变化'], '是')
 
     def test_unknown_history_never_becomes_no_changes(self):
         with self.assertRaises(client.ApiError):
             client.normalize_changes(None, SCOPE)
         for events in [[{'timePoint': 'bad', 'changeType': 2}], [{'timePoint': '2026-11-22', 'changeType': 9}]]:
-            self.assertIsNone(client.normalize_changes(events, SCOPE)['image_change_observed'])
-        self.assertFalse(client.normalize_changes([], SCOPE)['image_change_observed'])
+            self.assertIsNone(client.normalize_changes(events, SCOPE)['media_change_observed'])
+        self.assertFalse(client.normalize_changes([], SCOPE)['media_change_observed'])
         events = [{'timePoint': 'bad', 'changeType': 2}, {'timePoint': '2026-11-22', 'changeType': 2}]
-        self.assertTrue(client.normalize_changes(events, SCOPE)['image_change_observed'])
+        self.assertTrue(client.normalize_changes(events, SCOPE)['media_change_observed'])
 
     def test_sales_badge_zero_and_unverified_cart_remain_distinct(self):
         p = client.product_row([product()], ASIN)
@@ -347,7 +315,7 @@ class CompetitorTests(unittest.TestCase):
         self.assertEqual(row['review_count'], 0)
         self.assertEqual(row['currency'], 'JPY')
         self.assertEqual(row['sub_ranks'][0]['rank'], 54)
-        for field in ('buy_box', 'stock', 'reference_price', 'discount_percent', 'video_change_observed'):
+        for field in ('buy_box', 'stock', 'reference_price', 'discount_percent'):
             self.assertIsNone(row[field])
         self.assertNotIn('must-not-save', json.dumps(p))
         with self.assertRaisesRegex(client.ApiError, 'ASIN_NOT_RETURNED'):
@@ -361,7 +329,7 @@ class CompetitorTests(unittest.TestCase):
             self.assertEqual(len(api.calls), 2)
             self.assertEqual(len(report['products']), 2)
             self.assertEqual(report['products'][0]['title'], 'テスト用 商品')
-            self.assertIsNone(report['products'][0]['image_change_observed'])
+            self.assertIsNone(report['products'][0]['media_change_observed'])
             self.assertEqual(report['products'][1]['status'], 'failed')
             self.assertEqual(summary['category'], 'HTTP_429')
 
@@ -377,7 +345,7 @@ class CompetitorTests(unittest.TestCase):
             row = json.loads((Path(tmp) / 'products.json').read_text())['products'][0]
             self.assertEqual(row['parent_sales_30d'], 0)
             self.assertEqual(row['title'], 'テスト用 商品')
-            self.assertFalse(row['image_change_observed'])
+            self.assertFalse(row['media_change_observed'])
             with self.assertRaisesRegex(client.ApiError, 'RESUME_INPUT_OR_WINDOW_MISMATCH'):
                 client.collect([OTHER], second, SCOPE, tmp, resume=True)
 
@@ -427,7 +395,7 @@ class CompetitorTests(unittest.TestCase):
             row = json.loads((Path(tmp) / 'products.json').read_text())['products'][0]
             self.assertEqual(row['errors'][1]['code'], 'PRODUCT_NOT_CACHED')
             self.assertEqual(row['history']['status'], 'unconfirmed_product')
-            self.assertIsNone(row['image_change_observed'])
+            self.assertIsNone(row['media_change_observed'])
 
 
 if __name__ == '__main__':

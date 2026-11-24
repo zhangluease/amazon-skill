@@ -1,4 +1,4 @@
-"""CSV/HTML/JSON presentation for product snapshots and listing change times."""
+"""CSV/HTML/JSON presentation for product snapshots and gallery change markers."""
 import csv
 import datetime as dt
 import html
@@ -14,7 +14,7 @@ COLUMNS = [('asin', 'ASIN'), ('url', '商品链接'), ('title', '标题'), ('bra
            ('price', '售价'), ('currency', '币种'), ('rating', '评分'), ('review_count', '评论数'),
            ('discount_percent', '当前折扣百分比'), ('reference_price', '当前参考价'),
            ('buy_box', '当前购物车状态'), ('stock', '当前库存状态'),
-           ('title_change_times', '近7天修改标题时间'), ('highlight_change_times', '近7天修改亮点时间'),
+           ('media_change_observed', '近7天图片/视频变化'),
            ('status', '采集状态'), ('missing_fields', '未取得字段'),
            ('collected_at', '抓取时间')]
 
@@ -42,10 +42,8 @@ def display_value(key, row):
     if key == 'missing_fields':
         labels = dict(COLUMNS)
         return '、'.join(labels.get(field, field) for field in value) or '无'
-    if key in ('title_change_times', 'highlight_change_times'):
-        return '\n'.join(value) if value else '未观测到（来源覆盖未知）'
-    if key == 'change_dates':
-        return '、'.join(value) if value else '未知' if row.get('image_change_observed') is None else '未观测到'
+    if key == 'media_change_observed':
+        return '是' if value else '否'
     if key == 'status':
         return {'ok': '所需字段已取得', 'partial': '部分字段已取得', 'failed': '全部来源失败'}.get(value, value)
     if key == 'collected_at':
@@ -62,21 +60,18 @@ def save_listing_changes(output, results, requested, scope, stopped):
         'requested_asins': requested, 'window': scope, 'collection_method': 'independent_http',
         'provider_coverage': 'not_reported', 'stop_reason': stopped, 'products': results})
     prefix = '全部周期' if scope['basis'] == 'all_available_history_through_end' else '近7天'
-    labels = ('ASIN', prefix + '修改标题时间', prefix + '修改亮点时间', '接口状态')
+    labels = ('ASIN', prefix + '图片/视频变化', '接口状态')
+    values = [(row['asin'], display_value('media_change_observed', row), row['history_status']) for row in results]
     with (output / 'changes.csv').open('w', encoding='utf-8-sig', newline='') as stream:
         writer = csv.writer(stream)
         writer.writerow(labels)
-        for row in results:
-            writer.writerow([row['asin'], display_value('title_change_times', row),
-                             display_value('highlight_change_times', row), row['history_status']])
+        writer.writerows(values)
     esc = lambda value: html.escape(str(value), quote=True)
-    rows = ['<tr>' + ''.join('<td>' + esc(value) + '</td>' for value in
-            (row['asin'], display_value('title_change_times', row),
-             display_value('highlight_change_times', row), row['history_status'])) + '</tr>' for row in results]
+    rows = ['<tr>' + ''.join('<td>' + esc(value) + '</td>' for value in row) + '</tr>' for row in values]
     page = '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-    page += '<title>标题与亮点修改时间</title><style>body{font:15px system-ui;margin:32px;color:#17324d}table{border-collapse:collapse;width:100%}th,td{border:1px solid #dde5ee;padding:12px;text-align:left;white-space:pre-line;overflow-wrap:anywhere}</style>'
-    page += f'<h1>{prefix}标题与亮点修改时间</h1><p>观察区间：{esc(scope["start"])} 至 {esc(scope["end"])}。</p>'
-    page += '<p>直接读取卖家精灵 Listing 修改记录接口。时间保留接口 timePoint；来源时区未声明，00:00:00 不代表实际修改发生在零点。未观测到表示接口未返回相关记录，来源完整覆盖未声明。</p>'
+    page += '<title>图片/视频变化</title><style>body{font:15px system-ui;margin:32px;color:#17324d}table{border-collapse:collapse;width:100%}th,td{border:1px solid #dde5ee;padding:12px;text-align:left;overflow-wrap:anywhere}</style>'
+    page += f'<h1>{prefix}图片/视频变化</h1><p>观察区间：{esc(scope["start"])} 至 {esc(scope["end"])}。</p>'
+    page += '<p>采用卖家精灵 Keepa 的“修改图片/视频”合并图标口径。有标记为是，接口成功且未观测到标记为否；失败或记录异常为未知。来源完整覆盖未声明。</p>'
     page += '<table><thead><tr>' + ''.join('<th>' + esc(label) + '</th>' for label in labels) + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
     errors = [{'asin': row['asin'], 'errors': row['errors']} for row in results if row['errors']]
     if errors:
@@ -125,10 +120,7 @@ def save_report(output, results, requested, scope, stopped):
             fields.append(f'<tr><th>Amazon 报价观察时间（日本）</th><td>{observed:%Y-%m-%d %H:%M:%S}</td></tr>')
         events = ''
         for event in row['history']['events']:
-            changed = [label for key, label in [('title_changed', '修改标题'),
-                       ('highlight_changed', '修改亮点')] if event.get(key) is True]
-            if changed:
-                events += '<li>' + esc(event['timePoint'] + '：' + '、'.join(changed)) + '</li>'
+            events += '<li>' + esc(event['timePoint'] + '：修改图片/视频') + '</li>'
         errors = esc(json.dumps(row['errors'], ensure_ascii=False))
         cards.append(f'<article><h2><a href="{esc(row["url"])}">{esc(row["asin"])}</a></h2>{picture}<table>{"".join(fields)}</table>'
                      f'<details><summary>修改记录与接口状态</summary><ul>{events}</ul><pre>{errors}</pre></details></article>')
@@ -136,7 +128,7 @@ def save_report(output, results, requested, scope, stopped):
     page += '<title>日本亚马逊竞对页面追踪</title><style>body{font:15px system-ui;margin:32px;color:#17324d;background:#f3f6fa}article{background:white;padding:24px;margin:20px 0;border-radius:12px}img{max-width:240px;max-height:240px;object-fit:contain;float:right}table{border-collapse:collapse;max-width:100%;width:850px}td,th{border-bottom:1px solid #dde5ee;padding:8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{min-width:170px}pre{white-space:pre-wrap}li{overflow-wrap:anywhere}details{clear:both;padding-top:16px}@media(max-width:700px){body{margin:12px}article{padding:12px}img{float:none}table{width:100%}}</style>'
     page += f'<h1>日本亚马逊竞对页面追踪</h1><p>已处理 {len(results)} / {len(requested)} 个 ASIN；观察日期 {esc(scope["start"][:10])} 至 {esc(scope["end"][:10])}（日本时间，含结束日）。</p>'
     verified = sum(bool(row.get('delivery_destination', {}).get('verified')) for row in results)
-    page += f'<p>已确认配送至日本 {verified} / {len(results)} 个商品。参考价、折扣、购物车和库存来自 Amazon 商品页的日本配送报价。卖家精灵接口提供商品快照和销量，包含快照售价。父体销量为估算值，子体购买量按 100+ 等阈值展示。修改记录只展示标题与亮点的时间，空历史表示来源未观测到相关修改。</p>'
+    page += f'<p>已确认配送至日本 {verified} / {len(results)} 个商品。参考价、折扣、购物车和库存来自 Amazon 商品页的日本配送报价。卖家精灵接口提供商品快照和销量，包含快照售价。父体销量为估算值，子体购买量按 100+ 等阈值展示。图片变化采用近七天“修改图片/视频”合并图标口径；有效空历史记为否，失败或异常为未知。</p>'
     page += '<p>修改时间保留接口 timePoint，来源时区未声明；00:00:00 不代表实际修改发生在零点。</p>'
     if browser_offers:
         page += f'<p>通过 Amazon 浏览器商品页补采了 {browser_offers} 个商品的报价。每项来源见 JSON，页面观察证据见 evidence 目录。</p>'

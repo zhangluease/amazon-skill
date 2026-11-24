@@ -80,7 +80,7 @@ class Source:
     def get(self, route, params):
         assert route == '/v2/extension/listing/JP/asin-change/B0CDCD694T'
         return [{'timePoint':'2025-08-31 00:00:00','changeType':4,
-                 'previousHighlight':['old'],'currentHighlight':['new']}]
+                 'previousImages':['old'],'currentImages':['new']}]
 out = Path(sys.argv[2])
 print(json.dumps(c.collect_listing_changes(['B0CDCD694T'], Source(),
       c.history_window('2026-11-23', True), out)))
@@ -89,7 +89,7 @@ print(json.dumps(c.collect_listing_changes(['B0CDCD694T'], Source(),
                                  env=env, cwd=root, capture_output=True, text=True, timeout=15)
             self.assertEqual(run.returncode, 0, run.stderr)
             summary = json.loads(run.stdout)
-            self.assertEqual([summary['title_changes'], summary['highlight_changes']], [1, 1])
+            self.assertEqual(summary['media_changed_products'], 1)
             for name in ('changes.json', 'changes.csv', 'report.html'):
                 self.assertTrue((root / 'result' / name).is_file())
 

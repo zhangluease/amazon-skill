@@ -65,6 +65,56 @@ test('repeated rejection does not open another login window', async () => {
   } finally { await fs.rm(tmp, { recursive: true, force: true }); }
 });
 
+test('API-only renewal remains automatic and does not open a QR browser', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-api-login-'));
+  try {
+    const result = await run(await options(tmp), deps(async (command, argv) => ({ stdout: JSON.stringify(
+      argv.includes('validate-input') ? valid : { status: 'partial', usable_products: 1,
+        api_authorization: { events: [{ action: 'token_signin', reason: 'missing_snapshot_data', status: 'ok' }] } })
+    })));
+    assert.equal(result.authorization_handoffs, 0);
+    assert.equal(result.api_authorization.events[0].status, 'ok');
+    assert.equal(result.api_authorization.credentials_included, false);
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
+test('a login mask remaining after API renewal enters one browser login then resumes', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-masked-'));
+  let queries = 0, logins = 0;
+  const calls = [];
+  try {
+    const result = await run(await options(tmp), deps(async (command, argv) => {
+      if (argv.includes('validate-input')) return { stdout: JSON.stringify(valid) };
+      calls.push(argv);
+      if (++queries === 1) throw { stderr: JSON.stringify({ status: 'authorization_required',
+        category: 'PLUGIN_LOGIN_REQUIRED', api_authorization: { events: [
+          { action: 'token_signin', reason: 'PLUGIN_LOGIN_REQUIRED', status: 'ok' }] } }) };
+      return { stdout: JSON.stringify({ status: 'ok', usable_products: 1 }) };
+    }, async () => { logins++; }));
+    assert.equal(logins, 1);
+    assert.equal(result.status, 'ok');
+    assert.ok(calls[1].includes('--resume'));
+    assert.equal(result.api_authorization.events[0].reason, 'PLUGIN_LOGIN_REQUIRED');
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
+test('robot verification preserves partial results without automatic CAPTCHA or login retries', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-verify-'));
+  const statuses = [];
+  try {
+    const dependencies = deps(async (command, argv) => {
+      if (argv.includes('validate-input')) return { stdout: JSON.stringify(valid) };
+      throw { stderr: JSON.stringify({ status: 'verification_required', category: 'ERR_ROBOT_CHECK', usable_products: 1 }) };
+    });
+    dependencies.notify = value => statuses.push(value.status);
+    const result = await run(await options(tmp), dependencies);
+    assert.equal(result.status, 'verification_required');
+    assert.equal(result.usable_products, 1);
+    assert.equal(result.authorization_handoffs, 0);
+    assert.deepEqual(statuses, ['requires_user_verification']);
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
 test('invalid ASIN fails validation before creating a profile or browser', async () => {
   let auths = 0;
   const options = argumentsFor(['collect', '--out', '/unused/output', 'BAD']);
@@ -101,9 +151,9 @@ test('changes mode carries the all-period window through one login and resumes o
       calls.push(argv);
       if (argv.includes('validate-input')) return { stdout: JSON.stringify(valid) };
       if (calls.length === 2) throw { stdout: JSON.stringify({ status: 'authorization_required' }) };
-      return { stdout: JSON.stringify({ status: 'ok', usable_products: 1, title_changes: 1, highlight_changes: 0 }) };
+      return { stdout: JSON.stringify({ status: 'ok', usable_products: 1, media_changed_products: 1 }) };
     }, async () => { auths++; }));
-    assert.equal(result.title_changes, 1);
+    assert.equal(result.media_changed_products, 1);
     assert.equal(auths, 1);
     assert.ok(calls.every(argv => argv.includes('--all-history')));
     assert.ok(calls.slice(1).every(argv => argv.includes('changes') && !argv.includes('collect')));

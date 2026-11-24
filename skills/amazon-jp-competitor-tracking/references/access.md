@@ -2,7 +2,7 @@
 
 ## 会话和浏览器
 
-商品快照、销量和修改记录由 `competitor_client.py` 使用 Python 标准库 HTTP 直连 `https://e.sellersprite.com`；当前报价由 `amazon_product.py` 在独立匿名 HTTP 会话中读取。先核对配送国家，已确认日本则直接复用；只有国家非日本或无法确认时才调用地址切换接口并刷新核验。不注册 MCP，不需要飞书权限或 Keepa API key。修改记录来源是卖家精灵自己的 Keepa 替代功能，不宣称直连 Keepa 官方 API。
+商品快照、销量和修改记录由 `competitor_client.py` 使用 Python 标准库 HTTP 直连 `https://e.sellersprite.com`；当前报价由 `amazon_product.py` 在独立匿名 HTTP 会话中读取。先核对配送国家，已确认日本则直接复用；只有国家非日本或无法确认时才调用地址切换接口并刷新核验。不注册 MCP，不需要 Keepa API key。本地采集无需飞书权限；飞书读写另按 [飞书 CLI 工作流](feishu.md) 授权。修改记录来源是卖家精灵自己的 Keepa 替代功能，不宣称直连 Keepa 官方 API。
 
 入口复用已授权的专用 HTTP 会话；本技能首次运行时可读取 POD 选图已知管理目录中的 `http-session.json`，白名单复制到自己的私有目录。只读取这个明确缓存，不读取日常浏览器的 Cookie、密码库或账号存储。浏览器扩展发现只读取已安装扩展的程序文件；授权使用独立持久化 profile，通过原扩展消息同步官网扫码登录，生成 `auth-token`、`auth-fp`、`random-token`。会话不进入仓库或报告。
 
@@ -41,7 +41,7 @@ node "SKILL/scripts/competitor.cjs" login --out "RUN"
 # 正式批量采集；会话有效时无浏览器
 node "SKILL/scripts/competitor.cjs" collect --out "RUN" B008H0V15I
 
-# 仅查询标题与亮点的近七天修改时间，不访问 Amazon
+# 仅查询近七天“修改图片/视频”合并图标，不访问 Amazon
 node "SKILL/scripts/competitor.cjs" changes --out "RUN" B0CDCD694T
 
 # 回看截至某日的七个自然日期；商品字段仍是本次取得的快照
@@ -54,7 +54,9 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 
 ## 错误与恢复
 
-- `ERR_NEED_AUTHORIZED`、`ERR_NEED_RE_AUTHORIZED`、`ERR_NEED_RENEWAL_AUTHORIZED`、`ERROR_UNAUTHORIZED`、HTTP 401：停止后续请求，每轮最多扫码恢复一次。
+- `ERR_NEED_AUTHORIZED`、`ERR_NEED_RE_AUTHORIZED`、`ERR_NEED_RENEWAL_AUTHORIZED`、`ERROR_UNAUTHORIZED`、HTTP 401：有专用令牌时先执行一次 API 续登并重试，仍需登录才停止后续取数并进入一次浏览器授权。
+- `PLUGIN_LOGIN_REQUIRED`：API 数据包含 `****` 等纯星号登录遮罩。即使 `code=OK` 也要求恢复登录；API 续登后仍被遮罩则进入一次浏览器授权，成功后重查被遮罩的来源。
+- `ERR_ROBOT_CHECK`：停止该轮后续请求，返回 `verification_required` 并保留已有数据；由用户完成原扩展要求的验证，不用登录循环代替验证。
 - HTTP 403／429、`ERR_GLOBAL_403`、版本升级要求：停止该轮后续请求，保留结果，不当成登录失败反复弹窗或重试。
 - `EXTENSION_NOT_FOUND`：在本机 Chrome／Edge 安装[卖家精灵原扩展](https://www.sellersprite.com/en/help/sellersprite-chrome-extension-download)，或指定原扩展目录。不会打包分发供应商扩展。
 - `PYTHON_39_REQUIRED`／`NODE_18_REQUIRED`：安装所需运行时，或修正解释器路径。
@@ -68,11 +70,25 @@ node "SKILL/scripts/competitor.cjs" collect --out "RUN" --as-of 2026-11-23 B008H
 
 任一来源的 HTTP 200 并不表示数据成功，仍检查业务 `code=OK`、返回 ASIN 与字段类型。单个来源网络错误保留其余来源；限流及鉴权错误停止后续接口。报告内不包含请求认证头、账号信息、完整原始响应或浏览器 profile。
 
+## API 续登和空数据
+
+扩展 5.0.7 的“登录 xxx”按钮使用已登录官网账号的令牌，发送 `SIGN_IN_WITH_TOKEN`，后台实际请求 `GET https://www.sellersprite.com/v2/extension/tk/signin`。本技能使用已授权专用会话中的令牌执行同一接口；只接受成功响应中的有效新 token，原子写回私有会话文件，不保存返回的账号资料，也不读取日常浏览器账号存储。
+
+正常数据请求成功即可复用会话，无需每次点插件。遇到鉴权错误、空商品列表、待缓存商品，或商品快照的标题／品牌／图片／排名／评分／评论数缺失，或销量的 `units`／`month_units` 缺失时，最多尝试一次令牌登录，再重试当前请求一次。负数 `units` 也属于缺项。空修改历史、当前页面未显示参考价／折扣、403／429 和人机验证不触发该空值重试逻辑。
+
+纯星号字段是明确的未登录遮罩，不属于上述普通空值。`code=OK` 加被遮罩的价格／销量等目标商品字段也会触发 `PLUGIN_LOGIN_REQUIRED`；重试后仍有遮罩就进入浏览器登录，不把它解释成来源没有数据。接口拒绝登录时仍保留同一响应中未遮罩的有效字段，被遮罩字段转为 null；来源标记 `recovery_pending`，恢复后必须重查，不能复用为成功缓存。飞书写入层还会拒绝含原始星号遮罩的商品报告。
+
+页面显示“插件需要登录才能使用／立即登录”反映该浏览器扩展的状态。采集器使用独立 API 会话，以 API 响应判断登录是否有效，不需要等 Keepa 面板加载或点击页面按钮。API 会话失效时执行同一账号令牌登录流程，必要时才扫码。页面空白和登录遮罩均不能作为近七天没有图库变化的证据。
+
+续登成功并不保证数据覆盖。重试仍为空就保留未知；失败不能填 0 或“否”。登录接口明确要求重新授权时才进入原有浏览器流程，先自动同步专用 profile 内的官网账号，必要时扫码。`status.json.api_authorization.events` 只记录触发原因和成功／失败状态，供排查是否执行过 API 续登。
+
+2026-11-24 实测：令牌续登接口返回 `OK`，新会话已保存，无需手动点击；随后 B07RPLXMXD 商品接口成功，销量接口返回 `ERR_ROBOT_CHECK`。直接调用 `client/latest` 当时也返回此验证错误，因此不把它设为每次取数前必须通过的检查。人机验证与登录失效分别处理，无法保证所有查询始终无人介入。
+
 ## 验证范围
 
 供应商端点和枚举来自原扩展 5.0.7；授权、供应商三个 API 已用 B008H0V15I 实测成功。原扩展在展示 `month_units` 时追加加号，实测接口值 100 已修正为 `100+`，原值另存。商品快照与销量接口的大类排名可能不同，按商品快照优先，证据保留各自原值。
 
-日本配送切换、刷新核验和当前报价解析已有离线流程测试。B008H0V15I 的匿名请求返回验证页。随后从已配送至东京的 Chrome 商品页取得售价、市场价、折扣、购物车与库存状态。独立视频变更仍未接入。
+日本配送切换、刷新核验和当前报价解析已有离线流程测试。B008H0V15I 的匿名请求返回验证页。随后从已配送至东京的 Chrome 商品页取得售价、市场价、折扣、购物车与库存状态。图库变化采用插件“修改图片/视频”的合并图标口径。
 
 可复制完整技能目录使用，也可安装仓库构建的 ZIP。发布包只包含白名单中的代码和说明，排除登录会话、profile、扩展副本、报告及 node_modules。接收者在自己的环境运行 `check`，按需准备和扫码。完整采集的 `browser_fallback_asins` 明确列出需要 Codex 浏览器工具补采的 ASIN，独立 CLI 不保证在 Amazon 验证页下自动补齐报价。
 

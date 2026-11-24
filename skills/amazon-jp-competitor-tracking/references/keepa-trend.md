@@ -5,7 +5,7 @@
 |标签内容|请求|处理方式|
 |---|---|---|
 |Keepa 主趋势|`GET /keepa?station=JP&asin={ASIN}&period=DAY`|`times` 对齐价格、Deal、购物车价、标价、Prime、FBA／FBM、大小类 BSR、评分、评论数、卖家数、购买量和优惠券等 `keepa` 序列。先检查点数、时间和缺值，再导出。|
-|Listing 修改标记|`GET /listing/JP/asin-change/{ASIN}`|`startTime`、`endTime` 是毫秒。标题用 `changeType` 1、4、5、7，亮点比较 `previousHighlight/currentHighlight` 文本；五点是另一个字段。可单独查修改时间，无须主曲线成功。|
+|Listing 修改标记|`GET /listing/JP/asin-change/{ASIN}`|`startTime`、`endTime` 是毫秒。`changeType` 2、4、6、7 对应插件的“修改图片/视频”合并图标，可独立判断近七天是否观测到，无须主曲线成功。|
 |按日图的广告标记|`GET /listing/JP/ads-trend/{ASIN}`|同样传 `startTime`、`endTime`。返回 `adsCampaign`、`adsGroup`。分别记录返回数量，空数组只代表此区间接口未返回相关记录。|
 |变体对比的子体月购买量|`GET /chart/amz-unit-trend/variations?station=JP&asin={ASIN}`|按变体 ASIN 读取 `trend[].date`、`trend[].unit`。正整数按 `50+`、`100+` 等阈值展示，`null` 留空。这个月度序列与页面当前的「过去一个月 X+」使用不同时间窗口。|
 
@@ -13,14 +13,14 @@
 
 ## 接口探查命令
 
-仅需要「修改标题」「修改亮点」的时间，使用已接入扫码恢复的正式命令，无需 MCP：
+仅需要近七天「修改图片/视频」图标是否出现，使用已接入扫码恢复的正式命令，无需 MCP：
 
 ```sh
 node "SKILL/scripts/competitor.cjs" changes B0CDCD694T --out "/absolute/path/changes-7d"
 node "SKILL/scripts/competitor.cjs" changes B0CDCD694T --all-history --out "/absolute/path/changes-all"
 ```
 
-`--all-history` 请求接口可返回的全部周期，正常默认近七个日本自然日期。时间识别与实测结果见 [修改枚举和时间](data-contract.md#修改枚举和时间)。以下探查命令仅在需要其他趋势数据时使用。
+`--all-history` 请求接口可返回的全部周期，正常默认近七个日本自然日期。识别规则见 [图库修改口径](data-contract.md#图库修改口径)。以下探查命令仅在需要其他趋势数据时使用。
 
 ```sh
 python3 "SKILL/scripts/keepa_probe.py" B008H0V15I \

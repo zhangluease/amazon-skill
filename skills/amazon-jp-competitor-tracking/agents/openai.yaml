@@ -1,4 +1,4 @@
 interface:
   display_name: "日本亚马逊竞对页面追踪"
-  short_description: "通过接口抓取竞对信息、销量及近七天标题与亮点修改时间，失效时扫码登录"
-  default_prompt: "使用 $amazon-jp-competitor-tracking，抓取我提供的日本亚马逊 ASIN 或商品链接，并查询近 7 天修改标题与修改亮点的时间，输出本地结果。"
+  short_description: "通过接口抓取竞对信息、销量及近七天图片/视频变化，支持自动续登"
+  default_prompt: "使用 $amazon-jp-competitor-tracking，抓取我提供的日本亚马逊 ASIN 或商品链接，并检查近 7 天图片/视频变化，输出本地结果。"

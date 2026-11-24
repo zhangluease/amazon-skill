@@ -41,10 +41,10 @@ python3 scripts/configure.py status
 
 ## 日本站竞对页面追踪
 
-[amazon-jp-competitor-tracking](skills/amazon-jp-competitor-tracking/SKILL.md) 接收 ASIN、商品链接或本地 TXT／CSV／JSON 清单，通过卖家精灵 API 获取商品快照、销量和近七天标题与亮点修改时间。报价先用 Amazon HTTP 会话核对日本配送并读取。报价缺项时，技能可从浏览器的 `https://www.amazon.co.jp/dp/{ASIN}` 商品页补采售价、参考价、折扣、购物车和库存。只查修改时间可用 `changes`，无需 MCP 或 Amazon 页面；加 `--all-history` 可做全周期验证。
+[amazon-jp-competitor-tracking](skills/amazon-jp-competitor-tracking/SKILL.md) 接收 ASIN、商品链接或本地 TXT／CSV／JSON 清单，通过卖家精灵 API 获取商品快照、销量和近七天图片/视频变化。报价先用 Amazon HTTP 会话核对日本配送并读取。报价缺项时，技能可从浏览器的 `https://www.amazon.co.jp/dp/{ASIN}` 商品页补采售价、参考价、折扣、购物车和库存。只查图库变更可用 `changes`，无需 MCP 或 Amazon 页面；加 `--all-history` 可做全周期验证。
 
 ```text
-请使用 $amazon-jp-competitor-tracking，抓取 B008H0V15I 的竞对页面信息，并查询近 7 天修改标题与修改亮点的时间。
+请使用 $amazon-jp-competitor-tracking，抓取 B008H0V15I 的竞对页面信息，并检查近 7 天图片/视频变化。
 ```
 
 ```sh
@@ -54,9 +54,9 @@ node skills/amazon-jp-competitor-tracking/scripts/competitor.cjs collect \
 
 输出 HTML、CSV、JSON 和取数证据。B008H0V15I 已验证在匿名请求遇到验证页后可从 Chrome 商品页补齐报价。命令和证据格式见 [访问方式](skills/amazon-jp-competitor-tracking/references/access.md)及[字段口径](skills/amazon-jp-competitor-tracking/references/data-contract.md)。
 
-向其他人分发时，运行 `python3 scripts/package_competitor_skill.py --out /absolute/amazon-jp-competitor-tracking.zip`。构建器仅打包明确列出的运行代码和说明，并输出 SHA-256 清单；登录态、扩展副本、历史报告和本地依赖不在包内。接收者把完整目录放入自己的 Codex 技能目录，先运行 `competitor.cjs check`，用自己的卖家精灵账号扫码。
+向其他人分发时，运行 `python3 scripts/package_competitor_skill.py --out /absolute/amazon-jp-competitor-tracking.zip`。构建器仅打包明确列出的运行代码和说明，并输出 SHA-256 清单；登录态、扩展副本、历史报告和本地依赖不在包内。接收者把完整目录放入自己的 Codex 技能目录，先运行 `competitor.cjs check`，用自己的卖家精灵账号授权。已有会话正常复用；鉴权失效或关键商品数据为空时先尝试一次 API 续登，必要时才扫码，人机验证单独交给用户完成。
 
-此技能的 Python 分为 `competitor_core.py`（输入／HTTP）、`competitor_changes.py`（修改时间）、`competitor_report.py`（输出）和 `competitor_client.py`（编排／CLI）；Node 分为命令编排、诊断、依赖环境、专用会话和扫码桥接。Python 仅用标准库，浏览器运行依赖按需准备。修改后运行竞对相关 Python／Node 测试，并检查分发包隔离测试，避免重新依赖本机配置。
+此技能的 Python 分为 `competitor_core.py`（输入／HTTP）、`competitor_changes.py`（图库修改标记）、`competitor_report.py`（输出）和 `competitor_client.py`（编排／CLI）；Node 分为命令编排、诊断、依赖环境、专用会话和扫码桥接。Python 仅用标准库，浏览器运行依赖按需准备。修改后运行竞对相关 Python／Node 测试，并检查分发包隔离测试，避免重新依赖本机配置。
 
 ## POD 选图
 

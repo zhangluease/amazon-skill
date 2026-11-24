@@ -20,9 +20,9 @@ const HELP = `日本亚马逊竞对页面追踪
   node competitor.cjs collect ASIN --out 新目录
   node competitor.cjs login --out 新目录
 
-changes 只查标题与亮点修改时间，默认近七个日本自然日期；collect 还采集商品、销量与报价。
+changes 只查图片/视频修改图标，默认近七个日本自然日期；collect 还采集商品、销量与报价。
 支持 --input 清单、--as-of 日期、--interval 1、--state-dir 专用会话目录、--extension-dir 扩展程序目录。
-会话有效时直接调用 HTTP；失效时最多扫码一次。每轮使用新的输出目录。
+会话有效时直接调用 HTTP；鉴权失效或商品数据缺失时先尝试一次 API 续登，必要时最多扫码一次。每轮使用新的输出目录。
 `;
 
 function argumentsFor(argv) {
@@ -78,7 +78,7 @@ async function run(options, dependencies = {}) {
     } catch (error) {
       let r;
       try { r = JSON.parse(error.stdout || error.stderr); } catch { throw fail('HTTP_WORKER_FAILED'); }
-      if (r.status === 'authorization_required') return r;
+      if (['authorization_required', 'verification_required'].includes(r.status)) return r;
       throw fail(r.category || 'HTTP_WORKER_FAILED');
     }
   };
@@ -139,14 +139,22 @@ async function run(options, dependencies = {}) {
         if (safe) session = await saveSession(home, safe);
       } catch { /* The HTTP worker will classify a missing/invalid session. */ }
     }
-    const query = (resume = false) => call(options.command, ['--out', output, '--session-file', session,
-      '--interval', String(options.interval), ...(resume ? ['--resume'] : [])]);
+    const apiAuthEvents = [];
+    const query = async (resume = false) => {
+      const value = await call(options.command, ['--out', output, '--session-file', session,
+        '--interval', String(options.interval), ...(resume ? ['--resume'] : [])]);
+      apiAuthEvents.push(...(value.api_authorization?.events || []));
+      return value;
+    };
     let result = await query();
     if (result.status === 'authorization_required') {
       await login();
       result = await query(true);
-    } else await publish('not_required', { reason: 'cached_session_or_non_auth_api_error' });
+    } else if (result.status === 'verification_required') {
+      await publish('requires_user_verification', { reason: result.category });
+    } else await publish('not_required', { reason: 'http_session_valid_or_non_auth_api_error' });
     const summary = { ...result, authorization_handoffs: handoffs,
+      ...(apiAuthEvents.length ? { api_authorization: { events: apiAuthEvents, credentials_included: false } } : {}),
       ...(result.category ? guidance(result.category) : {}) };
     await fs.writeFile(path.join(output, 'status.json'), JSON.stringify(summary, null, 2));
     return summary;
@@ -162,7 +170,7 @@ async function main(argv = process.argv.slice(2)) {
   try {
     const result = await run(argumentsFor(argv));
     process.stdout.write(result.status === 'help' ? result.usage : JSON.stringify(result) + '\n');
-    if (['authorization_required', 'failed', 'needs_setup'].includes(result.status) || result.usable_products === 0) process.exitCode = 2;
+    if (['authorization_required', 'verification_required', 'failed', 'needs_setup'].includes(result.status) || result.usable_products === 0) process.exitCode = 2;
   } catch (error) {
     process.stderr.write(JSON.stringify({ status: 'failed', category: errorCode(error), ...guidance(errorCode(error)) }) + '\n');
     process.exitCode = 2;

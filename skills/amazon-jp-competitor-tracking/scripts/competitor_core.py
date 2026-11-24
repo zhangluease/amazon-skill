@@ -12,6 +12,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import unicodedata
 
 JST = dt.timezone(dt.timedelta(hours=9))
 
@@ -21,10 +22,11 @@ ORIGIN = 'https://e.sellersprite.com'
 
 AUTH_ERRORS = {'MISSING_HTTP_SESSION', 'INVALID_HTTP_SESSION', 'HTTP_401',
                'ERR_NEED_AUTHORIZED', 'ERR_NEED_RE_AUTHORIZED', 'ERROR_UNAUTHORIZED',
-               'ERR_NEED_RENEWAL_AUTHORIZED'}
+               'ERR_NEED_RENEWAL_AUTHORIZED', 'PLUGIN_LOGIN_REQUIRED'}
 
 
-STOP_ERRORS = {'HTTP_429', 'HTTP_403', 'ERR_GLOBAL_403', 'ERR_FREQUENT', 'ERR_VERSION_NEED_UPGRADE'}
+STOP_ERRORS = {'HTTP_429', 'HTTP_403', 'ERR_GLOBAL_403', 'ERR_FREQUENT', 'ERR_VERSION_NEED_UPGRADE',
+               'ERR_ROBOT_CHECK'}
 
 
 HEADERS = ('auth-token', 'auth-fp', 'random-token', 'user-agent')
@@ -36,15 +38,11 @@ ASIN_RE = re.compile(r'[A-Z0-9]{10}')
 PRODUCT_KEYS = ('asin', 'parent', 'title', 'image', 'image_zoom', 'brand', 'price', 'currency',
                 'symbol', 'rating', 'reviews', 'bsr', 'bsr_id', 'bsr_label', 'bsrList', 'bsr_list',
                 'units', 'month_units', 'available', 'created_time', 'unavailable', 'seller_id',
-                'seller_name', 'site_postcode', 'site_language', 'node_label_path', 'first_available_day')
+                'seller_name', 'site_postcode', 'site_language', 'node_label_path', 'first_available_day',
+                'variations', 'variation_list')
 
 
-CHANGE_KEYS = ('timePoint', 'changeType', 'previousTitle', 'currentTitle',
-               'previousHighlight', 'currentHighlight',
-               'previousImages', 'currentImages', 'previousFeatures', 'currentFeatures')
-
-
-CHANGE_SCHEMA = 'listing-title-highlight-v2'
+CHANGE_SCHEMA = 'listing-media-changes-v3'
 
 
 OFFER_FIELDS = ('price', 'reference_price', 'discount_percent', 'buy_box', 'stock')
@@ -191,7 +189,8 @@ def load_session(path):
                 if not isinstance(value, str) or not value or len(value) > 8192 or any(ord(c) < 32 or ord(c) == 127 for c in value):
                     raise ValueError()
                 headers[name] = value
-        if any(headers.get(k, '').lower() in ('', 'null', 'undefined', '***', '[redacted]') for k in HEADERS[:3]):
+        if any(headers.get(k, '').lower() in ('', 'null', 'undefined', '[redacted]')
+               or is_login_mask(headers.get(k)) for k in HEADERS[:3]):
             raise ValueError()
         parameters = {k: v for k, v in data.get('parameters', {}).items()
                       if k in ('version', 'language', 'extension', 'source') and isinstance(v, str) and len(v) <= 200}
@@ -219,20 +218,25 @@ def checksum(value, version):
 
 
 class Client:
-    def __init__(self, session, interval=1, opener=None, sleep=time.sleep):
+    def __init__(self, session, interval=1, opener=None, sleep=time.sleep, session_file=None):
         self.session, self.interval = session, interval
         self.opener = opener or urllib.request.build_opener(NoRedirect())
         self.sleep, self.last = sleep, None
+        self.session_file = Path(session_file).expanduser() if session_file else None
+        self.renewal_attempted, self.auth_events = False, []
 
-    def get(self, route, params):
-        if not re.fullmatch(r'/v2/extension/(?:asin/JP|competitor-lookup/JP|keepa|chart/amz-unit-trend/variations|'
-                            r'listing/JP/(?:asin-change|ads-trend)/[A-Z0-9]{10})', route):
+    def _request(self, origin, route, params):
+        # Fixed vendor origins only; redirects cannot forward the authorized headers.
+        if not (origin == ORIGIN and re.fullmatch(
+                r'/v2/extension/(?:asin/JP|competitor-lookup/JP|keepa|chart/amz-unit-trend/variations|'
+                r'listing/JP/(?:asin-change|ads-trend)/[A-Z0-9]{10})', route)
+                or origin == 'https://www.sellersprite.com' and route == '/v2/extension/tk/signin'):
             raise ApiError('ENDPOINT_NOT_ALLOWED')
         if self.last is not None:
             self.sleep(max(0, self.interval - (time.monotonic() - self.last)))
         self.last = time.monotonic()
         query = urllib.parse.urlencode(dict(self.session['parameters'], **params))
-        req = urllib.request.Request(ORIGIN + route + '?' + query, headers=dict(self.session['headers'],
+        req = urllib.request.Request(origin + route + '?' + query, headers=dict(self.session['headers'],
             **{'accept': 'application/json', 'content-type': 'application/json', 'accept-encoding': 'identity'}))
         try:
             with self.opener.open(req, timeout=30) as response:
@@ -253,12 +257,106 @@ class Client:
             raise ApiError(document.get('code'))
         if 'data' not in document:
             raise ApiError('MISSING_DATA')
+        if origin == ORIGIN and snapshot_login_masked(route, params, document['data']):
+            error = ApiError('PLUGIN_LOGIN_REQUIRED')
+            error.snapshot_data = document['data']
+            raise error
         return document['data']
+
+    def renew_session(self, reason):
+        """Same token sign-in as the plugin's account button; at most once per worker."""
+        if self.renewal_attempted:
+            raise ApiError('ERR_NEED_RE_AUTHORIZED')
+        self.renewal_attempted = True
+        event = {'action': 'token_signin', 'reason': reason, 'status': 'failed'}
+        self.auth_events.append(event)
+        try:
+            data = self._request('https://www.sellersprite.com', '/v2/extension/tk/signin', {})
+            token = data.get('token') if isinstance(data, dict) else None
+            if (not isinstance(token, str) or not token or len(token) > 8192
+                    or token.lower() in ('null', 'undefined', '[redacted]') or is_login_mask(token)
+                    or any(ord(c) < 32 or ord(c) == 127 for c in token)):
+                raise ApiError('INVALID_TOKEN_SIGNIN_RESPONSE')
+            if data.get('guest') is True:
+                raise ApiError('ERR_NEED_AUTHORIZED')
+            self.session['headers']['auth-token'] = token
+            if self.session_file:
+                write_json(self.session_file, dict(self.session, format='sellersprite-http-session-v1',
+                           captured_at=dt.datetime.now(JST).isoformat()))
+            event['status'] = 'ok'
+        except ApiError as error:
+            event['code'] = error.code
+            raise
+
+    def get(self, route, params):
+        try:
+            data = self._request(ORIGIN, route, params)
+        except ApiError as error:
+            if error.code not in AUTH_ERRORS or self.renewal_attempted:
+                raise
+            try:
+                self.renew_session(error.code)
+                return self._request(ORIGIN, route, params)
+            except ApiError as recovery_error:
+                if hasattr(error, 'snapshot_data') and not hasattr(recovery_error, 'snapshot_data'):
+                    recovery_error.snapshot_data = error.snapshot_data
+                raise
+        if not self.renewal_attempted and missing_snapshot_data(route, params, data):
+            try:
+                self.renew_session('missing_snapshot_data')
+                return self._request(ORIGIN, route, params)
+            except ApiError as error:
+                # The original successful snapshot still contains useful business data.
+                # Callers must sanitize it and requery this source after authorization.
+                error.snapshot_data = data
+                raise
+        return data
+
+
+def is_login_mask(value):
+    """The plugin's all-asterisk placeholder indicates that login is required."""
+    return isinstance(value, str) and re.fullmatch(r'[*＊]{3,}', value.strip()) is not None
+
+
+def snapshot_login_masked(route, params, data):
+    if is_login_mask(data):
+        return True
+    if route not in ('/v2/extension/asin/JP', '/v2/extension/competitor-lookup/JP'):
+        return False
+    asins = params.get('asins')
+    if not isinstance(asins, str):
+        return False
+    requested = {value for value in asins.split(',') if ASIN_RE.fullmatch(value)}
+    rows = data.get('items') if isinstance(data, dict) else data
+    if is_login_mask(rows):
+        return True
+    return isinstance(rows, list) and any(
+        isinstance(row, dict) and row.get('asin') in requested
+        and any(is_login_mask(row.get(key)) for key in PRODUCT_KEYS) for row in rows)
+
+
+def missing_snapshot_data(route, params, data):
+    """Sparse product/sales snapshots trigger one login check, never empty history."""
+    if route not in ('/v2/extension/asin/JP', '/v2/extension/competitor-lookup/JP'):
+        return False
+    asin = params.get('asins')
+    if not isinstance(asin, str) or not ASIN_RE.fullmatch(asin):
+        return False
+    sales = route.endswith('competitor-lookup/JP')
+    try:
+        row = product_row(data, asin, sales=sales)
+    except ApiError as error:
+        return error.code in ('ASIN_NOT_RETURNED', 'PRODUCT_NOT_CACHED')
+    if sales:
+        return number(row.get('units')) is None or purchase_threshold(row.get('month_units')) is None
+    return (any(not row.get(key) for key in ('title', 'brand'))
+            or not (row.get('image') or row.get('image_zoom'))
+            or any(number(row.get(key)) is None for key in ('bsr', 'rating', 'reviews')))
 
 
 def scalar(value):
     if isinstance(value, str):
-        return value[:10000]
+        return None if is_login_mask(value) else value[:10000]
     if type(value) in (int, float) and math.isfinite(value):
         return value
     return None
@@ -283,10 +381,32 @@ def purchase_threshold(value):
     return None
 
 
+def declared_package_quantity(title):
+    """Use an explicit single title quantity; mixed component counts stay unknown."""
+    text = unicodedata.normalize('NFKC', title or '')
+    matches = re.findall(r'(?<![0-9])([1-9][0-9]?)\s*(?:枚|個|个|本|袋)(?:入り|入|セット|パック)?', text)
+    if len(matches) == 1:
+        return int(matches[0])
+    return None
+
+
+def title_original_claim(title):
+    """Report the listing's explicit claim, without inferring physical authenticity."""
+    text = title or ''
+    if re.search(r'互換|非純正|純正品では(?:ありません|ない)|compatible|non[- ]?original', text, re.I):
+        return False
+    if re.search(r'純正|正規品|【正品】', text):
+        return True
+    return None
+
+
 def public_product(row):
     result = {key: scalar(row[key]) for key in PRODUCT_KEYS if key in row and key not in ('bsrList', 'bsr_list', 'unavailable')}
     if type(row.get('unavailable')) is bool:
         result['unavailable'] = row['unavailable']
+    if isinstance(row.get('variation_list'), list):
+        result['variation_list'] = [{'asin': scalar(item.get('asin')), 'attr': scalar(item.get('attr'))}
+                                    for item in row['variation_list'] if isinstance(item, dict)]
     ranks = row.get('bsr_list') if isinstance(row.get('bsr_list'), list) else row.get('bsrList')
     if isinstance(ranks, list):
         result['bsr_list'] = [{k: scalar(r.get(k)) for k in ('rank', 'id', 'label', 'text')}

@@ -41,7 +41,7 @@ def probe(asin, client, scope, *, chart=True):
             elif key == 'listing_changes':
                 history = normalize_changes(data, scope)
                 record.update(events_count=len(history['events']), observation_status=history['status'],
-                              video_marker='not_exposed')
+                              media_change_observed=history['media_change_observed'])
             elif key == 'advertising_changes':
                 if not isinstance(data, dict) or any(not isinstance(data.get(k), list) for k in ('adsCampaign', 'adsGroup')):
                     raise ApiError('UNRECOGNIZED_ADS_TREND_RESPONSE')

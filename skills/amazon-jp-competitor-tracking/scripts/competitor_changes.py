@@ -1,98 +1,64 @@
-"""Listing change semantics and direct title/highlight history collection."""
+"""SellerSprite Keepa combined image/video marker; direct HTTP, no chart rendering."""
 import datetime as dt
 import json
 from pathlib import Path
 
-from competitor_core import (AUTH_ERRORS, STOP_ERRORS, ORIGIN, JST, CHANGE_KEYS, CHANGE_SCHEMA,
+from competitor_core import (AUTH_ERRORS, STOP_ERRORS, ORIGIN, JST, CHANGE_SCHEMA,
                              ApiError, scalar, product_row, write_json, validate_output_directory)
 from competitor_report import save_listing_changes
 
-def highlight_text(value):
-    """Match extension 5.0.7 eE.asText, including array line breaks and nulls."""
-    if value is None:
-        return ''
-    if isinstance(value, list):
-        if any(isinstance(item, (list, dict)) for item in value):
-            raise ApiError('INVALID_HIGHLIGHT_VALUE')
-        return '\n'.join(highlight_text(item) for item in value)
-    if type(value) is bool:
-        return 'true' if value else 'false'
-    if scalar(value) is None:
-        raise ApiError('INVALID_HIGHLIGHT_VALUE')
-    return str(value)
+MEDIA_KINDS = (2, 4, 6, 7)
 
 
 def change_evidence(data):
-    """Keep only public listing fields, preserving arrays for later reprocessing."""
+    """Discard unrelated event kinds and retain only gallery marker evidence."""
     if not isinstance(data, list):
         raise ApiError('INVALID_CHANGE_RESPONSE')
-    return [{key: row[key] for key in CHANGE_KEYS if key in row} if isinstance(row, dict) else None
-            for row in data]
+    result = []
+    for row in data:
+        if not isinstance(row, dict):
+            result.append(None)
+            continue
+        kind = row.get('changeType')
+        if type(kind) is int and kind in range(8) and kind not in MEDIA_KINDS:
+            continue
+        event = {key: scalar(row[key]) for key in ('timePoint', 'changeType') if key in row}
+        for key in ('previousImages', 'currentImages'):
+            if isinstance(row.get(key), list):
+                event[key] = [scalar(value) for value in row[key]]
+        result.append(event)
+    return result
 
 
 def normalize_changes(data, scope):
-    if not isinstance(data, list):
-        raise ApiError('INVALID_CHANGE_RESPONSE')
-    events, invalid_time, invalid_type, invalid_highlight = [], False, False, False
-    for row in data:
+    events, invalid = [], False
+    for row in change_evidence(data):
         if not isinstance(row, dict):
-            invalid_time = True
+            invalid = True
             continue
-        point = row.get('timePoint')
         try:
-            day = dt.date.fromisoformat(str(point)[:10]).isoformat()
+            day = dt.date.fromisoformat(str(row.get('timePoint'))[:10]).isoformat()
         except ValueError:
-            invalid_time = True
+            invalid = True
             continue
         if not scope['start'][:10] <= day <= scope['end'][:10]:
             continue
         kind = row.get('changeType')
-        # Extension 5.0.7 enum, NOT a bit mask: 3 means bullet points, not title+image.
-        valid_kind = type(kind) is int and kind in range(8)
-        if not valid_kind:
-            invalid_type = True
-        event = {k: scalar(row[k]) for k in CHANGE_KEYS if k in row and k not in
-                 ('previousImages', 'currentImages', 'previousFeatures', 'currentFeatures',
-                  'previousHighlight', 'currentHighlight')}
-        for key in ('previousImages', 'currentImages', 'previousFeatures', 'currentFeatures'):
-            if isinstance(row.get(key), list):
-                event[key] = [scalar(value) for value in row[key]]
-        event['date'] = day
-        event['image_changed'] = kind in (2, 4, 6, 7) if valid_kind else None
-        event['title_changed'] = kind in (1, 4, 5, 7) if valid_kind else None
-        event['features_changed'] = kind in (3, 5, 6, 7) if valid_kind else None
-        # Highlight is separate from the features enum. The UI compares these texts.
-        try:
-            if not any(key in row for key in ('previousHighlight', 'currentHighlight')):
-                raise ApiError('HIGHLIGHT_FIELDS_NOT_RETURNED')
-            for key in ('previousHighlight', 'currentHighlight'):
-                event[key] = highlight_text(row.get(key))
-            event['highlight_changed'] = event['previousHighlight'] != event['currentHighlight']
-        except ApiError:
-            event['highlight_changed'] = None
-            invalid_highlight = True
-        events.append(event)
-    def observed(key, invalid):
-        return True if any(e[key] is True for e in events) else None if invalid_time or invalid else False
-    return {'schema': CHANGE_SCHEMA,
-            'status': 'partial' if invalid_time or invalid_type or invalid_highlight else 'ok',
-            'title_change_observed': observed('title_changed', invalid_type),
-            'highlight_change_observed': observed('highlight_changed', invalid_highlight),
-            'image_change_observed': observed('image_changed', invalid_type),
-            'video_change_observed': None, 'events': events, 'provider_coverage': 'not_reported',
+        # Extension 5.0.7 enum, not a bit mask. These kinds drive its gallery icon.
+        if type(kind) is not int or kind not in MEDIA_KINDS:
+            invalid = True
+            continue
+        events.append(dict(row, date=day))
+    return {'schema': CHANGE_SCHEMA, 'status': 'partial' if invalid else 'ok',
+            'media_change_observed': True if events else None if invalid else False,
+            'events': events, 'provider_coverage': 'not_reported',
             'provider_timestamp_timezone': 'unspecified',
-            'meaning': 'provider_listing_markers; title_enum_and_highlight_text_comparison'}
-
-
-def change_times(changes, name):
-    values = sorted({event['timePoint'] for event in changes['events'] if event.get(name + '_changed') is True})
-    return values if values or changes.get(name + '_change_observed') is False else None
+            'meaning': 'SellerSprite Keepa combined image/video gallery marker'}
 
 
 def unavailable_changes():
-    return {'schema': CHANGE_SCHEMA, 'status': 'unavailable', 'title_change_observed': None,
-            'highlight_change_observed': None, 'image_change_observed': None,
-            'video_change_observed': None, 'events': [], 'provider_coverage': 'not_reported'}
+    return {'schema': CHANGE_SCHEMA, 'status': 'unavailable', 'media_change_observed': None,
+            'events': [], 'provider_coverage': 'not_reported'}
 
 
 def collect_listing_changes(asins, client, scope, output, *, resume=False):
@@ -119,7 +85,7 @@ def collect_listing_changes(asins, client, scope, output, *, resume=False):
                     saved = json.loads(cache.read_text(encoding='utf-8'))
                     if saved.get('endpoint') != endpoint or saved.get('window') != scope:
                         raise ApiError('RESUME_EVIDENCE_MISMATCH')
-                    raw = saved['data']
+                    raw = change_evidence(saved['data'])
                 else:
                     raw = change_evidence(client.get(endpoint.removeprefix(ORIGIN),
                         {'startTime': scope['start_ms'], 'endTime': scope['end_ms']}))
@@ -139,19 +105,15 @@ def collect_listing_changes(asins, client, scope, output, *, resume=False):
                                    if error.code in ('ASIN_NOT_RETURNED', 'PRODUCT_NOT_CACHED') else 'unavailable')
                 if error.code in AUTH_ERRORS or error.code in STOP_ERRORS:
                     stopped = error.code
-        row = {'asin': asin, 'title_change_times': change_times(history, 'title'),
-               'highlight_change_times': change_times(history, 'highlight'),
-               'title_change_observed': history['title_change_observed'],
-               'highlight_change_observed': history['highlight_change_observed'],
+        row = {'asin': asin, 'media_change_observed': history['media_change_observed'],
                'history_status': history['status'], 'source_event_count': len(history['events']),
                'errors': errors}
         results.append(row)
         save_listing_changes(output, results, asins, scope, stopped)
-    usable = sum(row['title_change_observed'] is not None or row['highlight_change_observed'] is not None
-                 for row in results)
-    return {'status': 'authorization_required' if stopped in AUTH_ERRORS else
+    usable = sum(row['media_change_observed'] is not None for row in results)
+    return {'status': 'verification_required' if stopped == 'ERR_ROBOT_CHECK' else
+            'authorization_required' if stopped in AUTH_ERRORS else
             'ok' if all(row['history_status'] == 'ok' for row in results) else 'partial' if usable else 'failed',
             'category': stopped, 'requested': len(asins), 'usable_products': usable,
-            'title_changes': sum(len(row['title_change_times'] or []) for row in results),
-            'highlight_changes': sum(len(row['highlight_change_times'] or []) for row in results),
+            'media_changed_products': sum(row['media_change_observed'] is True for row in results),
             'output': str(output.resolve()), 'collection_method': 'independent_http'}

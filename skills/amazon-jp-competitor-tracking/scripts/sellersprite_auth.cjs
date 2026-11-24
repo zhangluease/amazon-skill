@@ -16,7 +16,8 @@ function sessionFromBridge(value, version) {
   for (const k of ['auth-token', 'auth-fp', 'random-token', 'user-agent']) {
     const v = value.headers?.[k];
     if (typeof v === 'string' && v.length && v.length <= 8192 && !/[\x00-\x1f\x7f]/.test(v)
-      && !['null', 'undefined', '***', '[redacted]'].includes(v.toLowerCase())) keep[k] = v;
+      && !['null', 'undefined', '[redacted]'].includes(v.toLowerCase())
+      && !/^[*＊]{3,}$/.test(v.trim())) keep[k] = v;
   }
   if (!['auth-token', 'auth-fp', 'random-token'].every(k => keep[k])) return null;
   const parameters = {};

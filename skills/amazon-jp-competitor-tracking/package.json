@@ -1,6 +1,7 @@
 {
   "name": "amazon-jp-competitor-tracking",
-  "version": "0.1.0",
+  "version": "0.2.1",
+  "feishu_cli_version": "1.0.100",
   "private": true,
   "engines": {"node": ">=18"},
   "dependencies": {"playwright": "1.61.0"}
