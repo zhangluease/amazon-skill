@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Prepare artwork for every editable POD surface (Pillow required)."""
 import argparse
+import hashlib
+import io
 import json
+import math
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageOps
+
+UPLOAD_MAX_BYTES = 30 * 1024 * 1024
 
 
 def white_mask(image, tolerance=20):
@@ -20,6 +25,7 @@ def fraction(mask):
 
 def analyze(image, tolerance=20, blank_threshold=0.08):
     sample = image.convert("RGBA")
+    has_transparency = sample.getchannel("A").getextrema()[0] < 255
     sample.thumbnail((768, 768))
     alpha = sample.getchannel("A")
     transparent = alpha.point(lambda value: 255 if value <= 8 else 0)
@@ -30,7 +36,7 @@ def analyze(image, tolerance=20, blank_threshold=0.08):
     return {
         "blank_ratio": round(ratio, 6),
         "transparent_ratio": round(fraction(transparent), 6),
-        "has_transparency": alpha.getextrema()[0] < 255,
+        "has_transparency": has_transparency,
         "classification": "non_full_print" if ratio > blank_threshold else "full_print",
         "classification_method": "transparent_or_near_white_pixel_ratio",
         "blank_threshold": blank_threshold,
@@ -80,28 +86,65 @@ def checkerboard(size, cell=20):
     return image
 
 
+def encode_upload(image, max_bytes):
+    """Keep full size if possible and preserve alpha when reducing file size."""
+    def encode(candidate, kind, **options):
+        stream = io.BytesIO()
+        candidate.save(stream, format=kind, **options)
+        return stream.getvalue()
+
+    opaque = image.getchannel("A").getextrema()[0] == 255
+    candidate = image
+    scale = 1.0
+    while True:
+        png_image = candidate.convert("RGB") if opaque else candidate
+        payload = encode(png_image, "PNG")
+        if len(payload) <= max_bytes:
+            return candidate, payload, "png"
+        if opaque:
+            payload = encode(png_image, "JPEG", quality=95, subsampling=0, optimize=True)
+            if len(payload) <= max_bytes:
+                with Image.open(io.BytesIO(payload)) as uploaded:
+                    return uploaded.convert("RGBA"), payload, "jpg"
+        if candidate.size == (1, 1):
+            raise ValueError("Upload file cannot fit the PODQHY file size limit")
+        scale *= min(0.9, math.sqrt(max_bytes / len(payload)) * 0.95)
+        bounds = tuple(max(1, int(length * scale)) for length in image.size)
+        # Resize from the original at every step to avoid repeated resampling.
+        candidate = image.resize(bounds, Image.Resampling.LANCZOS)
+
+
 def prepare(source, template, out, fit="cover", background="auto", tolerance=20,
             blank_threshold=0.08):
+    surfaces = editable_surfaces(template)
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     with Image.open(source) as loaded:
         source_mode = loaded.mode
         original = ImageOps.exif_transpose(loaded).convert("RGBA")
     before = analyze(original, tolerance, blank_threshold)
+    # Keep the original aspect ratio for one reusable site upload. Cropping this
+    # image to the first face would discard artwork needed by differently shaped faces.
+    source_cutout = background == "remove-white" or (background == "auto" and
+                    before["classification"] == "non_full_print" and
+                    not before["has_transparency"])
+    artwork = remove_edge_white(original, tolerance) if source_cutout else original
+    upload_image, payload, extension = encode_upload(artwork, UPLOAD_MAX_BYTES)
+    upload_sha256 = hashlib.sha256(payload).hexdigest()
+    upload_file = out / f"upload-artwork-{upload_sha256[:16]}.{extension}"
+    upload_file.write_bytes(payload)
     results = []
     prepared_sizes = {}
-    for surface in editable_surfaces(template):
+    resize = ImageOps.fit if fit == "cover" else ImageOps.contain
+    for surface in surfaces:
         size = (surface["width"], surface["height"])
         if size not in prepared_sizes:
-            if fit == "cover":
-                result = ImageOps.fit(original, size, method=Image.Resampling.LANCZOS)
-            else:
-                result = ImageOps.contain(original, size, method=Image.Resampling.LANCZOS)
-            standardized = analyze(result, tolerance, blank_threshold)
-            cutout = background == "remove-white" or (background == "auto" and
-                     standardized["classification"] == "non_full_print" and
-                     not standardized["has_transparency"])
-            result = remove_edge_white(result, tolerance) if cutout else result
+            fitted_source = resize(original, size, method=Image.Resampling.LANCZOS)
+            standardized = analyze(fitted_source, tolerance, blank_threshold)
+            result = fitted_source if upload_image is original else resize(
+                upload_image, size, method=Image.Resampling.LANCZOS)
+            cutout = source_cutout and bool(ImageChops.difference(
+                fitted_source.getchannel("A"), result.getchannel("A")).getbbox())
             if fit == "contain":
                 padded = Image.new("RGBA", size)
                 padded.alpha_composite(result, ((size[0] - result.width) // 2,
@@ -112,9 +155,9 @@ def prepare(source, template, out, fit="cover", background="auto", tolerance=20,
         target = out / ("flat-%s.png" % surface["id"])
         result.save(target)
         results.append(dict(surface, file=str(target.resolve()), mode=result.mode,
-                            upscaled=(max(size[0] / original.width, size[1] / original.height)
+                            upscaled=(max(size[0] / upload_image.width, size[1] / upload_image.height)
                                       if fit == "cover" else
-                                      min(size[0] / original.width, size[1] / original.height)) > 1,
+                                      min(size[0] / upload_image.width, size[1] / upload_image.height)) > 1,
                             standardized_analysis=standardized,
                             background_action="remove_edge_connected_white" if cutout else "preserve",
                             analysis=analyze(result, tolerance, blank_threshold)))
@@ -134,7 +177,17 @@ def prepare(source, template, out, fit="cover", background="auto", tolerance=20,
     manifest = {"source": str(Path(source).resolve()), "source_size": list(original.size),
                 "source_mode": source_mode,
                 "source_analysis": before, "fit": fit,
-                "surfaces": results, "status": "pending_user_confirmation"}
+                "upload_plan": {"strategy": "upload_once_copy_all",
+                    "file": str(upload_file.resolve()),
+                    "sha256": upload_sha256, "size_bytes": len(payload),
+                    "resized_for_upload": upload_image.size != artwork.size,
+                    "width": upload_image.width, "height": upload_image.height,
+                    "background_action": "remove_edge_connected_white" if source_cutout else "preserve",
+                    "source_surface_id": results[0]["id"],
+                    "surface_ids": [surface["id"] for surface in results],
+                    "copy_position": "center", "per_surface_placement": fit,
+                    "requires_surface_review": True},
+                "surfaces": results, "status": "prepared_pending_surface_review"}
     (out / "artwork-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     return manifest
 

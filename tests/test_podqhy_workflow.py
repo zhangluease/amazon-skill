@@ -1,10 +1,13 @@
 import base64
 import gzip
+import hashlib
+import random
 import importlib.util
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import quote
 
 try:
@@ -89,7 +92,7 @@ class PodArtworkTests(unittest.TestCase):
                     self.assertEqual(output.mode, "RGBA")
                     self.assertEqual(output.getpixel((0, 0))[3], 0)
             self.assertTrue(manifest["surfaces"][0]["upscaled"])
-            self.assertEqual(manifest["status"], "pending_user_confirmation")
+            self.assertEqual(manifest["status"], "prepared_pending_surface_review")
 
     def test_existing_alpha_is_preserved_without_automatic_white_cutout(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -123,6 +126,65 @@ class PodArtworkTests(unittest.TestCase):
             with Image.open(result["surfaces"][0]["file"]) as output:
                 self.assertEqual(output.size, (80, 80))
                 self.assertEqual(output.getchannel("A").getbbox(), (0, 20, 80, 60))
+
+    def test_one_shared_upload_keeps_source_aspect_for_differently_shaped_faces(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            image = Image.new("RGBA", (120, 40), "navy")
+            ImageDraw.Draw(image).rectangle((0, 0, 20, 39), fill="orange")
+            image.save(source)
+            manifest = art.prepare(source, {"data": [flat(1, 40, 40), flat(2, 120, 40),
+                                                       flat(3, 120, 40), flat(4, 9, 9, edit=0)]},
+                                   Path(directory) / "out", background="preserve")
+            plan = manifest["upload_plan"]
+            self.assertEqual(plan["strategy"], "upload_once_copy_all")
+            self.assertEqual(plan["surface_ids"], [1, 2, 3])
+            self.assertEqual(plan["source_surface_id"], 1)
+            with Image.open(plan["file"]) as upload:
+                self.assertEqual(upload.size, (120, 40))
+                self.assertEqual(upload.convert("RGBA").getpixel((0, 0)), (255, 165, 0, 255))
+            with Image.open(manifest["surfaces"][0]["file"]) as square:
+                self.assertEqual(square.getpixel((0, 0)), (0, 0, 128, 255))
+            self.assertEqual(hashlib.sha256(Path(plan["file"]).read_bytes()).hexdigest(), plan["sha256"])
+            self.assertEqual(len(list((Path(directory) / "out").glob("upload-*.png"))), 1)
+
+    def test_shared_background_cleanup_does_not_remove_white_opened_by_a_face_crop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            image = Image.new("RGB", (120, 60), "white")
+            ImageDraw.Draw(image).rectangle((20, 10, 99, 49), fill="teal")
+            ImageDraw.Draw(image).rectangle((30, 20, 89, 39), fill="white")
+            image.save(source)
+            manifest = art.prepare(source, {"data": [flat(1, 40, 60)]}, Path(directory) / "out")
+            with Image.open(manifest["surfaces"][0]["file"]) as output:
+                self.assertEqual(output.getpixel((0, 30))[3], 255)  # Enclosed white stays white.
+                self.assertEqual(output.getpixel((0, 0))[3], 0)  # Original edge white is removed.
+
+    def test_upload_limit_keeps_opaque_dimensions_and_preserves_alpha_for_transparent_artwork(self):
+        size_limit = 47_000
+        with tempfile.TemporaryDirectory() as directory, patch.object(art, "UPLOAD_MAX_BYTES", size_limit):
+            root = Path(directory)
+            noise = random.Random(42).randbytes(160 * 120 * 3)
+            opaque = Image.frombytes("RGB", (160, 120), noise).convert("RGBA")
+            transparent = opaque.copy()
+            transparent.putalpha(128)
+            template = {"data": [flat(1, 160, 120)]}
+            for name, image, suffix in (("opaque", opaque, ".jpg"), ("transparent", transparent, ".png")):
+                file = root / f"{name}.png"
+                image.save(file)
+                plan = art.prepare(file, template, root / name, background="preserve")["upload_plan"]
+                upload = Path(plan["file"])
+                self.assertEqual(upload.suffix, suffix)
+                self.assertIn(plan["sha256"][:16], upload.stem)
+                self.assertLessEqual(upload.stat().st_size, size_limit)
+                with Image.open(upload) as result:
+                    if name == "opaque":
+                        self.assertEqual(result.size, image.size)
+                        self.assertFalse(plan["resized_for_upload"])
+                    else:
+                        self.assertLess(result.width, image.width)
+                        self.assertTrue(plan["resized_for_upload"])
+                        self.assertEqual(result.getchannel("A").getextrema(), (128, 128))
 
 
 if __name__ == "__main__":

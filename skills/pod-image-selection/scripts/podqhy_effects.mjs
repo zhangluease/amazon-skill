@@ -6,7 +6,26 @@ import crypto from 'node:crypto';
 
 const LIST = '#editViewList1 li[data-vid]';
 const CANVAS = '#editViewBox1 canvas';
+const FLATS = '#editFlatList1 li[data-fid]';
 function failure(code) { return Object.assign(new Error(code), { code }); }
+
+async function readFlats(api, { editableOnly = false } = {}) {
+  return api.locator(FLATS + (editableOnly ? '[data-edit="1"]' : '')).evaluateAll(items => items.map(item => ({
+    id: item.getAttribute('data-fid'), active: item.classList.contains('active'),
+    thumbnail: item.querySelector('img')?.getAttribute('src') || ''
+  })));
+}
+
+async function readDesignFingerprint(tab) {
+  const flats = await readFlats(tab.playwright || tab);
+  if (!flats.length || new Set(flats.map(flat => flat.id)).size !== flats.length || flats.some(flat =>
+    !/^[1-9]\d*$/.test(flat.id) || !/^data:image\/svg\+xml(?:;base64)?,.+/.test(flat.thumbnail))) {
+    throw failure('DESIGN_SURFACE_PREVIEWS_UNAVAILABLE');
+  }
+  const previews = flats.map(flat => [flat.id, flat.thumbnail]).sort(([a], [b]) => a.localeCompare(b));
+  return crypto.createHash('sha256').update(JSON.stringify(previews)).digest('hex');
+}
+
 function viewIds(views) {
   if (!Array.isArray(views?.data) || !views.data.length) throw failure('EFFECT_VIEWS_REQUIRED');
   const ids = views.data.map(view => String(view.id));
@@ -78,7 +97,7 @@ function escape(value) {
 }
 function gallery(manifest) {
   const cards = manifest.effects.map(effect => `<figure><a href="${effect.file}" target="_blank"><img src="${effect.file}" alt="${escape(effect.name)}"></a><figcaption>${effect.index}. ${escape(effect.name)} · ${effect.width} × ${effect.height} <a href="${effect.file}" download>下载</a></figcaption></figure>`).join('\n');
-  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>产品原始效果图</title><style>body{font:16px system-ui;margin:24px;background:#f4f5f7;color:#222}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}figure{margin:0;padding:12px;background:white;border-radius:8px}img{display:block;width:100%;height:auto}figcaption{padding-top:10px}a{color:#245dab}</style><h1>原始效果图 ${manifest.exported_count}/${manifest.expected_count}</h1><p>${manifest.status === 'complete' ? '全部视角已导出，接下来按用户宽高比统一处理。' : '导出未完成，仍有缺失视角。'}</p><main>${cards}</main></html>`;
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>产品原始效果图</title><style>body{font:16px system-ui;margin:24px;background:#f4f5f7;color:#222}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}figure{margin:0;padding:12px;background:white;border-radius:8px}img{display:block;width:100%;height:auto}figcaption{padding-top:10px}a{color:#245dab}</style><h1>原始效果图 ${manifest.exported_count}/${manifest.expected_count}</h1><p>${manifest.status === 'complete' ? '全部视角已导出，接下来按用户宽高比统一处理。' : '导出未通过校验，请查看清单中的问题。'}</p><main>${cards}</main></html>`;
 }
 
 async function exportEffects(tab, { viewList, out, renderWaitMs = 300 } = {}) {
@@ -92,8 +111,11 @@ async function exportEffects(tab, { viewList, out, renderWaitMs = 300 } = {}) {
   const actual = listed.map(item => item.id);
   if (actual.length !== expected.length || new Set(actual).size !== actual.length
       || actual.some(id => !expected.includes(id))) throw failure('EFFECT_VIEW_LIST_MISMATCH');
+  const sourceUrl = await tab.url();
+  const designFingerprint = await readDesignFingerprint(tab);
   await fs.mkdir(out, { recursive: true });
-  const manifest = { stage: 'capture', status: 'incomplete', source_url: await tab.url(),
+  const manifest = { stage: 'capture', status: 'incomplete', source_url: sourceUrl,
+    design_fingerprint: designFingerprint,
     expected_count: expected.length, expected_view_ids: actual,
     exported_count: 0, missing_view_ids: actual.slice(), effects: [], errors: [] };
   const original = listed.find(item => item.active)?.id;
@@ -135,7 +157,13 @@ async function exportEffects(tab, { viewList, out, renderWaitMs = 300 } = {}) {
     }
     manifest.exported_count = manifest.effects.length;
     manifest.missing_view_ids = actual.filter(id => !manifest.effects.some(effect => effect.view_id === id));
-    if (!manifest.missing_view_ids.length) manifest.status = 'complete';
+    try {
+      if (await tab.url() !== manifest.source_url || await readDesignFingerprint(tab) !== designFingerprint)
+        manifest.errors.push({ code: 'EFFECT_DESIGN_CHANGED_DURING_EXPORT' });
+    } catch {
+      manifest.errors.push({ code: 'EFFECT_DESIGN_COULD_NOT_BE_VERIFIED' });
+    }
+    if (!manifest.missing_view_ids.length && !manifest.errors.length) manifest.status = 'complete';
     await fs.writeFile(path.join(out, 'effects-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
     await fs.writeFile(path.join(out, 'effects.html'), gallery(manifest));
   }
@@ -143,4 +171,4 @@ async function exportEffects(tab, { viewList, out, renderWaitMs = 300 } = {}) {
   return manifest;
 }
 
-export { exportEffects, viewIds, dimensions };
+export { exportEffects, viewIds, dimensions, readFlats, readDesignFingerprint };

@@ -32,7 +32,7 @@ def source_effects(manifest_file):
     effects = data.get("effects", [])
     expected = data.get("expected_view_ids", [])
     actual = [str(effect.get("view_id", "")) for effect in effects]
-    if (data.get("status") != "complete" or data.get("missing_view_ids") or not effects
+    if (data.get("status") != "complete" or data.get("missing_view_ids") or data.get("errors") or not effects
             or data.get("expected_count") != len(effects)
             or data.get("exported_count") != len(effects) or len(expected) != len(effects)
             or len(set(actual)) != len(actual) or set(map(str, expected)) != set(actual)
@@ -40,7 +40,11 @@ def source_effects(manifest_file):
         raise ValueError("原始效果图未完整导出，不能生成全套最终图片")
     sources = []
     for effect in effects:
-        source = manifest_file.parent / effect["file"]
+        source = (manifest_file.parent / effect["file"]).resolve()
+        if not source.is_relative_to(manifest_file.parent):
+            raise ValueError("原始效果图不在清单目录中")
+        if effect.get("sha256") and hashlib.sha256(source.read_bytes()).hexdigest() != effect["sha256"]:
+            raise ValueError(f"原始效果图已变化，请重新导出视角 {effect['view_id']}")
         with Image.open(source) as image, ImageOps.exif_transpose(image) as oriented:
             width, height = oriented.size
         sources.append((effect, source, width, height))
@@ -56,7 +60,7 @@ def gallery(manifest):
                      f'<figcaption>{effect["index"]}. {name} · {effect["width"]} × {effect["height"]} '
                      f'<a href="{file}" download>下载</a></figcaption></figure>')
     ratio = manifest["output_aspect_ratio"]
-    status = "全部最终图片已生成，等待确认效果。" if manifest["status"] == "complete" else "处理未完成，仍有缺失图片。"
+    status = "全部最终图片已生成。" if manifest["status"] == "complete" else "处理未完成，仍有缺失图片。"
     return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             '<title>最终产品效果图</title><style>body{font:16px system-ui;margin:24px;background:#f4f5f7;color:#222}'
@@ -84,6 +88,7 @@ def finalize(manifest_file, ratio, out):
     out.mkdir(parents=True, exist_ok=True)
     result = {"stage": "final", "status": "incomplete", "source_url": data.get("source_url"),
               "source_manifest": str(Path(manifest_file).resolve()), "requested_ratio": str(ratio),
+              "design_fingerprint": data.get("design_fingerprint"),
               "output_aspect_ratio": f"{p}:{q}", "width": width, "height": height,
               "layout": "contain_original_with_white_padding", "background": "#FFFFFF",
               "expected_count": len(sources), "expected_view_ids": [str(e[0]["view_id"]) for e in sources],

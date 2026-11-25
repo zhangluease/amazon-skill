@@ -1,4 +1,4 @@
 interface:
   display_name: "POD 选图"
-  short_description: "竞品选图、花瓣以图搜图、按实际设计面处理素材并制作 PODQHY 成衣预览"
+  short_description: "竞品选图、花瓣素材去水印、单次上传复制全部设计面并保存 PODQHY 设计"
   default_prompt: "请使用 $pod-image-selection，关键词：pet house。"

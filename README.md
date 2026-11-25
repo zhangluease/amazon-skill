@@ -70,7 +70,7 @@ node skills/amazon-jp-competitor-tracking/scripts/competitor.cjs collect \
 
 将完整文件夹交给Agent安装即可。入口自动处理依赖和会话；需要真人登录时按提示操作。详见[竞品查询](skills/pod-image-selection/references/sellersprite-access.md)、[花瓣初筛](skills/pod-image-selection/references/huaban-workflow.md)和[环境与人工接管](skills/pod-image-selection/references/environment.md)。完整取数与自动授权的真实账号流程仍在试用验证中。
 
-选图后可继续制作 [PODQHY 成衣预览](skills/pod-image-selection/references/podqhy-workflow.md)：收集产品编号/SKU 或商品链接时一并记录最终出图宽高比，已有信息直接沿用；未指定产品时主动询问并等待选择，再通过接口读取该产品全部设计面尺寸，用 Pillow 适配图片、检测空白与透明度、处理透明底，再放入产品检查前后效果。P16900 仅为测试案例，不作为默认产品。当前模板和原图读取使用 HTTP，带登录态的上传和效果预览复用可见页面；需要登录时交给用户完成。先导出实际列表中全部视角的纯效果图，排除缩略图栏、放大按钮等控件；最后增加统一比例处理环节，将整套图片按用户比例生成到 `final-effects/`，附完整图库 `effects.html` 和数量清单，再等待用户确认效果。
+选图后可继续制作 [PODQHY 效果图并保存设计](skills/pod-image-selection/references/podqhy-workflow.md)：收集产品编号/SKU 或商品链接时一并记录最终出图宽高比，已有信息直接沿用；未指定产品时主动询问并等待选择。花瓣下载图先检查水印，必要时用 Python 局部修复并复核，再通过接口读取实际产品全部设计面尺寸，用 Pillow 适配图片、检测空白与透明度、处理透明底。同一图案只上传一次，使用“复制至 → 所有”后逐面核对铺满及裁切，不按面重复上传。P16900 仅为测试案例，不作为默认产品。模板和原图读取使用 HTTP，上传、复制和保存复用已登录页面。导出实际列表全部视角的纯效果图，排除页面控件，再按用户比例生成 `final-effects/` 完整图库；处理齐全后点击顶部“保存”，填写与图片相符的名称并“保存设计”，核验成功后交付效果图及保存记录。用户要求只预览时不保存，不加入购物车或下单。
 
 ## 日本站关键词查找
 

@@ -15,14 +15,16 @@ async function fixture(t, count, { overlay = false, identical = false } = {}) {
   t.after(async () => { await closeOwnedBrowser(browser); await fs.rm(out, { recursive: true, force: true }); });
   const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const viewList = { data: Array.from({ length: count }, (_, i) => ({ id: 101 + i, name: '视角 ' + (i + 1) })) };
+  const thumbnail = 'data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22/%3E';
   await page.setContent(`<style>body{margin:0}#editViewBox1{position:absolute;left:20px;top:20px}canvas{width:100px;height:100px}#editViewList1{position:absolute;left:500px;top:20px}#bad-ui{position:absolute;left:20px;top:20px;width:40px;height:40px;background:red}</style>
     <div id="editViewBox1"><canvas width="100" height="100"></canvas></div>
+    <ul id="editFlatList1" style="display:none"><li data-fid="201" data-edit="1"><img src="${thumbnail}"></li></ul>
     ${overlay ? '<button id="bad-ui">UI</button>' : ''}
     <ul id="editViewList1">${viewList.data.map((v, i) => `<li data-vid="${v.id}" class="${i === 0 ? 'active' : ''}">${v.name}</li>`).join('')}</ul>
     <script>const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
     function paint(id){ctx.fillStyle='rgb('+(30+(${identical ? 0 : 'id-101'})*9)+',80,150)';ctx.fillRect(0,0,100,100);}
     paint(101);
-    document.querySelectorAll('li').forEach(li=>li.onclick=()=>{document.querySelectorAll('li').forEach(x=>x.classList.remove('active'));li.classList.add('active');setTimeout(()=>paint(Number(li.dataset.vid)),35);});</script>`);
+    document.querySelectorAll('[data-vid]').forEach(li=>li.onclick=()=>{document.querySelectorAll('[data-vid]').forEach(x=>x.classList.remove('active'));li.classList.add('active');setTimeout(()=>paint(Number(li.dataset.vid)),35);});</script>`);
   return { page, browser, out, viewList };
 }
 
@@ -120,4 +122,19 @@ test('one failed view does not discard other views or report a complete delivery
     assert.deepEqual(manifest.missing_view_ids, ['102']);
     assert.equal(await f.page.locator('li.active').getAttribute('data-vid'), '101');
     assert.equal(f.browser.isConnected(), true);
+  });
+
+test('all images captured during an artwork change cannot be finalized as one design',
+  { skip: !runtime.playwright, timeout: 10000 }, async t => {
+    const f = await fixture(t, 2);
+    const tab = cuaAdapter(f.page, async options => {
+      await f.page.locator('#editFlatList1 img').evaluate(img => { img.src += '%20'; });
+      return f.page.screenshot({ ...options, type: 'jpeg' });
+    });
+    await assert.rejects(exportEffects(tab, { viewList: f.viewList, out: f.out, renderWaitMs: 100 }),
+      { code: 'EFFECT_EXPORT_INCOMPLETE' });
+    const manifest = JSON.parse(await fs.readFile(path.join(f.out, 'effects-manifest.json')));
+    assert.equal(manifest.exported_count, 2);
+    assert.equal(manifest.status, 'incomplete');
+    assert.deepEqual(manifest.errors, [{ code: 'EFFECT_DESIGN_CHANGED_DURING_EXPORT' }]);
   });

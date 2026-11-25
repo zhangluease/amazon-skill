@@ -57,10 +57,13 @@ class FinalEffectsLayoutTests(unittest.TestCase):
 
     def test_final_portrait_images_preserve_every_original_pixel_and_view(self):
         source, data = self.source()
+        data['design_fingerprint'] = 'a' * 64
+        source.write_text(json.dumps(data))
         before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in source.parent.iterdir()}
         result = layout.finalize(source, '4:5', self.root / 'final')
         self.assertEqual((result['stage'], result['status'], result['exported_count']), ('final', 'complete', 2))
         self.assertEqual(result['output_aspect_ratio'], '4:5')
+        self.assertEqual(result['design_fingerprint'], data['design_fingerprint'])
         for effect in result['effects']:
             with Image.open(self.root / 'final' / effect['file']) as output:
                 self.assertEqual(output.size, (100, 125))
@@ -72,6 +75,16 @@ class FinalEffectsLayoutTests(unittest.TestCase):
         html = (self.root / 'final/effects.html').read_text()
         self.assertEqual(html.count('<figure>'), 2)
         self.assertIn('宽:高 4:5', html)
+
+    def test_capture_sha256_rejects_an_image_replaced_before_ratio_processing(self):
+        source, data = self.source()
+        effect = data['effects'][0]
+        image = source.parent / effect['file']
+        effect['sha256'] = hashlib.sha256(image.read_bytes()).hexdigest()
+        source.write_text(json.dumps(data))
+        Image.new('RGB', (100, 100), 'black').save(image)
+        with self.assertRaisesRegex(ValueError, '重新导出视角 101'):
+            layout.finalize(source, '4:5', self.root / 'final')
 
     def test_wide_ratio_gives_every_view_the_same_exact_dimensions(self):
         source, _ = self.source(sizes=((100, 70), (80, 100)))
