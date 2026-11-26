@@ -10,7 +10,7 @@ import re
 import shutil
 import sys
 
-from competitor_core import (AUTH_ERRORS, STOP_ERRORS, ORIGIN, JST, ASIN_RE, OFFER_FIELDS,
+from competitor_core import (AUTH_ERRORS, STOP_ERRORS, RATE_LIMIT_ERRORS, ORIGIN, JST, ASIN_RE, OFFER_FIELDS,
                              BROWSER_OFFER_SOURCE, CHANGE_SCHEMA, ApiError, Client, load_session,
                              read_inputs, parse_asin, window, history_window, checksum, scalar,
                              number, purchase_threshold, product_row, safe_image, write_json,
@@ -387,6 +387,7 @@ def collect(asins, client, scope, output, *, now=None, resume=False, amazon=None
     browser_offers = sum(any(str(value).startswith(BROWSER_OFFER_SOURCE) for value in row['field_sources'].values())
                          for row in results)
     return {'status': 'resource_busy' if stopped == 'PROVIDER_BUSY' else
+            'rate_limited' if stopped in RATE_LIMIT_ERRORS else
             'authorization_pending' if stopped == 'PROVIDER_AUTHORIZATION_PENDING' else
             'verification_required' if stopped in ('ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING') else
             'authorization_required' if stopped in AUTH_ERRORS else
@@ -481,9 +482,10 @@ def main(argv=None):
             result['request_trace'] = api.request_trace
         print(json.dumps(result, ensure_ascii=False))
         return 3 if result['status'] == 'authorization_required' else 2 if result['status'] in (
-            'verification_required', 'authorization_pending', 'resource_busy') else 0
+            'verification_required', 'authorization_pending', 'rate_limited', 'resource_busy') else 0
     except ApiError as error:
         status = ('authorization_required' if error.code in AUTH_ERRORS else
+                  'rate_limited' if error.code in RATE_LIMIT_ERRORS else
                   'verification_required' if error.code in ('ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING') else
                   'authorization_pending' if error.code == 'PROVIDER_AUTHORIZATION_PENDING' else
                   'resource_busy' if error.code == 'PROVIDER_BUSY' else 'failed')

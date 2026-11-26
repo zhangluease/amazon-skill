@@ -1,6 +1,7 @@
 """Shared input, session validation and fixed SellerSprite HTTP transport (stdlib only)."""
 import csv
 import datetime as dt
+from email.utils import parsedate_to_datetime
 import io
 import json
 import math
@@ -25,7 +26,8 @@ AUTH_ERRORS = {'MISSING_HTTP_SESSION', 'INVALID_HTTP_SESSION', 'HTTP_401',
                'ERR_NEED_RENEWAL_AUTHORIZED', 'PLUGIN_LOGIN_REQUIRED'}
 
 
-STOP_ERRORS = {'HTTP_429', 'HTTP_403', 'ERR_GLOBAL_403', 'ERR_FREQUENT', 'ERR_VERSION_NEED_UPGRADE',
+RATE_LIMIT_ERRORS = {'HTTP_429', 'ERR_FREQUENT', 'PROVIDER_RATE_LIMIT_PENDING'}
+STOP_ERRORS = RATE_LIMIT_ERRORS | {'HTTP_403', 'ERR_GLOBAL_403', 'ERR_VERSION_NEED_UPGRADE',
                'ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING', 'PROVIDER_AUTHORIZATION_PENDING',
                'PROVIDER_BUSY'}
 
@@ -56,6 +58,17 @@ class ApiError(Exception):
     def __init__(self, code):
         self.code = code if isinstance(code, str) and re.fullmatch(r'[A-Z0-9_]{1,80}', code) else 'API_FAILED'
         super().__init__(self.code)
+
+
+def retry_after_seconds(value):
+    try:
+        if value and re.fullmatch(r'\d{1,10}', value.strip()):
+            return int(value)
+        when = parsedate_to_datetime(value)
+        if when.tzinfo is not None:
+            return max(0, when.timestamp() - time.time())
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -247,7 +260,10 @@ class Client:
             self.session = load_session(self.session_file)
 
     def _pause_on_error(self, error):
-        if error.code == 'ERR_ROBOT_CHECK':
+        if error.code in ('HTTP_429', 'ERR_FREQUENT'):
+            delay = getattr(error, 'retry_after', None)
+            self.gate.pause(error.code, 'rate_limit', delay=1800 if delay is None else max(1, delay))
+        elif error.code == 'ERR_ROBOT_CHECK':
             self.gate.pause(error.code, 'verification')
         elif error.code in AUTH_ERRORS:
             self.gate.pause(error.code, 'authorization')
@@ -275,7 +291,11 @@ class Client:
                 data = response.read(8 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as error:
             trace['status'] = 'HTTP_' + str(error.code)
-            raise ApiError('HTTP_' + str(error.code)) from None
+            failure = ApiError(trace['status'])
+            if error.code == 429 and error.headers:
+                failure.retry_after = retry_after_seconds(error.headers.get('Retry-After'))
+            error.close()
+            raise failure from None
         except (OSError, TimeoutError):
             trace['status'] = 'NETWORK_FAILED'
             raise ApiError('NETWORK_FAILED') from None

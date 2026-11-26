@@ -3,7 +3,7 @@ import datetime as dt
 import json
 from pathlib import Path
 
-from competitor_core import (AUTH_ERRORS, STOP_ERRORS, ORIGIN, JST, CHANGE_SCHEMA,
+from competitor_core import (AUTH_ERRORS, STOP_ERRORS, RATE_LIMIT_ERRORS, ORIGIN, JST, CHANGE_SCHEMA,
                              ApiError, scalar, product_row, write_json, validate_output_directory)
 from competitor_report import save_listing_changes
 
@@ -112,6 +112,7 @@ def collect_listing_changes(asins, client, scope, output, *, resume=False):
         save_listing_changes(output, results, asins, scope, stopped)
     usable = sum(row['media_change_observed'] is not None for row in results)
     return {'status': 'resource_busy' if stopped == 'PROVIDER_BUSY' else
+            'rate_limited' if stopped in RATE_LIMIT_ERRORS else
             'authorization_pending' if stopped == 'PROVIDER_AUTHORIZATION_PENDING' else
             'verification_required' if stopped in ('ERR_ROBOT_CHECK', 'PROVIDER_VERIFICATION_PENDING') else
             'authorization_required' if stopped in AUTH_ERRORS else

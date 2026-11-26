@@ -27,6 +27,7 @@ changes 只查图片/视频修改图标，默认近七个日本自然日期；co
 支持 --input 清单、--as-of 日期、--interval 1、--state-dir 专用会话目录、--extension-dir 扩展程序目录。
 collect 默认 --amazon-browser headless；设为 off 仅走 HTTP。确认页会暂停后续 Amazon 采集，使用 amazon-offer headed 等待用户验证恢复。
 会话有效时直接调用 HTTP；鉴权失效时最多 API 续登一次，普通缺项只核验一次会话，必要时最多扫码一次。每轮使用新的输出目录。
+collect 和 changes 支持 --no-browser-login，API 续登仍运行，需要用户授权时记录状态并结束本轮采集。
 check 仅检查本机。prepare 启动测试 Chromium、准备并试载卖家精灵原扩展；--feishu 同时要求飞书 CLI 与用户授权，prepare 缺 CLI 时安装固定版本。
 `;
 
@@ -40,6 +41,7 @@ function argumentsFor(argv) {
     if (!args[i].startsWith('--')) { options.asins.push(args[i]); continue; }
     const key = args[i].slice(2);
     if (key === 'all-history' && command === 'changes') { options.allHistory = true; continue; }
+    if (key === 'no-browser-login' && ['collect', 'changes'].includes(command)) { options.noBrowserLogin = true; continue; }
     if (key === 'feishu' && ['check', 'prepare'].includes(command)) { options.feishu = true; continue; }
     if (!['out', 'input', 'as-of', 'state-dir', 'session-file', 'extension-dir', 'authorization-timeout', 'interval', 'amazon-browser', 'login-asin'].includes(key)
       || !args[i + 1] || args[i + 1].startsWith('--')) throw fail('INVALID_ARGUMENT');
@@ -92,7 +94,7 @@ async function run(options, dependencies = {}) {
     } catch (error) {
       let r;
       try { r = JSON.parse(error.stdout || error.stderr); } catch { throw fail('HTTP_WORKER_FAILED'); }
-      if (['authorization_required', 'verification_required', 'authorization_pending', 'resource_busy'].includes(r.status)) return r;
+      if (['authorization_required', 'verification_required', 'authorization_pending', 'rate_limited', 'resource_busy'].includes(r.status)) return r;
       throw fail(r.category || 'HTTP_WORKER_FAILED');
     }
   };
@@ -179,17 +181,19 @@ async function run(options, dependencies = {}) {
       return value;
     };
     let result = await query();
-    if (result.status === 'authorization_required') {
+    if (result.status === 'authorization_required' && !options.noBrowserLogin) {
       await login(result.category || 'authorization_required');
       const checked = await verify();
       result = checked.status === 'session_verified' ? await query(true)
         : { ...result, status: checked.status, category: checked.category, session_check: checked };
     }
-    if (result.status === 'verification_required') {
+    if (result.status === 'authorization_required' && options.noBrowserLogin) {
+      await publish('requires_user_login', { reason: result.category });
+    } else if (result.status === 'verification_required') {
       await publish('requires_user_verification', { reason: result.category });
     } else if (result.status === 'authorization_pending') {
       await publish('waiting_for_shared_authorization', { reason: result.category });
-    } else if (!handoffs) await publish('not_required', { reason: 'http_session_valid_or_non_auth_api_error' });
+    } else if (!handoffs && !options.noBrowserLogin) await publish('not_required', { reason: 'http_session_valid_or_non_auth_api_error' });
     const summary = { ...result, authorization_handoffs: handoffs,
       ...(apiAuthEvents.length ? { api_authorization: { events: apiAuthEvents, credentials_included: false } } : {}),
       ...(result.category ? guidance(result.category) : {}) };
@@ -209,7 +213,7 @@ async function main(argv = process.argv.slice(2)) {
   try {
     const result = await run(argumentsFor(argv));
     process.stdout.write(result.status === 'help' ? result.usage : JSON.stringify(result) + '\n');
-    if (['authorization_required', 'verification_required', 'authorization_pending', 'resource_busy', 'failed', 'needs_setup'].includes(result.status) || result.usable_products === 0) process.exitCode = 2;
+    if (['authorization_required', 'verification_required', 'authorization_pending', 'rate_limited', 'resource_busy', 'failed', 'needs_setup'].includes(result.status) || result.usable_products === 0) process.exitCode = 2;
   } catch (error) {
     process.stderr.write(JSON.stringify({ status: 'failed', category: errorCode(error), ...guidance(errorCode(error)) }) + '\n');
     process.exitCode = 2;

@@ -41,6 +41,7 @@ const GUIDANCE = {
   AMAZON_HUMAN_VERIFICATION_REQUIRED: ['Amazon 要求验证，已暂停后续 Amazon 请求。', '使用 amazon-offer ASIN --amazon-browser headed --out 新目录，由用户完成验证并等待采集核验成功。'],
   PROVIDER_VERIFICATION_PENDING: ['其他任务已因验证拒绝暂停共享采集。', '处理同一专用会话后运行 verify-session；不要启动多个登录或反复请求。'],
   PROVIDER_AUTHORIZATION_PENDING: ['共享采集正在等待账号授权恢复。', '由一个任务完成 login 并通过 API 核验，其他任务随后续跑原 job_id。'],
+  PROVIDER_RATE_LIMIT_PENDING: ['卖家精灵共享冷却尚未结束。', '按报告的 retry_at 等待后续跑原任务。'],
   PROVIDER_BUSY: ['另一个任务正在使用共享采集资源。', '等待该任务释放后续跑原 job_id，不重新规划同一批记录。'],
   HTTP_403: ['数据接口拒绝访问。', '检查账号权限或访问状态，已有结果仍保留。'],
   HTTP_429: ['请求受到限流。', '稍后用新目录查询，可增大 --interval。'],

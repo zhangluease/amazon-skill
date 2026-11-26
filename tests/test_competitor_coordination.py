@@ -1,9 +1,12 @@
 """Real process locks and queue fencing, with all vendor/Feishu traffic replaced offline."""
 import copy
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
+import json
 import multiprocessing
 import os
 import time
+from urllib.error import HTTPError
 from pathlib import Path
 import queue as queue_module
 import sys
@@ -18,7 +21,8 @@ from competitor_client import normalize, normalize_changes
 from competitor_coordination import WorkQueue, ProviderGate, FileMutex
 from competitor_report import save_report
 from feishu_plan import create_plan
-from feishu_sync import plan, work
+from feishu_schedule import build_schedule, evenly_spaced_days, weekly_frequency
+from feishu_sync import nightly, plan, work
 from feishu_cli import FeishuClient
 sys.path.pop(0)
 from test_competitor_session import SESSION, COMPLETE, PRODUCT, Opener, ok
@@ -265,6 +269,139 @@ class CoordinationTests(Fixture):
             self.assertEqual([row['record_id'] for row in claim.row['records']], ['rec0'])
         finally:
             claim.close()
+
+    def test_schedule_balances_load_and_keeps_mixed_frequencies_independent(self):
+        rows = rows_for([f'B000000{i:03}' for i in range(16)] + [A, B, C])
+        for i, row in enumerate(rows):
+            row.update({'分组': f'Group {i // 2}' if i < 16 else 'Mixed', '抓取频率': ['一周两次']})
+        rows[16]['抓取频率'] = ['每天']
+        rows[18]['抓取频率'] = None
+        day = date(2026, 11, 23)
+
+        def build(rows, prior=None):
+            planned = create_plan(rows, URL, columns=['ASIN', '标题'])
+            return build_schedule(rows, planned, day, prior)
+
+        due, report = build(rows)
+        self.assertEqual(report['batches']['7:group:Mixed']['weekdays'], list(range(7)))
+        twice = report['batches']['2:group:Mixed']['weekdays']
+        self.assertEqual(len(twice), 2)
+        self.assertIn(twice[1] - twice[0], (3, 4))
+        self.assertEqual(report['invalid_frequency_groups'][0]['record_ids'], ['rec18'])
+        loads = [day['unique_asins'] for day in report['daily']]
+        self.assertLessEqual(max(loads) - min(loads), 2)
+        for i in range(0, 16, 2):
+            self.assertEqual(rows[i] in due, rows[i + 1] in due)
+        added = dict(rows[0], record_id='recAdded', ASIN='B000000999', 分组='New')
+        _, after = build([added] + list(reversed(rows)), report['batches'])
+        self.assertEqual({key: item['weekdays'] for key, item in report['batches'].items()},
+                         {key: after['batches'][key]['weekdays'] for key in report['batches']})
+        self.assertEqual([weekly_frequency([label]) for label in ('每日', '一周一次', '每周３次', '一周七次')], [7, 1, 3, 7])
+        for frequency in range(1, 8):
+            for days in evenly_spaced_days(frequency):
+                gaps = [next_day - first for first, next_day in zip(days, days[1:] + (days[0] + 7,))]
+                self.assertEqual(len(days), frequency)
+                self.assertLessEqual(max(gaps) - min(gaps), 1)
+
+    def test_scheduled_preview_and_daily_job_keep_the_four_records_together(self):
+        rows = rows_for([A, B, C, 'B094MLJ8CM', A, 'B0F284QTLM'])
+        for row in rows[:4]:
+            row.update({'分组': 'BBT E31', '抓取频率': ['一周两次']})
+        rows[3]['标题'] = 'Existing'
+        rows[4].update({'分组': 'BBT E31', '抓取频率': ['每天']})
+        rows[5].update({'分组': 'Other', '抓取频率': ['一周一次']})
+        day = date(2026, 11, 26)
+        remote = Remote(rows)
+        client = remote.client(self.root)
+        client.fields = lambda _: SCHEMA + [{'id': 'fldFrequency', 'name': '抓取频率', 'type': 'select'}]
+
+        preview = plan(client, self.queue, URL, self.root / 'preview', scheduled=True, preview=True, schedule_day=day)
+        self.assertEqual((preview['status'], preview['scheduled_records'], preview['scheduled_asins']), ('preview', 5, 4))
+        self.assertEqual(self.queue.active_jobs(), [])
+        self.assertFalse((self.queue.root / 'feishu-schedules').exists())
+        first = plan(client, self.queue, URL, self.root / 'run', scheduled=True, schedule_day=day)
+        self.assertEqual((first['scheduled_groups'], first['scheduled_batches'], first['scheduled_records']), (1, 2, 5))
+        result = work(self.queue, first['job_id'], client_factory=remote.client, collector=remote.collect)
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual([r[1] for r in remote.events if r[0] == 'collect'].count(A), 1)
+        self.assertEqual({r[2] for r in remote.events if r[0] == 'write'}, {row['record_id'] for row in rows[:5]})
+        second = plan(client, self.queue, URL, self.root / 'repeat', scheduled=True, schedule_day=day)
+        self.assertTrue(second['reused_scheduled_job'])
+        self.assertEqual(second['job_id'], first['job_id'])
+        schedule = json.loads((self.root / 'run' / 'schedule.json').read_text())
+        self.assertEqual(schedule['batches']['2:group:BBT E31']['records'], 4)
+
+    def test_nightly_stops_on_rate_limit_and_resumes_the_same_day_without_rewriting(self):
+        rows = rows_for([A, B, C])
+        for row in rows:
+            row.update({'分组': 'Daily', '抓取频率': ['每天']})
+        remote = Remote(rows)
+        client = remote.client(self.root)
+        client.fields = lambda _: SCHEMA + [{'id': 'fldFrequency', 'name': '抓取频率', 'type': 'select'}]
+        day = date(2026, 11, 26)
+        blocked = True
+
+        def collect(asin, *args):
+            if blocked and asin == B:
+                gate = ProviderGate(self.queue.root)
+                with gate.hold():
+                    gate.pause('HTTP_429', 'rate_limit', delay=1800)
+                return {'status': 'rate_limited', 'category': 'HTTP_429'}
+            return remote.collect(asin, *args)
+
+        def worker(queue, job_id, **options):
+            self.assertTrue(options['unattended'])
+            return work(queue, job_id, client_factory=remote.client, collector=collect, **options)
+
+        one = nightly(client, self.queue, URL, self.root / 'one', concurrency=1, worker=worker, schedule_day=day)
+        self.assertEqual((one['status'], one['job']['verified_records']), ('rate_limited', 1))
+        self.assertEqual(one['job']['item_statuses'], {'done': 1, 'blocked': 1, 'pending': 1})
+        self.assertEqual(len(remote.writes), 1)
+        two = nightly(client, self.queue, URL, self.root / 'two', concurrency=1, worker=worker, schedule_day=day)
+        self.assertEqual((two['status'], two['job']['job_id']), ('rate_limited', one['job']['job_id']))
+        self.assertTrue(two['plan']['reused_scheduled_job'])
+        self.assertEqual(len(remote.writes), 1)
+        blocked = False
+        write_json(self.queue.root / 'provider.json', {'state': 'rate_limit', 'reason': 'HTTP_429', 'retry_at': 0})
+        three = nightly(client, self.queue, URL, self.root / 'three', concurrency=1, worker=worker, schedule_day=day)
+        self.assertEqual((three['status'], three['job']['verified_records'], three['job']['updated_and_verified_records']),
+                         ('complete', 3, 3))
+        self.assertEqual([event[1] for event in remote.events if event[0] == 'collect'], [A, B, C])
+        self.assertEqual(json.loads(Path(three['report']).read_text()), three)
+
+    def test_seller_rate_limit_honors_retry_after_across_workers(self):
+        clock = [1000.0]
+        gate = ProviderGate(self.queue.root, clock=lambda: clock[0], sleep=lambda _: None)
+        limited = Opener([HTTPError('https://e.sellersprite.com', 429, 'Too Many Requests', {'Retry-After': '90'}, None)])
+        client = Client(copy.deepcopy(SESSION), opener=limited, sleep=lambda _: None, gate=gate)
+        with self.assertRaisesRegex(ApiError, '^HTTP_429$'):
+            client.get(PRODUCT, {'asins': A})
+        self.assertEqual(gate.state()['retry_at'], 1090)
+        ok_opener = Opener([ok([COMPLETE])])
+        fresh = Client(copy.deepcopy(SESSION), opener=ok_opener, sleep=lambda _: None,
+                       gate=ProviderGate(self.queue.root, clock=lambda: clock[0], sleep=lambda _: None))
+        with self.assertRaisesRegex(ApiError, 'PROVIDER_RATE_LIMIT_PENDING'):
+            fresh.verify_session()
+        self.assertEqual(ok_opener.requests, [])
+        clock[0] = 1090
+        self.assertEqual(fresh.get(PRODUCT, {'asins': A})[0]['asin'], A)
+
+    def test_nightly_resumes_earlier_scheduled_job_before_fresh_plan(self):
+        row = dict(rows_for([A])[0], 分组='Daily', 抓取频率=['每天'])
+        remote = Remote([row])
+        client = remote.client(self.root)
+        client.fields = lambda _: SCHEMA + [{'id': 'fldFrequency', 'name': '抓取频率', 'type': 'select'}]
+        previous = plan(client, self.queue, URL, self.root / 'previous', scheduled=True, schedule_day=date(2026, 11, 25))
+
+        def worker(queue, job_id, **options):
+            return work(queue, job_id, client_factory=remote.client, collector=remote.collect, **options)
+
+        result = nightly(client, self.queue, URL, self.root / 'today', worker=worker, schedule_day=date(2026, 11, 26))
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['resumed']['job_id'], previous['job_id'])
+        self.assertEqual(result['resumed']['verified_records'], 1)
+        self.assertEqual(result['plan']['new_rows'], 0)
+        self.assertNotEqual(result['job']['job_id'], previous['job_id'])
 
     def test_shared_provider_pause_prevents_requests_until_verified_by_api(self):
         gate = ProviderGate(self.queue.root, sleep=lambda _: None)

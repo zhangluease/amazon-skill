@@ -38,7 +38,10 @@ class Opener:
 
     def open(self, request, timeout):
         self.requests.append(request)
-        return contextlib.closing(io.BytesIO(json.dumps(next(self.responses)).encode()))
+        response = next(self.responses)
+        if isinstance(response, Exception):
+            raise response
+        return contextlib.closing(io.BytesIO(json.dumps(response).encode()))
 
 
 class FakeGate:
@@ -52,7 +55,7 @@ class FakeGate:
     def pace(self, interval):
         pass
 
-    def pause(self, reason, kind):
+    def pause(self, reason, kind, *, delay=None):
         self.pauses.append((reason, kind))
 
     def verified(self):

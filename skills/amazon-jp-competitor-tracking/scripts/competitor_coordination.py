@@ -12,6 +12,9 @@ import uuid
 from competitor_core import ApiError, write_json
 
 MAX_ACTIVE_ASINS = 3
+PROVIDER_PAUSES = {'verification': ('verification_required', 'PROVIDER_VERIFICATION_PENDING'),
+                   'authorization': ('authorization_pending', 'PROVIDER_AUTHORIZATION_PENDING'),
+                   'rate_limit': ('rate_limited', 'PROVIDER_RATE_LIMIT_PENDING')}
 
 
 def coordination_root(supplied=None):
@@ -94,8 +97,14 @@ class ProviderGate:
             return {'state': 'ready'}
         try:
             value = json.loads(path.read_text())
-            if value.get('state') not in ('ready', 'verification', 'authorization'):
+            if value.get('state') not in {'ready', *PROVIDER_PAUSES}:
                 raise ValueError()
+            if value['state'] == 'rate_limit':
+                retry_at = value.get('retry_at')
+                if type(retry_at) not in (int, float):
+                    raise ValueError()
+                if self.clock() >= retry_at:
+                    return {'state': 'ready'}
             return value
         except (ValueError, OSError, AttributeError):
             raise ApiError('INVALID_COORDINATION_STATE') from None
@@ -108,11 +117,10 @@ class ProviderGate:
                 raise ApiError('PROVIDER_BUSY')
             self.depth += 1
             try:
-                if outer and not allow_paused:
+                if outer:
                     state = self.state()['state']
-                    if state != 'ready':
-                        raise ApiError('PROVIDER_VERIFICATION_PENDING' if state == 'verification'
-                                       else 'PROVIDER_AUTHORIZATION_PENDING')
+                    if state != 'ready' and (not allow_paused or state == 'rate_limit'):
+                        raise ApiError(PROVIDER_PAUSES[state][1])
                 yield
             finally:
                 self.depth -= 1
@@ -134,10 +142,12 @@ class ProviderGate:
         except (ValueError, TypeError):
             raise ApiError('INVALID_COORDINATION_STATE') from None
 
-    def pause(self, reason, kind):
+    def pause(self, reason, kind, *, delay=None):
         if not self.depth:
             raise ApiError('PROVIDER_LOCK_REQUIRED')
-        write_json(self.root / 'provider.json', {'state': kind, 'reason': reason, 'at': self.clock()})
+        now = self.clock()
+        write_json(self.root / 'provider.json', {'state': kind, 'reason': reason, 'at': now,
+                                              **({'retry_at': now + delay} if delay is not None else {})})
 
     def verified(self):
         if not self.depth:
@@ -208,6 +218,8 @@ class WorkQueue:
                     error TEXT, PRIMARY KEY(job_id,phase,asin));
                 CREATE TABLE IF NOT EXISTS snapshots(job_id TEXT, asin TEXT, path TEXT NOT NULL,
                     sha256 TEXT NOT NULL, reusable INTEGER NOT NULL, PRIMARY KEY(job_id,asin));
+                CREATE TABLE IF NOT EXISTS scheduled_runs(view_key TEXT, date TEXT, job_id TEXT NOT NULL,
+                    PRIMARY KEY(view_key,date));
             ''')
         try:
             os.chmod(self.path, 0o600)
@@ -227,7 +239,21 @@ class WorkQueue:
         finally:
             db.close()
 
-    def create(self, target, window, output, records, plan, *, join_active_window=False):
+    def scheduled_job(self, schedule, db=None):
+        if db is None:
+            with self.connect() as connection:
+                return self.scheduled_job(schedule, connection)
+        row = db.execute('SELECT job_id FROM scheduled_runs WHERE view_key=? AND date=?', schedule).fetchone()
+        return row['job_id'] if row else None
+
+    def earlier_scheduled_job(self, view_key, day):
+        with self.connect() as db:
+            row = db.execute('SELECT date,job_id FROM scheduled_runs WHERE view_key=? AND date<? AND EXISTS '
+                '(SELECT 1 FROM items WHERE items.job_id=scheduled_runs.job_id '
+                'AND status IN ("pending","running","blocked")) ORDER BY date LIMIT 1', (view_key, day)).fetchone()
+        return dict(row) if row else None
+
+    def create(self, target, window, output, records, plan, *, join_active_window=False, schedule=None):
         job_id = 'job_' + uuid.uuid4().hex
         output = str(Path(output).resolve())
         by_id = {row['record_id']: row for row in records}
@@ -235,6 +261,8 @@ class WorkQueue:
             raise ApiError('DUPLICATE_FEISHU_RECORD_ID')
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            if schedule and (existing := self.scheduled_job(schedule, db)):
+                return existing
             active = db.execute('SELECT * FROM jobs WHERE EXISTS (SELECT 1 FROM items '
                 'WHERE items.job_id=jobs.id AND status IN ("pending","running","blocked"))').fetchall()
             for previous in active:
@@ -249,13 +277,15 @@ class WorkQueue:
                         old_window.get('start') == window.get('start') and
                         old_window.get('end', '')[:10] == window.get('end', '')[:10] and
                         old_window.get('basis') == window.get('basis'))
-                    if old_ids == set(by_id) and same_window:
+                    if not schedule and old_ids == set(by_id) and same_window:
                         return previous['id']
                     error = ApiError('FEISHU_RECORD_ALREADY_QUEUED')
                     error.active_job_id = previous['id']
                     raise error
             db.execute('INSERT INTO jobs VALUES(?,?,?,?)',
                        (job_id, json.dumps(target), json.dumps(window), output))
+            if schedule:
+                db.execute('INSERT INTO scheduled_runs VALUES(?,?,?)', (*schedule, job_id))
             for phase, name in enumerate(('new_rows', 'update_rows')):
                 grouped = {}
                 for row in plan[name]:
@@ -333,8 +363,9 @@ class WorkQueue:
                 (claim.row['job_id'], claim.row['asin'], str(path), hashlib.sha256(path.read_bytes()).hexdigest(), int(reusable)))
 
     def resume(self, job_id):
-        if ProviderGate(self.root).state()['state'] != 'ready':
-            raise ApiError('PROVIDER_VERIFICATION_PENDING')
+        state = ProviderGate(self.root).state()['state']
+        if state != 'ready':
+            raise ApiError(PROVIDER_PAUSES[state][1])
         with self.connect() as db:
             db.execute('UPDATE items SET status="pending",error=NULL WHERE job_id=? AND status="blocked"', (job_id,))
 

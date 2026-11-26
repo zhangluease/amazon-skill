@@ -124,6 +124,23 @@ test('failed authorization records the API cause and renewal attempt without cre
   } finally { await fs.rm(tmp, { recursive: true, force: true }); }
 });
 
+test('unattended collection defers browser login and preserves the API result', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-unattended-'));
+  try {
+    const config = argumentsFor(['collect', valid.asins[0], '--out', path.join(tmp, 'out'),
+      '--state-dir', path.join(tmp, 'state'), '--no-browser-login']);
+    const result = await run(config, deps(async (_, argv) => {
+      if (argv.includes('validate-input')) return { stdout: JSON.stringify(valid) };
+      throw { stdout: JSON.stringify({ status: 'authorization_required', category: 'ERR_NEED_RE_AUTHORIZED',
+        usable_products: 1, api_authorization: { events: [{ action: 'token_signin', status: 'failed' }] } }) };
+    }, async () => assert.fail('Unattended collection opened a login browser')));
+    assert.equal(result.status, 'authorization_required');
+    assert.equal(result.usable_products, 1);
+    assert.equal(result.authorization_handoffs, 0);
+    assert.equal(JSON.parse(await fs.readFile(path.join(config.out, 'authorization.json'))).status, 'requires_user_login');
+  } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+});
+
 test('a login mask remaining after API renewal enters one browser login then resumes', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'competitor-masked-'));
   let queries = 0, logins = 0;
