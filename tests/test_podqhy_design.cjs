@@ -78,10 +78,35 @@ test('empty source and mixed occupied targets stop before copying',
     assert.equal(await f.page.evaluate(() => window.copyClicks), 0);
   });
 
-test('saves with an image description, waits for actual success, writes a receipt, and never resubmits',
+test('saves a mixed-size delivery meeting the 2000 px minimum and never resubmits',
   { skip: !runtime.playwright, timeout: 10000 }, async t => {
     const f = await fixture(t);
+    await f.page.locator('#editViewList1').evaluate(list => {
+      const view = document.createElement('li');
+      view.dataset.vid = '102';
+      list.append(view);
+    });
+    const manifest = { ...f.manifest, minimum_side: 2000, expected_count: 2, exported_count: 2,
+      expected_view_ids: ['101', '102'], requested_ratio: null, output_aspect_ratio: null, effects: [] };
+    async function writeEffect(viewId, width, height, ratio) {
+      const encoded = await f.page.evaluate(([w, h]) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        return canvas.toDataURL('image/png').split(',')[1];
+      }, [width, height]);
+      const bytes = Buffer.from(encoded, 'base64');
+      const file = `effect-${viewId}.png`;
+      await fs.writeFile(path.join(path.dirname(f.effectsManifest), file), bytes);
+      return { view_id: viewId, file, width, height, aspect_ratio: ratio,
+        sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+    }
     const options = { name: '蓝白格纹-宠物窝', effectsManifest: f.effectsManifest, out: f.out };
+    manifest.effects = [await writeEffect('101', 1999, 1999, '1:1'), await writeEffect('102', 2400, 2100, '8:7')];
+    await fs.writeFile(f.effectsManifest, JSON.stringify(manifest));
+    await assert.rejects(saveDesign(f.page, options), { code: 'DESIGN_EFFECTS_INVALID' });
+    manifest.effects[0] = await writeEffect('101', 2000, 2000, '1:1');
+    await fs.writeFile(f.effectsManifest, JSON.stringify(manifest));
     const receipt = await saveDesign(f.page, options);
     assert.equal(receipt.status, 'saved');
     assert.equal(receipt.name, options.name);

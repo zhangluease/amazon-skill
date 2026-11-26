@@ -3,6 +3,7 @@
 
 import argparse
 import datetime as dt
+import hashlib
 import html
 import json
 from pathlib import Path
@@ -16,6 +17,8 @@ import urllib.request
 API = 'https://huaban.com/v3'
 MAX_BYTES = 12 * 1024 * 1024
 API_PATH = re.compile(r'/v3/(?:search/file|pins/\d+(?:/(?:similar|relatedboardsweb|relatedboardsweb-preview))?)')
+LARGE_IMAGE_FIELDS = ('large_image_status', 'large_image_error', 'large_image_width', 'large_image_height',
+                      'large_image_sha256', 'large_image_pin_url')
 
 
 class AccessError(Exception):
@@ -180,6 +183,16 @@ def append_unique(target, values):
             target.append(value)
 
 
+def merge_large_image(target, other):
+    old, new = target.get('large_image_status'), other.get('large_image_status')
+    if old == 'available' or not new or (old and new != 'available'):
+        return
+    for field in (*LARGE_IMAGE_FIELDS, 'image_url', 'local_image'):
+        target.pop(field, None)
+        if field in other:
+            target[field] = other[field]
+
+
 def normalize(documents, via='unknown', query='', style='', parent_pin_id=None):
     candidates, aliases, dropped = [], {}, set()
     total_seen = 0
@@ -190,7 +203,13 @@ def normalize(documents, via='unknown', query='', style='', parent_pin_id=None):
             total_seen += 1
             pin_id = positive_id(pin['pin_id'])
             file = pin.get('file') if isinstance(pin.get('file'), dict) else {}
-            image_url = safe_url(pin.get('image_url') or file.get('url'), image=True)
+            viewer_status = pin.get('large_image_status')
+            if viewer_status == 'unavailable':
+                image_url = ''
+            elif viewer_status == 'available':
+                image_url = safe_url(pin.get('image_url'), image=True)
+            else:
+                image_url = safe_url(pin.get('image_url') or file.get('url'), image=True)
             file_key = pin.get('file_key') or file.get('key') or file_key_from_url(image_url)
             file_id = pin.get('file_id')
             board_id = pin.get('board_id') or (board or {}).get('board_id')
@@ -217,8 +236,8 @@ def normalize(documents, via='unknown', query='', style='', parent_pin_id=None):
                         product_fit=pin.get('product_fit') or '',
                         limitations=pin.get('limitations') or '',
                         rights_status=pin.get('rights_status') or '灵感参考，授权待核实')
-            for key in ('thumbnail_width', 'thumbnail_height', 'file_material', 'local_image'):
-                if key in pin:
+            for key in ('thumbnail_width', 'thumbnail_height', 'file_material', 'local_image', *LARGE_IMAGE_FIELDS):
+                if key in pin and (key != 'local_image' or viewer_status != 'unavailable'):
                     item[key] = pin[key]
             append_unique(item['pin_ids'], pin.get('pin_ids') or [])
             keys = ['pin:' + pin_id]
@@ -236,17 +255,21 @@ def normalize(documents, via='unknown', query='', style='', parent_pin_id=None):
                 for other in hits[1:]:
                     append_unique(target['pin_ids'], candidates[other]['pin_ids'])
                     append_unique(target['source_paths'], candidates[other]['source_paths'])
+                    merge_large_image(target, candidates[other])
                     dropped.add(other)
                     for key, old_index in list(aliases.items()):
                         if old_index == other:
                             aliases[key] = index
                 append_unique(target['pin_ids'], item['pin_ids'])
                 append_unique(target['source_paths'], item['source_paths'])
+                merge_large_image(target, item)
                 # API dimensions can enrich a DOM thumbnail record without inventing resolution.
                 if target['dimension_source'] == 'dom_thumbnail' and file.get('width'):
                     target.update(width=file.get('width'), height=file.get('height'),
                                   dimension_source='api_file_metadata')
                 for field in ('image_url', 'file_id', 'file_key'):
+                    if field == 'image_url' and target.get('large_image_status'):
+                        continue
                     if not target.get(field) and item.get(field):
                         target[field] = item[field]
             for key in keys:
@@ -283,18 +306,21 @@ def render_gallery(document, output, download=False, selected_only=False):
     cards, failures, downloaded = [], 0, 0
     items = document.get('candidates', [])
     if selected_only:
-        items = [x for x in items if x.get('decision') == '保留']
+        items = [x for x in items if x.get('decision') == '保留' and x.get('large_image_status') != 'unavailable']
     else:
         items = [x for x in items if x.get('decision') != '排除']
     escape = lambda value: html.escape(str(value or ''), quote=True)
     for number, pin in enumerate(items, 1):
-        url = safe_url(pin.get('image_url'), image=True)
-        local_image = pin.get('local_image')
+        viewer_status = pin.get('large_image_status')
+        url = '' if viewer_status == 'unavailable' else safe_url(pin.get('image_url'), image=True)
+        local_image = pin.get('local_image') if viewer_status != 'unavailable' else None
         if local_image:
             source = Path(local_image).expanduser().resolve()
             if (not source.is_file() or source.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif')
                     or source.stat().st_size > MAX_BYTES):
                 raise ValueError('本地预览图片不可用')
+            if pin.get('large_image_sha256') and hashlib.sha256(source.read_bytes()).hexdigest() != pin['large_image_sha256']:
+                raise ValueError('本地大图与采集摘要不一致')
             target = output.parent / (output.stem + '_assets') / ('%03d' % number + source.suffix.lower())
             target.parent.mkdir(parents=True, exist_ok=True)
             if source != target.resolve():
@@ -311,8 +337,12 @@ def render_gallery(document, output, download=False, selected_only=False):
         dimensions = 'API 文件尺寸：%s × %s px（当前展示预览）' % (pin['width'], pin['height']) if pin.get('width') and pin.get('height') else '尺寸未核实'
         if pin.get('dimension_source') == 'dom_thumbnail':
             dimensions = '仅取得缩略图，原图尺寸未核实'
+        if viewer_status == 'available':
+            dimensions = '详情页大图：%s × %s px' % (pin['large_image_width'], pin['large_image_height'])
+        elif viewer_status == 'unavailable':
+            dimensions = '详情页大图暂未取得'
         image_tag = ('<img loading="lazy" src="%s" alt="%s">' % (escape(url), escape(pin.get('title')))
-                     if url else '<p class="empty">未取得预览，请查看原采集</p>')
+                     if url else '<p class="empty">未取得大图，请查看原采集</p>')
         links = []
         for field, label in [('pin_url', '花瓣采集'), ('source_url', '原站线索')]:
             href = safe_url(pin.get(field))

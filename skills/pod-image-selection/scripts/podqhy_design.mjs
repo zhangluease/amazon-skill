@@ -98,15 +98,21 @@ async function validateEffects(manifestFile, currentUrl, api) {
   viewIds({ data: expected.map(id => ({ id })) });
   if (actual.length !== expected.length || new Set(actual).size !== expected.length
       || actual.some(id => !expected.includes(id))) throw failure('DESIGN_VIEW_LIST_MISMATCH');
-  const ratio = /^([1-9]\d*):([1-9]\d*)$/.exec(manifest.output_aspect_ratio || '');
-  if (!ratio || new Set(manifest.effects.map(effect => String(effect.view_id))).size !== expected.length)
+  const minimum = manifest.minimum_side;
+  const ratioPattern = /^([1-9]\d*):([1-9]\d*)$/;
+  const commonRatio = ratioPattern.exec(manifest.output_aspect_ratio || '');
+  const mixedRatios = minimum === 2000 && manifest.output_aspect_ratio === null && manifest.requested_ratio === null;
+  if ((!commonRatio && !mixedRatios) || (minimum !== undefined && minimum !== 2000)
+      || new Set(manifest.effects.map(effect => String(effect.view_id))).size !== expected.length)
     throw failure('DESIGN_EFFECTS_INVALID');
   const base = path.dirname(path.resolve(manifestFile));
   for (const effect of manifest.effects) {
+    const ratio = commonRatio || ratioPattern.exec(effect.aspect_ratio || '');
     const file = path.resolve(base, effect.file);
     if (!file.startsWith(base + path.sep) || !expected.includes(String(effect.view_id))) throw failure('DESIGN_EFFECTS_INVALID');
     const bytes = await fs.readFile(file), size = dimensions(bytes);
-    if (size.width * Number(ratio[2]) !== size.height * Number(ratio[1])
+    if (!ratio || size.width * Number(ratio[2]) !== size.height * Number(ratio[1])
+        || (minimum && Math.min(size.width, size.height) < minimum)
         || size.width !== effect.width || size.height !== effect.height
         || crypto.createHash('sha256').update(bytes).digest('hex') !== effect.sha256)
       throw failure('DESIGN_EFFECTS_INVALID');

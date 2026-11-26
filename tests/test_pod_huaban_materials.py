@@ -75,6 +75,26 @@ class HuabanMaterialsTests(unittest.TestCase):
         self.assertEqual(enriched['dimension_source'], 'api_file_metadata')
         self.assertEqual(enriched['image_url'], url)
 
+    def test_detail_image_wins_dedup_and_missing_detail_never_displays_thumbnail(self):
+        thumb = 'https://img.huaban.com/abc_fw400webp'
+        exact = 'https://img.huaban.com/abc?signature=keep'
+        listing = {'pin_id': 11, 'file_id': 100, 'image_url': thumb}
+        unavailable = {'pin_id': 12, 'file_id': 100, 'large_image_status': 'unavailable', 'file': {'url': thumb}}
+        large = {'pin_id': 13, 'file_id': 100, 'large_image_status': 'available', 'image_url': exact,
+                 'large_image_width': 800, 'large_image_height': 810}
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / 'gallery.html'
+            missing = hb.normalize([{'pins': [unavailable, listing]}])
+            self.assertIsNone(missing['candidates'][0]['image_url'])
+            hb.render_gallery(missing, out)
+            self.assertIn('详情页大图暂未取得', out.read_text())
+            self.assertNotIn(thumb, out.read_text())
+            confirmed = hb.normalize([{'pins': [listing, unavailable, large]}])
+            hb.render_gallery(confirmed, out)
+            self.assertIn('详情页大图：800 × 810 px', out.read_text())
+            self.assertIn(exact, out.read_text())
+            self.assertNotIn(thumb, out.read_text())
+
     def test_gallery_escapes_remote_text_and_rejects_script_links(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / 'gallery.html'

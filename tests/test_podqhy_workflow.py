@@ -5,9 +5,9 @@ import random
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 from urllib.parse import quote
 
 try:
@@ -16,6 +16,7 @@ except ImportError:
     Image = ImageDraw = None
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/pod-image-selection/scripts"
+sys.path.insert(0, str(SCRIPTS))
 
 
 def load_script(name):
@@ -59,6 +60,23 @@ class PodqhyApiTests(unittest.TestCase):
 
 @unittest.skipIf(art is None, "Run with uv run --with 'pillow>=10,<12' for artwork tests")
 class PodArtworkTests(unittest.TestCase):
+    def test_reviewed_detail_candidate_uses_planned_size_and_keeps_reference_alpha(self):
+        import pod_image_size
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, candidate, wrong = (root / name for name in ("source.png", "candidate.png", "wrong.png"))
+            Image.new("RGBA", (500, 500), (20, 20, 20, 128)).save(source)
+            Image.new("RGB", (2200, 2200), "teal").save(candidate)
+            Image.new("RGB", (2200, 2000), "teal").save(wrong)
+            with self.assertRaisesRegex(ValueError, "宽高比"):
+                pod_image_size.size_file(source, root / "bad.png", wrong)
+            info = pod_image_size.size_file(source, root / "enhanced.png", candidate)
+            self.assertEqual(info["resize_method"], "ai_super_resolution")
+            with Image.open(info["file"]) as image:
+                self.assertEqual(image.size, (2000, 2000))
+                self.assertEqual(image.getpixel((1000, 1000)), (0, 128, 128, 128))
+
     def test_white_background_removed_but_enclosed_white_preserved(self):
         image = Image.new("RGBA", (100, 100), "white")
         draw = ImageDraw.Draw(image)
@@ -141,7 +159,7 @@ class PodArtworkTests(unittest.TestCase):
             self.assertEqual(plan["surface_ids"], [1, 2, 3])
             self.assertEqual(plan["source_surface_id"], 1)
             with Image.open(plan["file"]) as upload:
-                self.assertEqual(upload.size, (120, 40))
+                self.assertEqual(upload.size, (6000, 2000))
                 self.assertEqual(upload.convert("RGBA").getpixel((0, 0)), (255, 165, 0, 255))
             with Image.open(manifest["surfaces"][0]["file"]) as square:
                 self.assertEqual(square.getpixel((0, 0)), (0, 0, 128, 255))
@@ -160,31 +178,17 @@ class PodArtworkTests(unittest.TestCase):
                 self.assertEqual(output.getpixel((0, 30))[3], 255)  # Enclosed white stays white.
                 self.assertEqual(output.getpixel((0, 0))[3], 0)  # Original edge white is removed.
 
-    def test_upload_limit_keeps_opaque_dimensions_and_preserves_alpha_for_transparent_artwork(self):
+    def test_upload_limit_does_not_shrink_pixels_or_discard_alpha(self):
         size_limit = 47_000
-        with tempfile.TemporaryDirectory() as directory, patch.object(art, "UPLOAD_MAX_BYTES", size_limit):
-            root = Path(directory)
-            noise = random.Random(42).randbytes(160 * 120 * 3)
-            opaque = Image.frombytes("RGB", (160, 120), noise).convert("RGBA")
-            transparent = opaque.copy()
-            transparent.putalpha(128)
-            template = {"data": [flat(1, 160, 120)]}
-            for name, image, suffix in (("opaque", opaque, ".jpg"), ("transparent", transparent, ".png")):
-                file = root / f"{name}.png"
-                image.save(file)
-                plan = art.prepare(file, template, root / name, background="preserve")["upload_plan"]
-                upload = Path(plan["file"])
-                self.assertEqual(upload.suffix, suffix)
-                self.assertIn(plan["sha256"][:16], upload.stem)
-                self.assertLessEqual(upload.stat().st_size, size_limit)
-                with Image.open(upload) as result:
-                    if name == "opaque":
-                        self.assertEqual(result.size, image.size)
-                        self.assertFalse(plan["resized_for_upload"])
-                    else:
-                        self.assertLess(result.width, image.width)
-                        self.assertTrue(plan["resized_for_upload"])
-                        self.assertEqual(result.getchannel("A").getextrema(), (128, 128))
+        noise = random.Random(42).randbytes(160 * 120 * 3)
+        opaque = Image.frombytes("RGB", (160, 120), noise).convert("RGBA")
+        result, content, extension = art.encode_upload(opaque, size_limit)
+        self.assertEqual(result.size, opaque.size)
+        self.assertEqual(extension, "jpg")
+        self.assertLessEqual(len(content), size_limit)
+        opaque.putalpha(128)
+        with self.assertRaisesRegex(ValueError, "保留像素尺寸与透明度"):
+            art.encode_upload(opaque, size_limit)
 
 
 if __name__ == "__main__":

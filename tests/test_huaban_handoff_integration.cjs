@@ -47,6 +47,9 @@ test('collector resumes after a human handoff in the visible context and still c
           if (url.pathname === '/v3/search/file') return route.fulfill({ contentType: 'application/json',
             body: JSON.stringify({ pins: [1, 2, 3].map(pin_id => ({ pin_id,
               file: { key: 'fixture_key', width: 500, height: 500 } })) }) });
+          if (/^\/pins\/[123]$/.test(url.pathname)) return route.fulfill({ contentType: 'text/html; charset=utf-8', body:
+            `<title>采集详情</title><button onclick="document.querySelector('#imageViewerWrapper').hidden=false; document.querySelector('#imageViewerWrapper img').src='https://img.huaban.com/large-view.png'">查看大图</button>
+            <div id="imageViewerWrapper" hidden><img alt="查看图片"></div>` });
           return route.fulfill({ status: 404, body: '' });
         });
         const newPage = context.newPage.bind(context);

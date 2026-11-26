@@ -4,10 +4,11 @@ import argparse
 import hashlib
 import io
 import json
-import math
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageOps
+
+from pod_image_size import MIN_SIDE, ensure_minimum
 
 UPLOAD_MAX_BYTES = 30 * 1024 * 1024
 
@@ -87,31 +88,25 @@ def checkerboard(size, cell=20):
 
 
 def encode_upload(image, max_bytes):
-    """Keep full size if possible and preserve alpha when reducing file size."""
+    """Fit the upload byte limit without shrinking the source dimensions."""
     def encode(candidate, kind, **options):
         stream = io.BytesIO()
         candidate.save(stream, format=kind, **options)
         return stream.getvalue()
 
     opaque = image.getchannel("A").getextrema()[0] == 255
-    candidate = image
-    scale = 1.0
-    while True:
-        png_image = candidate.convert("RGB") if opaque else candidate
-        payload = encode(png_image, "PNG")
+    png_image = image.convert("RGB") if opaque else image
+    payload = encode(png_image, "PNG")
+    if len(payload) > max_bytes:
+        payload = encode(png_image, "PNG", optimize=True)
+    if len(payload) <= max_bytes:
+        return image, payload, "png"
+    if opaque:
+        payload = encode(png_image, "JPEG", quality=95, subsampling=0, optimize=True)
         if len(payload) <= max_bytes:
-            return candidate, payload, "png"
-        if opaque:
-            payload = encode(png_image, "JPEG", quality=95, subsampling=0, optimize=True)
-            if len(payload) <= max_bytes:
-                with Image.open(io.BytesIO(payload)) as uploaded:
-                    return uploaded.convert("RGBA"), payload, "jpg"
-        if candidate.size == (1, 1):
-            raise ValueError("Upload file cannot fit the PODQHY file size limit")
-        scale *= min(0.9, math.sqrt(max_bytes / len(payload)) * 0.95)
-        bounds = tuple(max(1, int(length * scale)) for length in image.size)
-        # Resize from the original at every step to avoid repeated resampling.
-        candidate = image.resize(bounds, Image.Resampling.LANCZOS)
+            with Image.open(io.BytesIO(payload)) as uploaded:
+                return uploaded.convert("RGBA"), payload, "jpg"
+    raise ValueError("共享上传图在保留像素尺寸与透明度后超过 PODQHY 文件大小上限")
 
 
 def prepare(source, template, out, fit="cover", background="auto", tolerance=20,
@@ -129,20 +124,24 @@ def prepare(source, template, out, fit="cover", background="auto", tolerance=20,
                     before["classification"] == "non_full_print" and
                     not before["has_transparency"])
     artwork = remove_edge_white(original, tolerance) if source_cutout else original
-    upload_image, payload, extension = encode_upload(artwork, UPLOAD_MAX_BYTES)
+    sized_artwork = ensure_minimum(artwork)
+    upload_image, payload, extension = encode_upload(sized_artwork, UPLOAD_MAX_BYTES)
     upload_sha256 = hashlib.sha256(payload).hexdigest()
     upload_file = out / f"upload-artwork-{upload_sha256[:16]}.{extension}"
     upload_file.write_bytes(payload)
     results = []
     prepared_sizes = {}
     resize = ImageOps.fit if fit == "cover" else ImageOps.contain
+    # Lossless uploads are enlarged only for delivery. Produce smaller local
+    # surface previews directly from the prepared native artwork.
+    preview_source = artwork if extension == "png" else upload_image
     for surface in surfaces:
         size = (surface["width"], surface["height"])
         if size not in prepared_sizes:
             fitted_source = resize(original, size, method=Image.Resampling.LANCZOS)
             standardized = analyze(fitted_source, tolerance, blank_threshold)
-            result = fitted_source if upload_image is original else resize(
-                upload_image, size, method=Image.Resampling.LANCZOS)
+            result = fitted_source if preview_source is original else resize(
+                preview_source, size, method=Image.Resampling.LANCZOS)
             cutout = source_cutout and bool(ImageChops.difference(
                 fitted_source.getchannel("A"), result.getchannel("A")).getbbox())
             if fit == "contain":
@@ -155,9 +154,9 @@ def prepare(source, template, out, fit="cover", background="auto", tolerance=20,
         target = out / ("flat-%s.png" % surface["id"])
         result.save(target)
         results.append(dict(surface, file=str(target.resolve()), mode=result.mode,
-                            upscaled=(max(size[0] / upload_image.width, size[1] / upload_image.height)
+                            upscaled=(max(size[0] / original.width, size[1] / original.height)
                                       if fit == "cover" else
-                                      min(size[0] / upload_image.width, size[1] / upload_image.height)) > 1,
+                                      min(size[0] / original.width, size[1] / original.height)) > 1,
                             standardized_analysis=standardized,
                             background_action="remove_edge_connected_white" if cutout else "preserve",
                             analysis=analyze(result, tolerance, blank_threshold)))
@@ -180,7 +179,8 @@ def prepare(source, template, out, fit="cover", background="auto", tolerance=20,
                 "upload_plan": {"strategy": "upload_once_copy_all",
                     "file": str(upload_file.resolve()),
                     "sha256": upload_sha256, "size_bytes": len(payload),
-                    "resized_for_upload": upload_image.size != artwork.size,
+                    "minimum_side": MIN_SIDE, "upscaled_to_minimum": sized_artwork is not artwork,
+                    "resized_for_upload": False,
                     "width": upload_image.width, "height": upload_image.height,
                     "background_action": "remove_edge_connected_white" if source_cutout else "preserve",
                     "source_surface_id": results[0]["id"],

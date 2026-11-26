@@ -11,13 +11,13 @@ node scripts/huaban_browser.cjs --image-url 'https://m.media-amazon.com/images/I
 python3 scripts/huaban_tools.py normalize /absolute/run/huaban/image-1/response.json --via image_search --output /absolute/run/candidates.json
 ```
 
-本地参考图使用 `--image /absolute/reference.jpg` 代替 `--image-url`。支持JPG、PNG、GIF、WebP，单张最多12MiB。远程图片下载限定Amazon图片域名，其他来源请提供本地文件。采集器保存 `reference-image.*` 及SHA-256摘要，通过花瓣页面上传控件提交；只有跳转到带有效图片参数的 `/similar` 结果页后才采集。图片检索不采集原发现页推荐卡片；结果保留网站排序，以实际渲染卡片和图片响应记录候选及本地预览。
+本地参考图使用 `--image /absolute/reference.jpg` 代替 `--image-url`。支持 JPG、PNG、GIF、WebP，单张最多 12 MiB。远程参考图限定 Amazon 图片域名，其他来源请提供本地文件。采集器保存 `reference-image.*` 和摘要，通过花瓣页面提交，进入有效的 `/similar` 结果页后按网站排序记录候选。
 
 多张图片依次执行。每张图片结果采集完成后，入口重新随机抽取4000–6000毫秒的冷却时间；下一张图片提交前等待剩余时间。频控状态保存在专用会话目录，跨进程、跨输出目录共享，搜索串行执行，最后一张之后无需额外空等。`timing.json` 的 `image_search_rate_limit` 记录等待时间和本轮冷却时间。关键词检索和画板扩展不受此图片上传频控影响。
 
 花瓣当前的图片上传需要登录。入口自动复用专用的 `huaban-state.json`，也可用 `--state /private/huaban-state.json` 指定用户授权的Playwright storageState文件，与卖家精灵授权独立。缺少或失效时返回 `image_search_login_required`，不自动改用关键词。会话及人工验证处理见 [环境与人工接管](environment.md#花瓣登录会话)。
 
-采集器自动检查环境，默认无头运行。输出 `response.json`、`browser-candidates.json`、`browser-assets/`、参考图和页面截图。多张图归一化时把各 `response.json` 一起传给 `normalize`，按pin_id/file去重并合并参考图来源。
+采集器自动检查环境，默认无头运行。收集候选后按顺序打开采集详情，点击「查看大图」，保存弹层中实际加载的文件。这是花瓣取图的唯一入口。同一采集 ID 在一轮内只取一次。已有采集 ID 时，可用 `--pin 5259682387` 直接补取该张大图，多个 ID 可重复传入。输出 `response.json`、`browser-candidates.json`、`browser-assets/`、参考图和页面截图。多张图归一化时把各 `response.json` 一起传给 `normalize`，按采集或文件 ID 去重并合并来源。
 
 先看候选图，再从2–3张合适的种子扩展：相似页使用 `--similar <pin_id>`，推荐画板使用 `--board <board_id>`，二者可重复提供。画板链接带 `source_file_id` 时同时传 `--source-file-id`，保留原推荐排序。默认最多扩展两层、检查约60个去重候选，有足够多样的素材后停止。
 
@@ -29,9 +29,11 @@ python3 scripts/huaban_tools.py normalize /absolute/run/huaban/image-1/response.
 
 在 `candidates.json` 为每张填写 `decision`（保留/备选/排除/待看图）、`visual_notes`、`product_fit` 和 `limitations`。看不清的标为待看图。保留参考图摘要、来源ASIN、以图搜索结果页及相似/画板来源关系；关键词补搜时另保留完整搜索词。
 
-优先使用采集器缓存的 `local_image`。图片完整URL及其签名、缩略图后缀原样保留，不拼接猜测原图。API文件尺寸与当前预览尺寸分开记录；缩略图不支持印刷质量结论，未经接缝检查不宣称无缝纹样。
+以 `large_image_status=available` 的 `local_image` 做选图和后续 POD 处理。`large_image_width`、`large_image_height` 为弹层实际加载像素，`image_url` 保留实际返回的完整地址，`large_image_sha256` 用于核对本地文件。卡片缩略图尺寸、API 文件规格与实际大图分别记录。大图不可用时标记缺口，可在选图阶段用采集 ID 补取或选另一个可用候选。
 
-缓存图片可能带水印，不能因为已下载就直接当作生产素材。候选阶段记录水印情况；选定并进入 POD 制作时，必须打开实际文件检查，优先使用详情页或接口实际提供的无水印原文件。仍有水印则执行 [Python 水印处理](podqhy-workflow.md#水印处理)，保留原图和修复对比，通过复核后以 `source-clean.png` 接入尺寸适配；不要把改 URL、改名或白底抠图记作去水印。图集仍保留原来源与授权状态。
+选图时记录大图水印情况。进入 POD 制作时复用该文件，有水印则按 [水印处理](podqhy-workflow.md#水印处理) 修复，复核通过后接入尺寸适配。保留源文件、修复前后对比、来源和授权状态。
+
+验证重复纹样修复时，从已下载的大图中选取看得清重复单元且带水印的一张。为了验证像素能否准确补回，另用已知无水印原始像素的本地样本作对照。
 
 ## 交付
 

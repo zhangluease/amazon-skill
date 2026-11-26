@@ -10,16 +10,21 @@ const { acquireImageSearchGate } = require('./huaban_image_rate_limit.cjs');
 const { validateImageUrl, readReference, submitReference, imageSearchUrl, imageError,
   defaultStateFile } = require('./huaban_image_search.cjs');
 
+const IMAGE_EXTENSIONS = { 'image/webp': '.webp', 'image/png': '.png', 'image/jpeg': '.jpg',
+  'image/gif': '.gif', 'image/avif': '.avif' };
+const LARGE_VIEWER_IMAGE = '#imageViewerWrapper img[alt="查看图片"]';
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+
 function argumentsFor(argv) {
-  const result = { similar: [], board: [], limit: 40, headed: false };
+  const result = { similar: [], board: [], pin: [], limit: 40, headed: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     if (key === 'headed') result.headed = true;
-    else if (['query', 'out', 'state', 'limit', 'similar', 'board', 'source-file-id', 'browser',
+    else if (['query', 'out', 'state', 'limit', 'similar', 'board', 'pin', 'source-file-id', 'browser',
       'human-verification', 'verification-timeout', 'image', 'image-url', 'source-asin'].includes(key)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw Error('参数缺少值');
-      if (key === 'similar' || key === 'board') result[key].push(value);
+      if (['similar', 'board', 'pin'].includes(key)) result[key].push(value);
       else result[key] = value;
     } else throw Error('未知参数');
   }
@@ -30,8 +35,8 @@ function argumentsFor(argv) {
   if (!Number.isInteger(result['verification-timeout']) || result['verification-timeout'] < 30
     || result['verification-timeout'] > 900) throw Error('验证等待时间应为 30–900 秒');
   if (result.browser && !['auto', 'chrome', 'chromium'].includes(result.browser)) throw Error('不支持的浏览器');
-  if (!result.out || (!result.query && !result.image && !result['image-url'] && !result.similar.length && !result.board.length))
-    throw Error('需要 --out 与 --image、--image-url、--query、--similar 或 --board');
+  if (!result.out || (!result.query && !result.image && !result['image-url'] && !result.similar.length && !result.board.length && !result.pin.length))
+    throw Error('需要 --out 与 --image、--image-url、--query、--similar、--board 或 --pin');
   if ([result.query, result.image, result['image-url']].filter(Boolean).length > 1)
     throw Error('--query、--image 与 --image-url 只能选一个');
   if (result['image-url']) validateImageUrl(result['image-url']);
@@ -39,7 +44,7 @@ function argumentsFor(argv) {
     throw Error('--source-asin 需要图片输入和有效 ASIN');
   if (!Number.isInteger(result.limit) || result.limit < 1 || result.limit > 60)
     throw Error('limit 应为 1–60');
-  if ([...result.similar, ...result.board, ...(result['source-file-id'] ? [result['source-file-id']] : [])]
+  if ([...result.similar, ...result.board, ...result.pin, ...(result['source-file-id'] ? [result['source-file-id']] : [])]
     .some(id => !/^[1-9]\d*$/.test(id)))
     throw Error('采集和画板 ID 必须是正整数');
   return result;
@@ -65,6 +70,68 @@ function isDataForSource(urlPath, source) {
     return [base, base + '/pins', base + '/raw_pins'].includes(urlPath);
   }
   return false;
+}
+
+async function downloadLargeViewerImage(page, pinUrl, output) {
+  const here = new URL(page.url());
+  if (here.origin !== 'https://huaban.com' || here.pathname !== new URL(pinUrl).pathname)
+    throw imageError('IMAGE_LARGE_VIEW_WRONG_PIN');
+  const observed = new Map();
+  const keepResponse = response => {
+    if (response.request().resourceType() === 'image' && response.ok()) observed.set(response.url(), response);
+  };
+  page.on('response', keepResponse);
+  try {
+    await page.getByRole('button', { name: '查看大图', exact: true }).click({ timeout: 5000 });
+    const image = await page.waitForFunction(selector => {
+      const candidates = Array.from(document.querySelectorAll(selector)).filter(img => img.getClientRects().length);
+      if (candidates.length !== 1) return null;
+      const img = candidates[0];
+      return img.complete && img.naturalWidth && img.naturalHeight && {
+        url: img.currentSrc || img.src, width: img.naturalWidth, height: img.naturalHeight
+      };
+    }, LARGE_VIEWER_IMAGE, { timeout: 7000 });
+    const { url, width, height } = await image.jsonValue();
+    await image.dispose();
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || !parsed.hostname.endsWith('.huaban.com') || parsed.username || parsed.password || parsed.port)
+      throw imageError('IMAGE_LARGE_VIEW_UNSUPPORTED_URL');
+    // Prefer the bytes that actually rendered. If preloaded or cached, request
+    // the exact viewer URL in this same context without following redirects.
+    const captured = observed.get(url);
+    const response = captured || await page.request.get(url, {
+      headers: { referer: pinUrl, accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.8' },
+      maxRedirects: 0, timeout: 10000
+    });
+    let bytes, extension;
+    try {
+      extension = IMAGE_EXTENSIONS[(response.headers()['content-type'] || '').split(';')[0].trim().toLowerCase()];
+      if (!response.ok() || !extension || Number(response.headers()['content-length']) > MAX_IMAGE_BYTES)
+        throw imageError('IMAGE_LARGE_VIEW_DOWNLOAD_FAILED');
+      bytes = await response.body();
+      if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw imageError('IMAGE_LARGE_VIEW_DOWNLOAD_FAILED');
+      if (!captured) {
+        const matches = await page.evaluate(async ({ data, w, h }) => {
+          try {
+            const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(data), c => c.charCodeAt(0))]));
+            const equal = bitmap.width === w && bitmap.height === h;
+            bitmap.close();
+            return equal;
+          } catch { return false; }
+        }, { data: bytes.toString('base64'), w: width, h: height });
+        if (!matches) throw imageError('IMAGE_LARGE_VIEW_DOWNLOAD_MISMATCH');
+      }
+    } finally {
+      if (!captured) await response.dispose();
+    }
+    const hash = crypto.createHash('sha256').update(bytes).digest('hex');
+    const destination = path.join(output, 'browser-assets', hash.slice(0, 20) + extension);
+    await fs.writeFile(destination, bytes);
+    return { image_url: url, local_image: destination, large_image_status: 'available',
+      large_image_width: width, large_image_height: height, large_image_sha256: hash, large_image_pin_url: pinUrl };
+  } finally {
+    page.off('response', keepResponse);
+  }
 }
 
 async function collect(options, dependencies = {}) {
@@ -102,12 +169,12 @@ async function collect(options, dependencies = {}) {
     const context = await browser.newContext(contextOptions);
     page = await context.newPage();
     Object.assign(session, { context, page, contextOptions });
-    const documents = [], events = [], images = new Map(), jobs = [];
+    const documents = [], events = [], jobs = [];
     let active = null;
     const observePage = observed => observed.on('response', response => {
       const source = active;
       if (!source) return;
-      const url = new URL(response.url()), type = response.headers()['content-type'] || '';
+      const url = new URL(response.url());
       const isData = url.hostname === 'huaban.com' && isDataForSource(url.pathname, source);
       if (isData) jobs.push((async () => {
         events.push({ via: source.via, path: url.pathname, status: response.status() });
@@ -116,14 +183,6 @@ async function collect(options, dependencies = {}) {
           for (const pin of pins) source.pins.push({ ...pin, source_paths: [source.provenance] });
         } catch { /* HTML and error bodies are not candidate data. */ }
       })());
-      if (url.hostname.endsWith('.huaban.com') && type.startsWith('image/') && response.ok())
-        jobs.push((async () => {
-          try {
-            const body = await response.body();
-            if (body.length <= 12 * 1024 * 1024 && images.size < 300)
-              images.set(response.url(), { body, type: type.split(';')[0] });
-          } catch { /* A candidate without an image stays explicitly incomplete. */ }
-        })());
     });
     observePage(page);
     handoff = createHandoff({ session, output, onPage: observePage,
@@ -152,13 +211,14 @@ async function collect(options, dependencies = {}) {
       if (await handleVerification(target, response?.ok() ? 0 : 1500)) return;
       if (!response?.ok()) throw Error('页面 HTTP ' + response?.status() + '，停止本轮请求');
     };
-    await navigate('https://huaban.com/discovery');
+    if (options.query || options.image || options['image-url'] || options.similar.length || options.board.length)
+      await navigate('https://huaban.com/discovery');
     const targets = [];
     if (options.image || options['image-url']) {
       const reference = await readReference(options, dependencies);
       const target = { via: 'image_search', pins: [], provenance: reference.provenance };
       imageGate = await acquireImageSearchGate(dependencies.rateLimitDirectory);
-      // Only cache image responses during upload here. Candidate DOM is read after /similar is confirmed.
+      // Candidate DOM is read only after /similar is confirmed.
       active = target;
       try { target.url = await submitReference(page, reference); }
       catch (error) {
@@ -224,38 +284,53 @@ async function collect(options, dependencies = {}) {
       if (target.via === 'image_search') await imageGate.complete();
       active = null;
     }
-    const extensions = { 'image/webp': '.webp', 'image/png': '.png', 'image/jpeg': '.jpg',
-      'image/gif': '.gif', 'image/avif': '.avif' };
+    if (options.pin?.length) documents.push({ via: 'pin_detail', pins: Array.from(new Set(options.pin))
+      .slice(0, options.limit).map(pin_id => ({ pin_id, source_paths: [{ via: 'pin_detail' }] })) });
     let cached = 0;
+    let siteBlocked = false;
+    const byPin = new Map();
     for (const document of documents) for (const pin of document.pins) {
-      pin.pin_url = 'https://huaban.com/pins/' + pin.pin_id;
-      const key = pin.file?.key || new URL(pin.image_url || pin.file?.url || 'https://huaban.com/')
-        .pathname.split('/').pop().replace(/_(?:fw|sq)\d+(?:webp)?$/, '');
-      const found = [...images].filter(([url, value]) => key && new URL(url).pathname.includes(key)
-        && extensions[value.type]);
-      found.sort((a, b) => (Number(b[0].match(/_fw(\d+)/)?.[1]) || 0) -
-        (Number(a[0].match(/_fw(\d+)/)?.[1]) || 0));
-      if (found.length) {
-        const [url, asset] = found[0];
-        const name = crypto.createHash('sha256').update(url).digest('hex').slice(0, 20) + extensions[asset.type];
-        const destination = path.join(output, 'browser-assets', name);
-        await fs.writeFile(destination, asset.body);
-        Object.assign(pin, { local_image: destination, image_url: url });
-        cached++;
+      const id = String(pin.pin_id);
+      if (!/^[1-9]\d*$/.test(id)) continue;
+      pin.pin_url = 'https://huaban.com/pins/' + id;
+      pin.image_url = null; // Listing thumbnails are for candidate discovery only.
+      delete pin.local_image;
+      if (!byPin.has(id)) {
+        const unavailable = { large_image_status: 'unavailable', large_image_error: 'IMAGE_LARGE_VIEW_UNAVAILABLE' };
+        if (siteBlocked) unavailable.large_image_error = 'IMAGE_LARGE_VIEW_ACCESS_BLOCKED';
+        else {
+          try {
+            await navigate(pin.pin_url);
+            const asset = await downloadLargeViewerImage(page, pin.pin_url, output);
+            if (!pin.title && !pin.raw_text) asset.title = await page.title();
+            byPin.set(id, asset);
+          } catch (error) {
+            if (/^HUMAN_VERIFICATION_/.test(error.code || '')) throw error;
+            siteBlocked = /HTTP (401|403|429)\b/.test(error.message);
+            if (siteBlocked) unavailable.large_image_error = 'IMAGE_LARGE_VIEW_ACCESS_BLOCKED';
+            else if (/^IMAGE_LARGE_VIEW_[A-Z_]+$/.test(error.code || '')) unavailable.large_image_error = error.code;
+          }
+        }
+        if (!byPin.has(id)) byPin.set(id, unavailable);
       }
+      Object.assign(pin, byPin.get(id));
+      if (pin.large_image_status === 'available') cached++;
     }
     const summary = { headless: session.headless, supplied_state: Boolean(options.state),
       huaban_session_source: options.state ? 'explicit' : stateFile ? 'saved' : 'anonymous',
       browser_engine: environment.report.checks.browser.engine,
       human_verification: handoff.report,
       normal_chrome_ua: true, elapsed_ms: Date.now() - started,
-      search_mode: options.image || options['image-url'] ? 'image_search' : options.query ? 'keyword' : 'expansion',
+      search_mode: options.image || options['image-url'] ? 'image_search' : options.query ? 'keyword'
+        : options.similar.length || options.board.length ? 'expansion' : 'pin_details',
       ...(imageGate ? { image_search_rate_limit: imageGate.timing } : {}),
-      candidates: documents.reduce((sum, d) => sum + d.pins.length, 0), cached, events };
+      candidates: documents.reduce((sum, d) => sum + d.pins.length, 0), cached,
+      large_image_unavailable: [...byPin.values()].filter(pin => pin.large_image_status === 'unavailable').length, events };
     await fs.writeFile(path.join(output, 'browser-candidates.json'), JSON.stringify({ documents, summary }, null, 2));
     await fs.writeFile(path.join(output, 'response.json'), JSON.stringify({ pins: documents.flatMap(d => d.pins) }, null, 2));
     await fs.writeFile(path.join(output, 'timing.json'), JSON.stringify(summary, null, 2));
     if (!summary.candidates) throw Error('没有取得候选；请查看截图，区分登录要求、空结果和访问限制');
+    if (!cached) throw imageError('IMAGE_LARGE_VIEW_UNAVAILABLE');
     if (!options.quiet) console.log(JSON.stringify(summary));
     return summary;
   } catch (error) {
@@ -265,7 +340,7 @@ async function collect(options, dependencies = {}) {
     await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({
       status: status ? Number(status) : null,
       category: /^HUMAN_VERIFICATION_/.test(error.code || '') ? error.code.toLowerCase()
-        : /^IMAGE_(?:REFERENCE|SEARCH)_/.test(error.code || '') ? error.code.toLowerCase()
+        : /^IMAGE_(?:REFERENCE|SEARCH|LARGE_VIEW)_/.test(error.code || '') ? error.code.toLowerCase()
         : status ? 'access_blocked' : 'collection_failed',
       ...(error.code === 'IMAGE_SEARCH_LOGIN_REQUIRED' ? {
         remedy: '花瓣以图搜图需要登录。请通过--state提供用户授权的花瓣Playwright storageState会话文件，再运行同一图片。'
@@ -293,6 +368,11 @@ if (require.main === module) Promise.resolve().then(() => collect(argumentsFor(p
   }
   if (error.code === 'IMAGE_SEARCH_LOGIN_REQUIRED') {
     console.error('花瓣以图搜图需要登录；请通过 --state 提供有效的花瓣会话文件。本轮未取得以图搜索结果。');
+    process.exitCode = 3;
+    return;
+  }
+  if (error.code === 'IMAGE_LARGE_VIEW_UNAVAILABLE') {
+    console.error('未取得候选的「查看大图」文件；请查看 response.json 中的状态。');
     process.exitCode = 3;
     return;
   }

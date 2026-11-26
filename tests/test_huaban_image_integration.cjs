@@ -8,6 +8,7 @@ const { findPlaywright } = require('../skills/pod-image-selection/scripts/enviro
 const { collect } = require('../skills/pod-image-selection/scripts/huaban_browser.cjs');
 const runtime = findPlaywright();
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=', 'base64');
+const largePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAD0lEQVR4nGP4z8DA8J8BAAf/Af8Bf4mnAAAAAElFTkSuQmCC', 'base64');
 
 async function fixture(t, loggedIn) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'huaban-image-integration-'));
@@ -24,7 +25,7 @@ async function fixture(t, loggedIn) {
       const request = route.request(), url = new URL(request.url());
       requests.push(url.pathname);
       if (url.hostname === 'img.huaban.com')
-        return route.fulfill({ contentType: 'image/png', body: png });
+        return route.fulfill({ contentType: 'image/png', body: url.pathname.startsWith('/viewer/') ? largePng : png });
       if (url.hostname !== 'huaban.com') return route.abort();
       if (url.pathname === '/discovery') return route.fulfill({ contentType: 'text/html; charset=utf-8', body:
         '<title>花瓣</title><input aria-label="搜索花瓣内容">'
@@ -40,41 +41,57 @@ async function fixture(t, loggedIn) {
       }
       if (url.pathname === '/similar') return route.fulfill({ contentType: 'text/html; charset=utf-8', body:
         '<title>以图搜图 - 花瓣</title><input aria-label="搜索花瓣内容">'
-        + [11, 12].map(id => `<a href="/pins/${id}"><img alt="image result ${id}" src="https://img.huaban.com/result${id}.png"></a>`).join('')
+        + [11, 12, 13].map(id => `<a href="/pins/${id}"><img alt="image result ${id}" src="https://img.huaban.com/result${id}.png"></a>`).join('')
         + '<script>fetch("/v3/search/file?text=unrelated");</script>' });
       if (url.pathname === '/v3/search/file') return route.fulfill({ contentType: 'application/json',
         body: JSON.stringify({ pins: [{ pin_id: 888, file: { key: 'unrelated' } }] }) });
+      if (['/pins/11', '/pins/12'].includes(url.pathname)) return route.fulfill({ contentType: 'text/html; charset=utf-8', body:
+        `<title>花瓣采集</title><img src="https://img.huaban.com/main-thumbnail.png">
+        <button onclick="document.querySelector('#imageViewerWrapper').hidden=false; document.querySelector('#imageViewerWrapper img').src='https://img.huaban.com/viewer${url.pathname}.png?signature=keep'">查看大图</button>
+        <div id="imageViewerWrapper" hidden><img alt="查看图片"></div>
+        <button onclick="location.href='/fixture/eps'">下载 EPS</button>` });
+      if (url.pathname === '/pins/13') return route.fulfill({ status: 404, body: '' });
       return route.fulfill({ status: 404, body: '' });
     });
     return context;
   };
   return { browser, uploads, requests, options: { image, state, 'source-asin': 'B000000001',
-    similar: [], board: [], limit: 2, quiet: true, out: path.join(tmp, 'out') }, dependencies: {
+    similar: [], board: [], limit: 3, quiet: true, out: path.join(tmp, 'out') }, dependencies: {
     prepare: async () => ({ report: { ready: true, checks: { browser: { engine: 'chromium' } } },
       browser, playwright: runtime.playwright }),
     notify() {}, rateLimitDirectory: path.join(tmp, 'rate-limit')
   } };
 }
 
-test('image search uploads the reference and collects only the confirmed result page',
+test('confirmed image-search results use exact detail viewer files and never fall back to thumbnails',
   { skip: !runtime.playwright, timeout: 30000 }, async t => {
     const f = await fixture(t, true);
     const summary = await collect(f.options, f.dependencies);
     assert.equal(summary.search_mode, 'image_search');
-    assert.equal(summary.candidates, 2);
+    assert.equal(summary.candidates, 3);
     assert.equal(summary.cached, 2);
+    assert.equal(summary.large_image_unavailable, 1);
     assert.equal(summary.image_search_rate_limit.waited_ms, 0);
     assert.ok(summary.image_search_rate_limit.cooldown_ms >= 4000);
     assert.ok(summary.image_search_rate_limit.cooldown_ms <= 6000);
     assert.deepEqual(f.uploads, [png]);
     const pins = JSON.parse(await fs.readFile(path.join(f.options.out, 'response.json'))).pins;
-    assert.deepEqual(pins.map(pin => pin.pin_id), ['11', '12']);
+    assert.deepEqual(pins.map(pin => pin.pin_id), ['11', '12', '13']);
+    assert.equal(f.requests.includes('/fixture/eps'), false);
     for (const pin of pins) {
       assert.equal(pin.source_paths[0].via, 'image_search');
       assert.equal(pin.source_paths[0].source_asin, 'B000000001');
       assert.match(pin.source_paths[0].reference_sha256, /^[a-f0-9]{64}$/);
       assert.ok(pin.source_paths[0].search_url.includes('/similar?bucket=fixture'));
-      assert.ok(pin.local_image);
+      if (pin.pin_id === '13') {
+        assert.equal(pin.large_image_status, 'unavailable');
+        assert.equal(pin.image_url, null);
+        assert.equal(pin.local_image, undefined);
+      } else {
+        assert.deepEqual([pin.large_image_width, pin.large_image_height], [2, 1]);
+        assert.equal(pin.image_url, `https://img.huaban.com/viewer/pins/${pin.pin_id}.png?signature=keep`);
+        assert.deepEqual(await fs.readFile(pin.local_image), largePng);
+      }
     }
     assert.equal(f.browser.isConnected(), false);
     const rate = JSON.parse(await fs.readFile(path.join(f.dependencies.rateLimitDirectory, 'huaban-image-search-rate.json')));
